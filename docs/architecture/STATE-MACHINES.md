@@ -103,7 +103,7 @@ The main execution loop in `run.sh`. Each iteration invokes the LLM provider,
 then runs post-iteration checks (checklist, app runner, playwright, code review,
 council).
 
-Source: `autonomy/run.sh:7780-8047`
+Source: `autonomy/run.sh:7380-8047`
 
 ```
                         +------------------+
@@ -159,19 +159,19 @@ Source: `autonomy/run.sh:7780-8047`
 
 | State | Value in state.json | Trigger In | Trigger Out | Source |
 |-------|---------------------|------------|-------------|--------|
-| running | `"running"` | Provider invoked | Provider exits | `run.sh:7840` |
-| exited | `"exited"` | Provider exit | Post-iteration checks | `run.sh:7867` |
-| council_approved | `"council_approved"` | Council votes COMPLETE | Loop returns 0 | `run.sh:7970` |
-| completion_promise_fulfilled | `"completion_promise_fulfilled"` | Promise text found in output | Loop returns 0 | `run.sh:7983` |
-| failed | `"failed"` | MAX_RETRIES exceeded | Loop returns 1 | `run.sh:8045` |
+| running | `"running"` | Provider invoked | Provider exits | `run.sh:7380` |
+| exited | `"exited"` | Provider exit | Post-iteration checks | `run.sh:7380` |
+| council_approved | `"council_approved"` | Council votes COMPLETE | Loop returns 0 | `run.sh:7380` |
+| completion_promise_fulfilled | `"completion_promise_fulfilled"` | Promise text found in output | Loop returns 0 | `run.sh:7380` |
+| failed | `"failed"` | MAX_RETRIES exceeded | Loop returns 1 | `run.sh:8047` |
 
-Persistence: `.loki/state.json` via `save_state()` at `run.sh:6908-6960`
+Persistence: `.loki/state.json` via `save_state()` at `run.sh:6911-6952`
 
 ### 2.2 RARV Cycle
 
 Every iteration maps to a phase based on `iteration % 4`.
 
-Source: `autonomy/run.sh:1310-1359`
+Source: `autonomy/run.sh:1325-1359`
 
 ```
   iteration % 4:
@@ -190,13 +190,13 @@ Source: `autonomy/run.sh:1310-1359`
 | REFLECT | 2 | development (sonnet) | Code review, analysis |
 | VERIFY | 3 | fast (haiku) | Unit tests, validation, monitoring |
 
-Source: `get_rarv_tier()` at `run.sh:1325-1346`, `get_rarv_phase_name()` at `run.sh:1349-1359`
+Source: `get_rarv_tier()` at `run.sh:1325-1347`, `get_rarv_phase_name()` at `run.sh:1349-1359`
 
 ### 2.3 CLI Session Control
 
 The `loki` CLI manages session lifecycle through signal files.
 
-Source: `autonomy/loki:485` (cmd_start), `autonomy/run.sh:8058` (check_human_intervention)
+Source: `autonomy/loki:485` (cmd_start), `autonomy/run.sh:8059` (check_human_intervention)
 
 ```
                    +----------+
@@ -230,7 +230,7 @@ Source: `autonomy/loki:485` (cmd_start), `autonomy/run.sh:8058` (check_human_int
                    (RESUME file or re-run)
 ```
 
-Signal files (checked by `check_human_intervention` at `run.sh:8058`):
+Signal files (checked by `check_human_intervention` at `run.sh:8059`):
 
 | File | Effect | Created By |
 |------|--------|------------|
@@ -239,24 +239,30 @@ Signal files (checked by `check_human_intervention` at `run.sh:8058`):
 | `.loki/INPUT` | Wait for human input | Dashboard (contains directive text) |
 | `.loki/RESUME` | Resume from pause | Dashboard, user, `loki resume` |
 
-Interrupt handling (Ctrl+C): `run.sh:8054-8057`
+Interrupt handling (Ctrl+C): `run.sh:8261` (cleanup function)
 - `INTERRUPT_COUNT=0`, first Ctrl+C sets `PAUSED=true`
 - Second Ctrl+C within window triggers full stop
 
 ### 2.4 Human Intervention
 
-Source: `autonomy/run.sh:8058` (check_human_intervention)
+Source: `autonomy/run.sh:8059` (check_human_intervention)
 
 ```
   check_human_intervention()
          |
-         +──> STOP file exists? ──yes──> return "STOP" ──> exit loop
+         +──> PAUSE file exists? ──yes──> handle_pause() ──> return 1 (paused)
+         |                                 (in perpetual mode: auto-clear unless budget-triggered)
          |
-         +──> PAUSE file exists? ──yes──> return "PAUSE" ──> wait for RESUME
+         +──> PAUSE_AT_CHECKPOINT file exists? ──yes──> (checkpoint mode) pause ──> return 1
          |
-         +──> INPUT file exists? ──yes──> read directive ──> inject into prompt
+         +──> HUMAN_INPUT.md exists? ──yes──> read directive ──> inject into prompt
+         |    (security: no symlinks, 1MB limit, LOKI_PROMPT_INJECTION must be true)
          |
-         +──> (none) ──> return "" ──> continue normally
+         +──> signals/COUNCIL_REVIEW_REQUESTED? ──yes──> force council vote
+         |
+         +──> STOP file exists? ──yes──> return 2 (stop) ──> exit loop
+         |
+         +──> (none) ──> return 0 ──> continue normally
 ```
 
 ---
@@ -270,7 +276,7 @@ Source: `autonomy/completion-council.sh`
 
 ### 3.1 Council Voting Pipeline
 
-Source: `completion-council.sh:1270-1305` (council_evaluate)
+Source: `completion-council.sh:1311` (council_should_stop), `completion-council.sh:1260` (council_evaluate)
 
 ```
   council_should_stop()  [line 1311]
@@ -279,42 +285,39 @@ Source: `completion-council.sh:1270-1305` (council_evaluate)
          |
          +──> iteration < MIN_ITERATIONS? ──yes──> return 1
          |
-         +──> iteration % CHECK_INTERVAL != 0? ──yes──> return 1
+         +──> council_circuit_breaker_triggered()? [line 198]
+         |    (stagnation detection, checked every time)
+         |    sets circuit_triggered flag
+         |
+         +──> circuit_triggered OR iteration % CHECK_INTERVAL == 0?
+         |    neither? ──> return 1
          |
          v
-  council_evaluate()  [line 1270]
+  council_evaluate()  [line 1260]
          |
-    Phase 1: Circuit Breaker
-         +──> council_circuit_breaker()
-         |    stagnation_count > STAGNATION_LIMIT? ──yes──> return 0 (STOP)
+    Phase 1: Reverify Checklist
+         +──> council_reverify_checklist()  [line 550]
+         |    (refresh checklist data before evaluation)
          |
-    Phase 2: Convergence Detection
-         +──> council_convergence_check()
-         |    consecutive_no_change >= CONVERGENCE_WINDOW? ──yes──> proceed
-         |                                                  no──> return 1
+    Phase 2: Checklist Hard Gate
+         +──> council_checklist_gate()  [line 563]
+         |    critical checklist items failing? ──yes──> return 1 (CONTINUE)
          |
-    Phase 3: Severity Gate
-         +──> council_severity_gate()
-         |    critical/high issues > ERROR_BUDGET? ──yes──> return 1
-         |
-    Phase 4: Checklist Hard Gate
-         +──> council_checklist_gate()
-         |    critical checklist items failing? ──yes──> return 1
-         |
-    Phase 5: Council Voting
-         +──> council_aggregate_votes()
+    Phase 3: Council Voting
+         +──> council_aggregate_votes()  [line 1057]
               |
               +──> result == "COMPLETE"?
                    |          |
                   yes         no ──> return 1 (CONTINUE)
                    |
                    v
-              unanimous? (complete_count == COUNCIL_SIZE)
+              unanimous? (complete_count == COUNCIL_SIZE && COUNCIL_SIZE >= 3)
                    |          |
                   yes         no ──> return 0 (COMPLETE)
                    |
                    v
-              council_devils_advocate_review()
+    Phase 4: Devil's Advocate (anti-sycophancy)
+              council_devils_advocate_review()  [line 1156]
                    |
               +────+────+
               |         |
@@ -324,6 +327,14 @@ Source: `completion-council.sh:1270-1305` (council_evaluate)
               v         v
           return 1   return 0
          (CONTINUE) (COMPLETE)
+
+  (back in council_should_stop)
+         |
+    council_evaluate returned 0 (COMPLETE)?
+         yes──> write COMPLETED marker, council_write_report ──> return 0 (STOP)
+         no ──> if circuit_triggered: log warning
+                if stagnation >= 2x STAGNATION_LIMIT: FORCE STOP (safety valve)
+                else ──> return 1 (CONTINUE)
 ```
 
 | State | Persistence | Source |
@@ -370,7 +381,7 @@ Source: `completion-council.sh` (council_circuit_breaker, council_track_iteratio
 
 Based on CONSENSAGENT (ACL 2025). Runs when council votes are unanimous.
 
-Source: `completion-council.sh:1289-1297`
+Source: `completion-council.sh:1156` (council_devils_advocate_review)
 
 ```
   Unanimous COMPLETE vote detected
@@ -439,7 +450,7 @@ Source: `providers/loader.sh:14-62`
   (8 required vars set)
 ```
 
-Required provider variables (`loader.sh:66-75`):
+Required provider variables (`loader.sh:65-83`):
 
 | Variable | Example (Claude) |
 |----------|------------------|
@@ -456,32 +467,70 @@ Supported providers: `claude`, `codex`, `gemini`, `cline`, `aider`
 
 ### 4.2 Model Tier Selection
 
-Each provider maps the 3 RARV tiers to provider-specific model settings.
+Each provider maps the 3 RARV tiers to provider-specific model settings via
+`provider_get_tier_param()`.
 
-Source: `providers/claude.sh`, `providers/codex.sh`, `providers/gemini.sh`
+Source: `providers/claude.sh:101`, `providers/codex.sh:106`, `providers/gemini.sh:132`,
+`providers/cline.sh:102`, `providers/aider.sh:109`
 
 ```
-  RARV Tier          Claude            Codex              Gemini
-  ---------          ------            -----              ------
-  planning      opus (--model)    o3 (effort=high)   2.5-pro (high thinking)
-  development   sonnet (--model)  o4-mini (effort=med) 2.5-flash (med thinking)
-  fast          haiku (--model)   o4-mini (effort=low) 2.5-flash (low thinking)
+  RARV Tier     Claude (model)     Codex (effort)   Gemini (thinking)   Cline           Aider
+  ---------     --------------     --------------   -----------------   -----           -----
+  planning      opus               xhigh            high                single model*   single model**
+  development   opus (upgraded)    high             medium              single model*   single model**
+  fast          sonnet (upgraded)  low              low                 single model*   single model**
+
+  * Cline: returns LOKI_CLINE_MODEL (default: "default"), single externally-configured model
+  ** Aider: returns LOKI_AIDER_MODEL (default: "claude-3.7-sonnet"), single externally-configured model
+
+  Note: Claude default tier mapping upgrades development->opus and fast->sonnet.
+  With LOKI_ALLOW_HAIKU=true: planning=opus, development=sonnet, fast=haiku (original mapping).
 ```
 
 ### 4.3 Degradation States
 
-Source: `providers/codex.sh`, `providers/gemini.sh`
+Source: `providers/claude.sh`, `providers/codex.sh`, `providers/gemini.sh`,
+`providers/cline.sh`, `providers/aider.sh`
 
 ```
-  +------------------+      +-------------------+
-  | Claude (Full)    |      | Codex/Gemini      |
-  | - Subagents      |      | (Degraded)        |
-  | - Parallel exec  |      | - Sequential only |
-  | - Task tool      |      | - No Task tool    |
-  | - MCP support    |      | - No MCP          |
-  | - -p flag prompt |      | - Positional prompt|
-  +------------------+      +-------------------+
+  Tier 1: Full                Tier 2: Partial             Tier 3: Degraded
+  +------------------+        +-------------------+       +-------------------+
+  | Claude (Full)    |        | Cline             |       | Codex             |
+  | - Subagents      |        | - Subagents       |       | (Degraded)        |
+  | - Parallel exec  |        | - MCP support     |       | - Sequential only |
+  | - Task tool      |        | - No parallel     |       | - MCP support     |
+  | - MCP support    |        | - Not degraded    |       | - No subagents    |
+  | - -p flag prompt |        | - Single model    |       | - Positional prompt|
+  +------------------+        +-------------------+       +-------------------+
+
+                                                          +-------------------+
+                                                          | Gemini            |
+                                                          | (Degraded)        |
+                                                          | - Sequential only |
+                                                          | - No MCP          |
+                                                          | - No subagents    |
+                                                          | - Positional prompt|
+                                                          +-------------------+
+
+                                                          +-------------------+
+                                                          | Aider             |
+                                                          | (Degraded)        |
+                                                          | - Sequential only |
+                                                          | - No MCP          |
+                                                          | - No subagents    |
+                                                          | - Single model    |
+                                                          +-------------------+
 ```
+
+Provider capability matrix:
+
+| Provider | Subagents | Parallel | MCP | Degraded |
+|----------|-----------|----------|-----|----------|
+| Claude   | true      | true     | true| false    |
+| Cline    | true      | false    | true| false    |
+| Codex    | false     | false    | true| true     |
+| Gemini   | false     | false    | false| true    |
+| Aider    | false     | false    | false| true    |
 
 When `PROVIDER_DEGRADED=true`:
 - `build_prompt()` generates simplified prompts (no RARV/SDLC injection)
@@ -491,7 +540,7 @@ When `PROVIDER_DEGRADED=true`:
 
 ### 4.4 Rate Limit Recovery
 
-Source: `autonomy/run.sh:6132-6155` (parse_retry_after, calculate_rate_limit_backoff)
+Source: `autonomy/run.sh:6134-6173` (parse_retry_after, calculate_rate_limit_backoff, detect_rate_limit)
 
 ```
   Provider returns error
@@ -828,13 +877,13 @@ Queue entry format:
 }
 ```
 
-BMAD population: `run.sh:7261-7270` -- runs once, writes `.loki/queue/.bmad-populated` marker.
+BMAD population: `run.sh:7270-7372` -- runs once, writes `.loki/queue/.bmad-populated` marker.
 
 ### 6.2 Checklist Verification
 
 PRD requirements are extracted and verified against the codebase on interval.
 
-Source: `run.sh:7879-7882` (checklist_should_verify, checklist_verify)
+Source: `run.sh:7880-7881` (checklist_should_verify, checklist_verify)
 
 ```
   [UNINITIALIZED]
@@ -945,7 +994,7 @@ Source: `skills/model-selection.md`
 
 ### 7.3 Code Review (3-Reviewer Blind)
 
-Source: `run.sh:4935` (run_code_review reference in CLAUDE.md)
+Source: `run.sh:5039` (run_code_review)
 
 ```
   Code changes committed
@@ -1106,7 +1155,7 @@ Written atomically every 2 seconds by `run.sh` to `.loki/dashboard-state.json`.
   "iteration": 0,
   "complexity": "simple|standard|complex",
   "mode": "autonomous|interactive",
-  "provider": "claude|codex|gemini",
+  "provider": "claude|codex|gemini|cline|aider",
   "current_task": "...",
   "budget": {"limit": 0.0, "used": 0.0, "remaining": 0.0},
   "qualityGates": {"gate_name": {"status": "passed|failed"}}
@@ -1115,7 +1164,7 @@ Written atomically every 2 seconds by `run.sh` to `.loki/dashboard-state.json`.
 
 ### 8.6 Dashboard Crash Recovery
 
-Source: `autonomy/run.sh:5947-5959` (handle_dashboard_crash)
+Source: `autonomy/run.sh:5949` (handle_dashboard_crash)
 
 ```
   Dashboard process exits unexpectedly
@@ -1335,25 +1384,35 @@ Source: `mcp/server.py:473-1403`
   _emit_tool_event_async(tool, "end")
 ```
 
-15 registered tools:
+14 registered tools + 3 resources:
 
-| Tool | Purpose | State Read | State Write |
-|------|---------|------------|-------------|
-| loki_memory_retrieve | Retrieve memories | episodic/, semantic/ | -- |
-| loki_memory_store_pattern | Store semantic pattern | -- | semantic/patterns/ |
-| loki_task_queue_list | List tasks | queue.json | -- |
-| loki_task_queue_add | Add task | -- | queue.json |
-| loki_task_queue_update | Update task status | queue.json | queue.json |
-| loki_state_get | Get autonomy state | state.json | -- |
-| loki_metrics_efficiency | Get efficiency data | metrics/efficiency/ | -- |
-| loki_consolidate_memory | Run consolidation | episodic/ | semantic/ |
-| get_memory_index | Get memory index | memory/index.json | -- |
-| get_pending_tasks | Get task queue | queue.json | -- |
-| loki_code_search | Search codebase | (Chroma DB) | -- |
-| loki_checkpoint_restore | Restore checkpoint | checkpoints/ | (various) |
-| loki_quality_report | Quality gate status | council/verdicts.jsonl | -- |
-| loki_agent_metrics | Agent performance | Dashboard DB | -- |
-| loki_start_project | Start RARV execution | -- | spawns run.sh |
+**Tools** (`@mcp.tool()`):
+
+| Tool | Purpose | State Read | State Write | Line |
+|------|---------|------------|-------------|------|
+| loki_memory_retrieve | Retrieve memories | episodic/, semantic/ | -- | 472 |
+| loki_memory_store_pattern | Store semantic pattern | -- | semantic/patterns/ | 537 |
+| loki_task_queue_list | List tasks | queue.json | -- | 597 |
+| loki_task_queue_add | Add task | -- | queue.json | 641 |
+| loki_task_queue_update | Update task status | queue.json | queue.json | 717 |
+| loki_state_get | Get autonomy state | state.json | -- | 788 |
+| loki_metrics_efficiency | Get efficiency data | metrics/efficiency/ | -- | 842 |
+| loki_consolidate_memory | Run consolidation | episodic/ | semantic/ | 888 |
+| loki_start_project | Start RARV execution | -- | spawns run.sh | 992 |
+| loki_project_status | Get project status | state.json, dashboard-state | -- | 1044 |
+| loki_agent_metrics | Agent performance | Dashboard DB | -- | 1094 |
+| loki_checkpoint_restore | Restore checkpoint | checkpoints/ | (various) | 1132 |
+| loki_quality_report | Quality gate status | council/verdicts.jsonl | -- | 1182 |
+| loki_code_search | Search codebase | (ChromaDB) | -- | 1255 |
+| loki_code_search_stats | ChromaDB index stats | (ChromaDB) | -- | 1343 |
+
+**Resources** (`@mcp.resource()`):
+
+| Resource URI | Function | State Read | Line |
+|-------------|----------|------------|------|
+| loki://state/continuity | get_continuity | continuity.md | 928 |
+| loki://memory/index | get_memory_index | memory/index.json | 941 |
+| loki://queue/pending | get_pending_tasks | queue.json | 963 |
 
 ### 10.2 Path Security Validation
 
@@ -1505,7 +1564,7 @@ same trigger for same iteration.
 
 ### 11.3 Budget Limit
 
-Source: `autonomy/run.sh:6125` (check_budget_limit reference in CLAUDE.md)
+Source: `autonomy/run.sh:6249` (check_budget_limit)
 
 ```
   Before each iteration
@@ -1592,7 +1651,7 @@ Source: `skills/parallel-workflows.md`
 
 ### 13.1 Checkpoint Creation/Rollback
 
-Source: `autonomy/run.sh:5483` (create_checkpoint reference in CLAUDE.md)
+Source: `autonomy/run.sh:5607` (create_checkpoint)
 
 ```
   create_checkpoint(description, tag)
@@ -1619,8 +1678,8 @@ Source: `autonomy/run.sh:5483` (create_checkpoint reference in CLAUDE.md)
 ```
 
 Checkpoints are created:
-- After each successful iteration: `run.sh:7934`
-- After each failed iteration: `run.sh:8006`
+- After each successful iteration (inside `run_autonomous()`)
+- After each failed iteration (inside `run_autonomous()`)
 
 Rollback via MCP tool `loki_checkpoint_restore` or CLI.
 
@@ -1630,45 +1689,46 @@ Rollback via MCP tool `loki_checkpoint_restore` or CLI.
 
 ### 14.1 Auto-Detected Tiers
 
-Source: `autonomy/run.sh:1192-1307` (detect_complexity, get_sdlc_phases)
+Source: `autonomy/run.sh:1196` (detect_complexity), `run.sh:1275` (get_complexity_phases),
+`run.sh:1293` (get_phase_names)
 
 ```
-  detect_complexity(prd_path)
+  detect_complexity(prd_path)  [line 1196]
          |
          v
-  Count source files (excluding node_modules, .git, vendor, etc.)
-  Check for external integrations (OAuth, Stripe, AWS, etc.)
-  Check for microservices (docker-compose, k8s)
-  Analyze PRD word count
+  Count source files (excluding node_modules, .git, vendor, dist, build, __pycache__)
+  Check for external integrations (OAuth, SAML, OIDC, Stripe, Twilio, AWS, Google Cloud, Azure)
+  Check for microservices (docker-compose.yml/yaml, k8s/ directory)
+  Analyze PRD word count + feature count (markdown headers/checkboxes or JSON arrays)
          |
     +----+----+----+
     |    |         |
     v    v         v
 
   [SIMPLE]        [STANDARD]       [COMPLEX]
-  <20 files       20-100 files     >100 files
-  No external     Some external    External integrations
-  integrations    integrations     + microservices
-  PRD <500 words  PRD 500-2000     PRD >2000 words
-                  words
+  <=5 files       6-50 files       >50 files
+  No external     (default tier)   External integrations
+  integrations                     OR microservices
+  PRD <200 words                   OR PRD complex
+  + <5 features
     |              |                |
     v              v                v
-  SDLC Phases:   SDLC Phases:    SDLC Phases:
-  RESEARCH       RESEARCH        RESEARCH
-  IMPLEMENT      DESIGN          ARCHITECTURE
-  TEST           IMPLEMENT       DESIGN
-  DEPLOY         TEST            IMPLEMENT
-                 REVIEW          TEST
-                 DEPLOY          REVIEW
-                                 SECURITY
-                                 DEPLOY
+  Phases (3):    Phases (6):      Phases (8):
+  IMPLEMENT      RESEARCH         RESEARCH
+  TEST           DESIGN           ARCHITECTURE
+  DEPLOY         IMPLEMENT        DESIGN
+                 TEST             IMPLEMENT
+                 REVIEW           TEST
+                 DEPLOY           REVIEW
+                                  SECURITY
+                                  DEPLOY
 ```
 
-| Tier | File Count | External Deps | Microservices | PRD Words | Max Iterations |
-|------|-----------|---------------|---------------|-----------|----------------|
-| simple | <20 | no | no | <500 | ~10 |
-| standard | 20-100 | some | no | 500-2000 | ~25 |
-| complex | >100 | yes | yes | >2000 | ~50+ |
+| Tier | File Count | External Deps | Microservices | PRD | Phase Count |
+|------|-----------|---------------|---------------|-----|-------------|
+| simple | <=5 | no | no | <200 words + <5 features | 3 |
+| standard | 6-50 | (default) | no | 200-1000 words | 6 |
+| complex | >50 | yes | yes | >1000 words or >15 features | 8 |
 
 Persistence: `.loki/dashboard-state.json` field `complexity`
 Override: `COMPLEXITY_TIER` environment variable (bypasses auto-detection)
@@ -1681,7 +1741,7 @@ Override: `COMPLEXITY_TIER` environment variable (bypasses auto-detection)
   loki CLI ──exec──> run.sh ──source──> completion-council.sh
      |                  |                       |
      |                  +──source──> providers/loader.sh
-     |                  |               +──source──> claude.sh|codex.sh|gemini.sh
+     |                  |               +──source──> claude.sh|codex.sh|gemini.sh|cline.sh|aider.sh
      |                  |
      |                  +──python3──> memory/{engine,storage,retrieval,consolidation}.py
      |                  |
