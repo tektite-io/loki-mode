@@ -46,25 +46,20 @@ fi
 
 # Test 4: Provider variables are set
 echo "Test 4: Provider variables"
-(
-    source "$PROJECT_DIR/providers/cline.sh" 2>/dev/null || true
-    if [ -n "${PROVIDER_NAME:-}" ]; then
-        echo "  PASS  PROVIDER_NAME=$PROVIDER_NAME"
-    else
-        echo "  FAIL  PROVIDER_NAME not set"
-    fi
-)
-
-# Test 5: LOKI_CLINE_MODEL override
-echo "Test 5: Model override via LOKI_CLINE_MODEL"
-export LOKI_CLINE_MODEL="test-model-123"
-# We can't actually run cline in test, but verify the variable is respected
-if [ "$LOKI_CLINE_MODEL" = "test-model-123" ]; then
-    pass "LOKI_CLINE_MODEL override accepted"
+prov_name=$(bash -c "source '$PROJECT_DIR/providers/cline.sh' 2>/dev/null; echo \"\${PROVIDER_NAME:-}\"")
+if [ -n "$prov_name" ]; then
+    pass "PROVIDER_NAME=$prov_name"
 else
-    fail "LOKI_CLINE_MODEL" "override not working"
+    fail "PROVIDER_NAME" "not set after sourcing cline.sh"
 fi
-unset LOKI_CLINE_MODEL
+
+# Test 5: LOKI_CLINE_MODEL is consumed by invoke_cline in run.sh
+echo "Test 5: Model override via LOKI_CLINE_MODEL"
+if grep -A20 "invoke_cline()" "$PROJECT_DIR/autonomy/run.sh" | grep -q "LOKI_CLINE_MODEL"; then
+    pass "LOKI_CLINE_MODEL consumed by invoke_cline()"
+else
+    fail "LOKI_CLINE_MODEL" "not referenced in invoke_cline() body"
+fi
 
 # Test 6: invoke_cline function signature (from run.sh)
 echo "Test 6: invoke_cline defined in run.sh"
@@ -84,14 +79,11 @@ fi
 
 # Test 8: Error handling when cline not found
 echo "Test 8: Error path simulation"
-(
-    # Temporarily override PATH to simulate cline not found
-    PATH="/nonexistent" command -v cline &>/dev/null && {
-        echo "  FAIL  cline should not be found with empty PATH"
-    } || {
-        echo "  PASS  cline correctly not found when not in PATH"
-    }
-)
+if PATH="/nonexistent" command -v cline &>/dev/null; then
+    fail "cline error path" "cline should not be found with empty PATH"
+else
+    pass "cline correctly not found when not in PATH"
+fi
 
 echo ""
 echo "========================"

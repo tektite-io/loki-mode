@@ -50,15 +50,13 @@ else
     pass "default model: $local_default"
 fi
 
-# Test 5: LOKI_AIDER_MODEL override
+# Test 5: LOKI_AIDER_MODEL is consumed by invoke_aider in run.sh
 echo "Test 5: Model override"
-export LOKI_AIDER_MODEL="gpt-4o"
-if [ "$LOKI_AIDER_MODEL" = "gpt-4o" ]; then
-    pass "LOKI_AIDER_MODEL override to gpt-4o"
+if grep -A20 "invoke_aider()" "$PROJECT_DIR/autonomy/run.sh" | grep -q "LOKI_AIDER_MODEL"; then
+    pass "LOKI_AIDER_MODEL consumed by invoke_aider()"
 else
-    fail "LOKI_AIDER_MODEL" "override not working"
+    fail "LOKI_AIDER_MODEL" "not referenced in invoke_aider() body"
 fi
-unset LOKI_AIDER_MODEL
 
 # Test 6: LOKI_AIDER_FLAGS passthrough
 echo "Test 6: Extra flags passthrough"
@@ -94,23 +92,17 @@ else
     fail "stdin redirect" "< /dev/null not found in invoke_aider"
 fi
 
-# Test 10: Cloud API key detection
+# Test 10: Cloud API key detection (informational -- does not affect pass/fail)
 echo "Test 10: Cloud API key availability"
-keys_found=0
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-    pass "ANTHROPIC_API_KEY set"
-    keys_found=$((keys_found + 1))
+    echo "  INFO  ANTHROPIC_API_KEY set"
 else
     echo "  SKIP  ANTHROPIC_API_KEY not set (optional for cloud testing)"
 fi
 if [ -n "${OPENAI_API_KEY:-}" ]; then
-    pass "OPENAI_API_KEY set"
-    keys_found=$((keys_found + 1))
+    echo "  INFO  OPENAI_API_KEY set"
 else
     echo "  SKIP  OPENAI_API_KEY not set (optional for cloud testing)"
-fi
-if [ "$keys_found" -eq 0 ]; then
-    echo "  NOTE  No cloud API keys found - live tests will be skipped"
 fi
 
 echo ""

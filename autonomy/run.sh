@@ -5109,272 +5109,6 @@ else:
 COMPOUND_SCRIPT
 }
 
-# ============================================================================
-# Static Analysis Hard Gate (v6.7.0)
-# Detects project type, runs appropriate linter on changed files
-# Returns 1 on critical findings, stores results in .loki/quality/
-# ============================================================================
-
-enforce_static_analysis() {
-    local loki_dir="${TARGET_DIR:-.}/.loki"
-    local quality_dir="$loki_dir/quality"
-    mkdir -p "$quality_dir"
-
-    local changed_files
-    changed_files=$(git -C "${TARGET_DIR:-.}" diff --name-only HEAD~1 2>/dev/null || git -C "${TARGET_DIR:-.}" diff --name-only --cached 2>/dev/null || echo "")
-    if [ -z "$changed_files" ]; then
-        log_info "Static analysis: No changed files to analyze"
-        touch "$quality_dir/static-analysis.pass"
-        return 0
-    fi
-
-    log_header "STATIC ANALYSIS GATE"
-
-    local findings=0
-    local total_checked=0
-    local summary_parts=""
-    local target_dir="${TARGET_DIR:-.}"
-
-    # JavaScript/TypeScript
-    local js_files
-    js_files=$(echo "$changed_files" | grep -E '\.(js|ts|jsx|tsx)$' || true)
-    if [ -n "$js_files" ] && [ -f "$target_dir/package.json" ]; then
-        total_checked=$((total_checked + 1))
-        log_step "Checking JavaScript/TypeScript files..."
-        local abs_js_files=""
-        while IFS= read -r f; do
-            [ -f "$target_dir/$f" ] && abs_js_files="$abs_js_files $target_dir/$f"
-        done <<< "$js_files"
-        if [ -n "$abs_js_files" ]; then
-            if [ -f "$target_dir/.eslintrc.js" ] || [ -f "$target_dir/.eslintrc.json" ] || [ -f "$target_dir/.eslintrc.yml" ] || [ -f "$target_dir/eslint.config.js" ] || [ -f "$target_dir/eslint.config.mjs" ]; then
-                local eslint_out
-                eslint_out=$(cd "$target_dir" && npx eslint $abs_js_files 2>&1) || {
-                    findings=$((findings + 1))
-                    summary_parts="${summary_parts}ESLint errors found. "
-                    log_warn "ESLint found issues"
-                }
-            else
-                for f in $abs_js_files; do
-                    node --check "$f" 2>&1 || {
-                        findings=$((findings + 1))
-                        summary_parts="${summary_parts}JS syntax error in $(basename "$f"). "
-                    }
-                done
-            fi
-        fi
-    fi
-
-    # Python
-    local py_files
-    py_files=$(echo "$changed_files" | grep -E '\.py$' || true)
-    if [ -n "$py_files" ]; then
-        total_checked=$((total_checked + 1))
-        log_step "Checking Python files..."
-        local compile_failures=0
-        while IFS= read -r f; do
-            [ -f "$target_dir/$f" ] && {
-                python3 -m py_compile "$target_dir/$f" 2>&1 || compile_failures=$((compile_failures + 1))
-            }
-        done <<< "$py_files"
-        if [ $compile_failures -gt 0 ]; then
-            findings=$((findings + 1))
-            summary_parts="${summary_parts}${compile_failures} Python compile errors. "
-        fi
-        if command -v ruff &>/dev/null; then
-            local ruff_files=""
-            while IFS= read -r f; do
-                [ -f "$target_dir/$f" ] && ruff_files="$ruff_files $target_dir/$f"
-            done <<< "$py_files"
-            if [ -n "$ruff_files" ]; then
-                ruff check $ruff_files 2>&1 || {
-                    findings=$((findings + 1))
-                    summary_parts="${summary_parts}Ruff lint errors. "
-                }
-            fi
-        fi
-    fi
-
-    # Shell scripts
-    local sh_files
-    sh_files=$(echo "$changed_files" | grep -E '\.sh$' || true)
-    if [ -n "$sh_files" ]; then
-        total_checked=$((total_checked + 1))
-        log_step "Checking shell scripts..."
-        local sh_failures=0
-        while IFS= read -r f; do
-            [ -f "$target_dir/$f" ] && {
-                if command -v shellcheck &>/dev/null; then
-                    shellcheck "$target_dir/$f" 2>&1 || sh_failures=$((sh_failures + 1))
-                else
-                    bash -n "$target_dir/$f" 2>&1 || sh_failures=$((sh_failures + 1))
-                fi
-            }
-        done <<< "$sh_files"
-        if [ $sh_failures -gt 0 ]; then
-            findings=$((findings + 1))
-            summary_parts="${summary_parts}${sh_failures} shell script issues. "
-        fi
-    fi
-
-    # Go
-    local go_files
-    go_files=$(echo "$changed_files" | grep -E '\.go$' || true)
-    if [ -n "$go_files" ] && [ -f "$target_dir/go.mod" ]; then
-        total_checked=$((total_checked + 1))
-        log_step "Checking Go files..."
-        (cd "$target_dir" && go vet ./... 2>&1) || {
-            findings=$((findings + 1))
-            summary_parts="${summary_parts}Go vet errors. "
-        }
-    fi
-
-    # Rust
-    if echo "$changed_files" | grep -qE '\.rs$' && [ -f "$target_dir/Cargo.toml" ]; then
-        total_checked=$((total_checked + 1))
-        log_step "Checking Rust files..."
-        (cd "$target_dir" && cargo check 2>&1) || {
-            findings=$((findings + 1))
-            summary_parts="${summary_parts}Cargo check errors. "
-        }
-    fi
-
-    # Store results
-    local result_status="pass"
-    [ $findings -gt 0 ] && result_status="fail"
-    python3 -c "
-import json
-result = {
-    'status': '$result_status',
-    'findings_count': $findings,
-    'checks_run': $total_checked,
-    'summary': '${summary_parts:-All checks passed.}',
-    'changed_files': $(echo "$changed_files" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip().split('\n')))" 2>/dev/null || echo '[]')
-}
-with open('$quality_dir/static-analysis.json', 'w') as f:
-    json.dump(result, f, indent=2)
-" 2>/dev/null || true
-
-    if [ $findings -gt 0 ]; then
-        log_warn "Static analysis FAILED: $findings issue(s) found"
-        touch "$loki_dir/signals/STATIC_ANALYSIS_FAILED"
-        rm -f "$quality_dir/static-analysis.pass"
-        return 1
-    else
-        log_info "Static analysis passed ($total_checked check types run)"
-        touch "$quality_dir/static-analysis.pass"
-        rm -f "$loki_dir/signals/STATIC_ANALYSIS_FAILED"
-        return 0
-    fi
-}
-
-# ============================================================================
-# Test Coverage Hard Gate (v6.7.0)
-# Detects test runner, runs tests with coverage, enforces minimum threshold
-# Returns 1 if tests fail, stores results in .loki/quality/
-# ============================================================================
-
-enforce_test_coverage() {
-    local loki_dir="${TARGET_DIR:-.}/.loki"
-    local quality_dir="$loki_dir/quality"
-    mkdir -p "$quality_dir"
-
-    local target_dir="${TARGET_DIR:-.}"
-    local min_coverage="${LOKI_MIN_COVERAGE:-80}"
-    local test_failed=0
-    local tests_run=0
-    local summary_parts=""
-
-    log_header "TEST COVERAGE GATE"
-
-    # JavaScript/TypeScript (jest/vitest)
-    if [ -f "$target_dir/package.json" ]; then
-        local test_cmd=""
-        if grep -q '"vitest"' "$target_dir/package.json" 2>/dev/null; then
-            test_cmd="npx vitest run --coverage"
-        elif grep -q '"jest"' "$target_dir/package.json" 2>/dev/null; then
-            test_cmd="npx jest --coverage --passWithNoTests"
-        elif grep -q '"test"' "$target_dir/package.json" 2>/dev/null; then
-            test_cmd="npm test"
-        fi
-        if [ -n "$test_cmd" ]; then
-            tests_run=$((tests_run + 1))
-            log_step "Running: $test_cmd"
-            (cd "$target_dir" && eval "$test_cmd" 2>&1) || {
-                test_failed=$((test_failed + 1))
-                summary_parts="${summary_parts}JS/TS tests failed. "
-            }
-        fi
-    fi
-
-    # Python (pytest)
-    if [ -f "$target_dir/setup.py" ] || [ -f "$target_dir/pyproject.toml" ] || [ -f "$target_dir/requirements.txt" ]; then
-        if command -v pytest &>/dev/null || [ -f "$target_dir/pytest.ini" ] || [ -f "$target_dir/setup.cfg" ]; then
-            tests_run=$((tests_run + 1))
-            log_step "Running: pytest"
-            (cd "$target_dir" && python3 -m pytest --tb=short 2>&1) || {
-                test_failed=$((test_failed + 1))
-                summary_parts="${summary_parts}Python tests failed. "
-            }
-        fi
-    fi
-
-    # Go
-    if [ -f "$target_dir/go.mod" ]; then
-        tests_run=$((tests_run + 1))
-        log_step "Running: go test -cover"
-        (cd "$target_dir" && go test -cover ./... 2>&1) || {
-            test_failed=$((test_failed + 1))
-            summary_parts="${summary_parts}Go tests failed. "
-        }
-    fi
-
-    # Rust
-    if [ -f "$target_dir/Cargo.toml" ]; then
-        tests_run=$((tests_run + 1))
-        log_step "Running: cargo test"
-        (cd "$target_dir" && cargo test 2>&1) || {
-            test_failed=$((test_failed + 1))
-            summary_parts="${summary_parts}Rust tests failed. "
-        }
-    fi
-
-    if [ $tests_run -eq 0 ]; then
-        log_info "Test coverage: No test runners detected, skipping"
-        touch "$quality_dir/unit-tests.pass"
-        python3 -c "
-import json
-with open('$quality_dir/test-results.json', 'w') as f:
-    json.dump({'status': 'skipped', 'summary': 'No test runners detected', 'tests_run': 0}, f, indent=2)
-" 2>/dev/null || true
-        return 0
-    fi
-
-    # Store results
-    local result_status="pass"
-    [ $test_failed -gt 0 ] && result_status="fail"
-    python3 -c "
-import json
-result = {
-    'status': '$result_status',
-    'test_suites_run': $tests_run,
-    'test_suites_failed': $test_failed,
-    'min_coverage': $min_coverage,
-    'summary': '${summary_parts:-All $tests_run test suite(s) passed.}'
-}
-with open('$quality_dir/test-results.json', 'w') as f:
-    json.dump(result, f, indent=2)
-" 2>/dev/null || true
-
-    if [ $test_failed -gt 0 ]; then
-        log_warn "Test coverage gate FAILED: $test_failed of $tests_run suite(s) failed"
-        rm -f "$quality_dir/unit-tests.pass"
-        return 1
-    else
-        log_info "Tests passed: $tests_run suite(s), min coverage: ${min_coverage}%"
-        touch "$quality_dir/unit-tests.pass"
-        return 0
-    fi
-}
 
 # ============================================================================
 # Hard Quality Gate: Static Analysis (v6.7.0)
@@ -5648,13 +5382,16 @@ run_code_review() {
     echo "$changed_files" > "$files_file"
 
     # Select specialists via keyword scoring (python3 reads files, not env vars)
+    # Loads from agents/types.json when available, falls back to hardcoded pool (v6.7.0)
     export LOKI_REVIEW_DIFF_FILE="$diff_file"
     export LOKI_REVIEW_FILES_FILE="$files_file"
+    export LOKI_AGENTS_TYPES_FILE="${PROJECT_DIR}/agents/types.json"
     local selected_specialists
     selected_specialists=$(python3 << 'SPECIALIST_SELECT'
 import os
 import json
 
+# Hardcoded specialists (always available as fallback)
 SPECIALISTS = {
     "security-sentinel": {
         "keywords": ["auth", "login", "password", "token", "api", "sql", "query", "cookie", "cors", "csrf"],
@@ -5681,6 +5418,37 @@ SPECIALISTS = {
         "priority": 3
     }
 }
+
+# Load additional specialists from agents/types.json (v6.7.0)
+types_file = os.environ.get("LOKI_AGENTS_TYPES_FILE", "")
+if types_file and os.path.exists(types_file):
+    try:
+        with open(types_file) as f:
+            agent_types = json.load(f)
+        FOCUS_KEYWORDS = {
+            "ops-security": ["auth", "security", "vuln", "cve", "injection", "xss", "csrf", "encrypt", "secret", "permission"],
+            "eng-qa": ["test", "spec", "coverage", "assert", "mock", "fixture", "expect", "describe", "e2e", "unit"],
+            "eng-perf": ["perf", "cache", "query", "slow", "memory", "leak", "optimize", "bundle", "load", "latency"],
+            "eng-database": ["database", "sql", "query", "migration", "index", "join", "schema", "postgres", "mongo"],
+            "eng-frontend": ["react", "vue", "css", "html", "component", "render", "dom", "accessibility", "responsive"],
+            "eng-backend": ["api", "endpoint", "middleware", "route", "controller", "service", "auth", "validation"],
+            "eng-infra": ["docker", "k8s", "kubernetes", "deploy", "ci", "cd", "pipeline", "terraform", "helm"],
+            "review-code": ["refactor", "pattern", "solid", "coupling", "abstraction", "class", "function", "module"],
+            "review-security": ["auth", "login", "password", "token", "secret", "inject", "xss", "cors", "permission", "encrypt"],
+            "review-business": ["logic", "workflow", "business", "rule", "validation", "price", "payment", "order"],
+        }
+        for agent in agent_types:
+            agent_type = agent.get("type", "")
+            if agent_type in FOCUS_KEYWORDS and agent_type not in SPECIALISTS:
+                SPECIALISTS[agent_type] = {
+                    "keywords": FOCUS_KEYWORDS[agent_type],
+                    "focus": agent.get("capabilities", ""),
+                    "checks": "Review from " + agent.get("name", agent_type) + " perspective: " + ", ".join(agent.get("focus", [])),
+                    "priority": len(SPECIALISTS),
+                    "persona": agent.get("persona", "")
+                }
+    except Exception:
+        pass  # Fall back to hardcoded specialists
 
 diff_path = os.environ.get("LOKI_REVIEW_DIFF_FILE", "")
 files_path = os.environ.get("LOKI_REVIEW_FILES_FILE", "")
@@ -5727,12 +5495,13 @@ result = {
         }
         for name in selected
     ],
-    "scores": {n: scores[n] for n in scores}
+    "scores": {n: scores[n] for n in scores},
+    "pool_size": len(SPECIALISTS)
 }
 print(json.dumps(result))
 SPECIALIST_SELECT
     )
-    unset LOKI_REVIEW_DIFF_FILE LOKI_REVIEW_FILES_FILE
+    unset LOKI_REVIEW_DIFF_FILE LOKI_REVIEW_FILES_FILE LOKI_AGENTS_TYPES_FILE
 
     if [ -z "$selected_specialists" ]; then
         log_error "Code review: Specialist selection failed"

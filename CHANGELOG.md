@@ -5,6 +5,32 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.7.0] - 2026-03-04
+
+### Added
+- Hard quality gates: `enforce_static_analysis()` and `enforce_test_coverage()` in orchestrator, controlled by `LOKI_HARD_GATES` env var
+- `loki audit lint` and `loki audit test` CLI commands for on-demand quality checks
+- Gate failure injection into `build_prompt()` so LLM self-corrects on next iteration
+- `loki worktree list|merge|clean|status` for parallel worktree management
+- Worktree completion signaling (`MERGE_REQUESTED_*` signals) and `merge_worktree()`/`process_pending_merges()` functions
+- `loki agent list|info|run|start|review` for 41 agent type dispatch across 8 swarms
+- `agents/types.json` with structured agent definitions (engineering, operations, business, data, product, growth, review, orchestration)
+- Agent types wired into `run_code_review()` specialist selection via `LOKI_AGENTS_TYPES_FILE`
+- `loki memory vectors setup` with Python 3.12 auto-detection for ML package compatibility
+- `loki memory search` for keyword-based memory retrieval
+- `loki telemetry status|enable|disable` for OpenTelemetry management
+- OTEL real SDK integration (`@opentelemetry/sdk-trace-node`) with graceful fallback to custom OTLP exporter
+- Doctor integrations section: MCP SDK, numpy, sentence-transformers, ChromaDB, OTEL checks
+- Comprehensive E2E test suite: 67 tests across 10 sections (tests/test-e2e-features.sh)
+
+### Fixed
+- `loki provider show <name>` now correctly forwards arguments (was ignoring provider name)
+- Aider default model updated from deprecated `claude-3.7-sonnet` to `claude-sonnet-4-5-20250929`
+- Worktree clean command: fixed subshell variable scope bug (pipeline counter)
+- Agent info Python injection concern: switched to env var passing
+- Removed duplicate function definitions (enforce_static_analysis, enforce_test_coverage) that created dead code
+- Test suite fixes: removed tautological env var tests, fixed subshell counter bugs
+
 ## [6.6.1] - 2026-03-01
 
 ### Fixed

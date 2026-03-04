@@ -4610,19 +4610,26 @@ cmd_doctor() {
         echo -e "  ${YELLOW}WARN${NC}  MCP SDK - not installed (pip3 install mcp)"
         warn_count=$((warn_count + 1))
     fi
+    # Detect best Python for ML packages (3.12 preferred, 3.14+ has compat issues)
+    local _py_ml="python3"
+    if command -v /opt/homebrew/bin/python3.12 &>/dev/null; then
+        _py_ml="/opt/homebrew/bin/python3.12"
+    elif command -v python3.12 &>/dev/null; then
+        _py_ml="python3.12"
+    fi
     # Vector search dependencies
-    if python3 -c "import numpy" 2>/dev/null; then
+    if $_py_ml -c "import numpy" 2>/dev/null; then
         echo -e "  ${GREEN}PASS${NC}  numpy (vector search)"
         pass_count=$((pass_count + 1))
     else
         echo -e "  ${YELLOW}WARN${NC}  numpy - not installed (pip3 install numpy)"
         warn_count=$((warn_count + 1))
     fi
-    if python3 -c "import sentence_transformers" 2>/dev/null; then
+    if $_py_ml -c "import sentence_transformers" 2>/dev/null; then
         echo -e "  ${GREEN}PASS${NC}  sentence-transformers (embeddings)"
         pass_count=$((pass_count + 1))
     else
-        echo -e "  ${YELLOW}WARN${NC}  sentence-transformers - not installed (pip3 install sentence-transformers)"
+        echo -e "  ${YELLOW}WARN${NC}  sentence-transformers - not installed (loki memory vectors setup)"
         warn_count=$((warn_count + 1))
     fi
     # ChromaDB check
@@ -7838,16 +7845,18 @@ cmd_worktree() {
         clean)
             echo -e "${BOLD}Cleaning all worktrees...${NC}"
             local removed=0
-            git worktree list --porcelain 2>/dev/null | grep "^worktree " | while read -r line; do
+            local main_wt
+            main_wt=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+            while read -r line; do
                 local wt="${line#worktree }"
-                if [ "$wt" != "$(git rev-parse --show-toplevel 2>/dev/null)" ]; then
+                if [ -n "$wt" ] && [ "$wt" != "$main_wt" ]; then
                     echo "  Removing: $wt"
                     git worktree remove "$wt" --force 2>/dev/null || true
                     removed=$((removed + 1))
                 fi
-            done
+            done < <(git worktree list --porcelain 2>/dev/null | grep "^worktree ")
             rm -f .loki/signals/MERGE_REQUESTED_* .loki/signals/WORKTREE_FAILED_* 2>/dev/null || true
-            echo -e "${GREEN}Cleanup complete${NC}"
+            echo -e "${GREEN}Cleanup complete ($removed worktrees removed)${NC}"
             ;;
 
         status)
@@ -9015,31 +9024,53 @@ except Exception as e:
                     echo -e "${BOLD}Vector Search Setup${NC}"
                     echo ""
 
+                    # Detect best Python for ML packages (3.12 preferred, 3.14+ has compat issues)
+                    local py_ml="python3"
+                    local pip_ml="pip3"
+                    if command -v /opt/homebrew/bin/python3.12 &>/dev/null; then
+                        py_ml="/opt/homebrew/bin/python3.12"
+                        pip_ml="/opt/homebrew/bin/pip3.12"
+                        echo -e "  Using Python 3.12 for ML packages (${DIM}system python3 may be 3.14+${NC})"
+                    elif command -v python3.12 &>/dev/null; then
+                        py_ml="python3.12"
+                        pip_ml="pip3.12"
+                        echo -e "  Using Python 3.12 for ML packages"
+                    else
+                        local py_ver
+                        py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+                        local py_minor
+                        py_minor=$(echo "$py_ver" | cut -d. -f2)
+                        if [ "${py_minor:-0}" -ge 13 ] 2>/dev/null; then
+                            echo -e "  ${YELLOW}WARNING: Python $py_ver detected. sentence-transformers may not install.${NC}"
+                            echo -e "  ${YELLOW}Install Python 3.12 for best compatibility: brew install python@3.12${NC}"
+                        fi
+                    fi
+
                     # Check/install numpy
                     echo -n "  Checking numpy... "
-                    if python3 -c "import numpy" 2>/dev/null; then
+                    if $py_ml -c "import numpy" 2>/dev/null; then
                         echo -e "${GREEN}installed${NC}"
                     else
                         echo -n "installing... "
-                        if pip3 install numpy 2>/dev/null; then
+                        if $pip_ml install numpy 2>/dev/null || $pip_ml install --break-system-packages numpy 2>/dev/null; then
                             echo -e "${GREEN}done${NC}"
                         else
                             echo -e "${RED}failed${NC}"
-                            echo "    Try: pip3 install numpy"
+                            echo "    Try: $pip_ml install numpy"
                         fi
                     fi
 
                     # Check/install sentence-transformers
                     echo -n "  Checking sentence-transformers... "
-                    if python3 -c "import sentence_transformers" 2>/dev/null; then
+                    if $py_ml -c "import sentence_transformers" 2>/dev/null; then
                         echo -e "${GREEN}installed${NC}"
                     else
                         echo -n "installing (this may take a while)... "
-                        if pip3 install sentence-transformers 2>/dev/null; then
+                        if $pip_ml install sentence-transformers 2>/dev/null || $pip_ml install --break-system-packages sentence-transformers 2>/dev/null; then
                             echo -e "${GREEN}done${NC}"
                         else
                             echo -e "${RED}failed${NC}"
-                            echo "    Try: pip3 install sentence-transformers"
+                            echo "    Try: $pip_ml install sentence-transformers"
                         fi
                     fi
 
@@ -11623,12 +11654,12 @@ PYEOF
 
             # Get persona from types.json
             local persona
-            persona=$(python3 -c "
-import json
-with open('$types_file') as f:
+            persona=$(AGENT_TYPE="$agent_type" TYPES_FILE="$types_file" python3 -c "
+import json, os
+with open(os.environ['TYPES_FILE']) as f:
     agents = json.load(f)
 for a in agents:
-    if a['type'] == '$agent_type':
+    if a['type'] == os.environ['AGENT_TYPE']:
         print(a['persona'])
         break
 " 2>/dev/null)
@@ -11682,12 +11713,12 @@ for a in agents:
 
             # Get persona
             local persona
-            persona=$(python3 -c "
-import json
-with open('$types_file') as f:
+            persona=$(AGENT_TYPE="$agent_type" TYPES_FILE="$types_file" python3 -c "
+import json, os
+with open(os.environ['TYPES_FILE']) as f:
     agents = json.load(f)
 for a in agents:
-    if a['type'] == '$agent_type':
+    if a['type'] == os.environ['AGENT_TYPE']:
         print(a['persona'])
         break
 " 2>/dev/null)
@@ -11723,12 +11754,12 @@ for a in agents:
             echo -e "${BOLD}Code review as: $agent_type${NC}"
 
             local persona
-            persona=$(python3 -c "
-import json
-with open('$types_file') as f:
+            persona=$(AGENT_TYPE="$agent_type" TYPES_FILE="$types_file" python3 -c "
+import json, os
+with open(os.environ['TYPES_FILE']) as f:
     agents = json.load(f)
 for a in agents:
-    if a['type'] == '$agent_type':
+    if a['type'] == os.environ['AGENT_TYPE']:
         print(a['persona'])
         break
 " 2>/dev/null)
