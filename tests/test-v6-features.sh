@@ -69,30 +69,30 @@ echo "--- Test Group 1: Dynamic Model Resolution (Claude) ---"
 
 source "$SKILL_DIR/providers/claude.sh"
 
-# Test basic tier resolution
+# Test basic tier resolution (values are now aliases, not full model IDs)
 result=$(resolve_model_for_tier "planning")
-assert_eq "claude-opus-4-6" "$result" "Claude planning -> opus"
+assert_eq "opus" "$result" "Claude planning -> opus"
 
 result=$(resolve_model_for_tier "development")
-assert_contains "$result" "claude-" "Claude development -> claude model"
+assert_eq "opus" "$result" "Claude development -> opus (default, no haiku)"
 
 result=$(resolve_model_for_tier "fast")
-assert_contains "$result" "claude-" "Claude fast -> claude model"
+assert_eq "sonnet" "$result" "Claude fast -> sonnet (default, no haiku)"
 
 # Test capability aliases
 result=$(resolve_model_for_tier "best")
-assert_eq "claude-opus-4-6" "$result" "Claude alias 'best' -> planning (opus)"
+assert_eq "opus" "$result" "Claude alias 'best' -> planning (opus)"
 
 result=$(resolve_model_for_tier "balanced")
-assert_contains "$result" "claude-" "Claude alias 'balanced' -> development"
+assert_eq "opus" "$result" "Claude alias 'balanced' -> development (opus)"
 
 result=$(resolve_model_for_tier "cheap")
-assert_contains "$result" "claude-" "Claude alias 'cheap' -> fast"
+assert_eq "sonnet" "$result" "Claude alias 'cheap' -> fast (sonnet)"
 
 # Test maxTier ceiling
 LOKI_MAX_TIER=sonnet result=$(resolve_model_for_tier "planning")
 # Planning should be capped to development model
-assert_contains "$result" "claude-" "Claude maxTier=sonnet caps planning"
+assert_eq "$PROVIDER_MODEL_DEVELOPMENT" "$result" "Claude maxTier=sonnet caps planning"
 
 LOKI_MAX_TIER=haiku result=$(resolve_model_for_tier "planning")
 haiku_model="$PROVIDER_MODEL_FAST"
@@ -257,12 +257,12 @@ python3 -c "
 import json
 with open('$LOKI_DIR/config/settings.json') as f:
     config = json.load(f)
-config.setdefault('model', {})['planning'] = 'claude-opus-4-6'
+config.setdefault('model', {})['planning'] = 'opus'
 with open('$LOKI_DIR/config/settings.json', 'w') as f:
     json.dump(config, f)
 "
 result=$(python3 -c "import json; print(json.load(open('$LOKI_DIR/config/settings.json')).get('model',{}).get('planning',''))")
-assert_eq "claude-opus-4-6" "$result" "Config set/get dotted key model.planning"
+assert_eq "opus" "$result" "Config set/get dotted key model.planning"
 
 # Test that _load_json_settings() resolves nested dotted keys
 # This verifies the CRITICAL fix: config set writes {"model":{"planning":"opus"}}
@@ -285,7 +285,7 @@ with open(os.environ['_LOKI_SETTINGS_FILE']) as f:
 
 # Verify nested key resolves correctly
 val = get_nested(data, 'model.planning')
-assert val == 'claude-opus-4-6', f'Expected claude-opus-4-6, got {val}'
+assert val == 'opus', f'Expected opus, got {val}'
 
 # Verify flat key resolves
 val2 = get_nested(data, 'maxTier') or data.get('maxTier')

@@ -1647,6 +1647,9 @@ cmd_provider() {
         info)
             cmd_provider_info "$@"
             ;;
+        models)
+            cmd_provider_models
+            ;;
         *)
             echo -e "${BOLD}Loki Mode Provider Management${NC}"
             echo ""
@@ -1657,6 +1660,7 @@ cmd_provider() {
             echo "  set      Set provider for this project"
             echo "  list     List available providers"
             echo "  info     Show provider details"
+            echo "  models   Show resolved model configuration for all providers"
             echo ""
             echo "Examples:"
             echo "  loki provider show"
@@ -1664,6 +1668,7 @@ cmd_provider() {
             echo "  loki provider set codex"
             echo "  loki provider list"
             echo "  loki provider info gemini"
+            echo "  loki provider models"
             ;;
     esac
 }
@@ -1897,6 +1902,89 @@ cmd_provider_info() {
             exit 1
             ;;
     esac
+}
+
+# Show resolved model configuration for all providers with source attribution
+cmd_provider_models() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+    echo -e "${BOLD}Model Configuration (resolved):${NC}"
+    echo ""
+
+    local providers=("claude" "codex" "gemini" "cline" "aider")
+    for provider in "${providers[@]}"; do
+        local provider_file="$script_dir/providers/${provider}.sh"
+        [ -f "$provider_file" ] || continue
+
+        echo -e "  ${BOLD}Provider: $provider${NC}"
+
+        # Source in subshell to get resolved values
+        local planning dev fast
+        planning=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_MODEL_PLANNING")
+        dev=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_MODEL_DEVELOPMENT")
+        fast=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_MODEL_FAST")
+
+        # Determine source for each tier
+        local provider_upper
+        provider_upper=$(echo "$provider" | tr '[:lower:]' '[:upper:]')
+
+        for tier in planning development fast; do
+            local tier_upper
+            tier_upper=$(echo "$tier" | tr '[:lower:]' '[:upper:]')
+            local provider_var="LOKI_${provider_upper}_MODEL_${tier_upper}"
+            local generic_var="LOKI_MODEL_${tier_upper}"
+            local source="default"
+
+            # Check provider-specific var
+            eval "local pval=\${$provider_var+x}"
+            if [ -n "$pval" ]; then
+                source="$provider_var"
+            else
+                # Check generic var
+                eval "local gval=\${$generic_var+x}"
+                if [ -n "$gval" ]; then
+                    source="$generic_var"
+                fi
+            fi
+
+            # Special cases: codex uses single LOKI_CODEX_MODEL, aider/cline too
+            if [ "$provider" = "codex" ] && [ -n "${LOKI_CODEX_MODEL+x}" ] && [ "$source" = "default" ]; then
+                source="LOKI_CODEX_MODEL"
+            elif [ "$provider" = "aider" ] && [ -n "${LOKI_AIDER_MODEL+x}" ] && [ "$source" = "default" ]; then
+                source="LOKI_AIDER_MODEL"
+            elif [ "$provider" = "cline" ] && [ -n "${LOKI_CLINE_MODEL+x}" ] && [ "$source" = "default" ]; then
+                source="LOKI_CLINE_MODEL"
+            fi
+
+            local value
+            case "$tier" in
+                planning)    value="$planning" ;;
+                development) value="$dev" ;;
+                fast)        value="$fast" ;;
+            esac
+
+            printf "    %-12s %-30s (source: %s)\n" "${tier^}:" "$value" "$source"
+        done
+
+        # Show extra info per provider
+        if [ "$provider" = "codex" ]; then
+            local effort_p effort_d effort_f
+            effort_p=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_EFFORT_PLANNING")
+            effort_d=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_EFFORT_DEVELOPMENT")
+            effort_f=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_EFFORT_FAST")
+            echo "    Effort:      planning=$effort_p, development=$effort_d, fast=$effort_f"
+        elif [ "$provider" = "gemini" ]; then
+            local think_p think_d think_f fb
+            think_p=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_THINKING_PLANNING")
+            think_d=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_THINKING_DEVELOPMENT")
+            think_f=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_THINKING_FAST")
+            fb=$(bash -c "source '$provider_file' 2>/dev/null; echo \$PROVIDER_MODEL_FALLBACK")
+            echo "    Thinking:    planning=$think_p, development=$think_d, fast=$think_f"
+            echo "    Fallback:    $fb"
+        fi
+        echo ""
+    done
 }
 
 # Dashboard server management - project-local, unified with run.sh

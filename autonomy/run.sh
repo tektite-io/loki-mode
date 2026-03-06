@@ -287,6 +287,9 @@ parse_simple_yaml() {
     set_from_yaml "$file" "model.prompt_repetition" "LOKI_PROMPT_REPETITION"
     set_from_yaml "$file" "model.confidence_routing" "LOKI_CONFIDENCE_ROUTING"
     set_from_yaml "$file" "model.autonomy_mode" "LOKI_AUTONOMY_MODE"
+    set_from_yaml "$file" "model.planning" "LOKI_MODEL_PLANNING"
+    set_from_yaml "$file" "model.development" "LOKI_MODEL_DEVELOPMENT"
+    set_from_yaml "$file" "model.fast" "LOKI_MODEL_FAST"
     set_from_yaml "$file" "model.compaction_interval" "LOKI_COMPACTION_INTERVAL"
 
     # Parallel
@@ -1369,12 +1372,7 @@ get_provider_tier_param() {
     if type resolve_model_for_tier &>/dev/null; then
         local resolved
         resolved=$(resolve_model_for_tier "$tier")
-        # For Claude, extract short name (opus/sonnet/haiku) from full model ID
-        if [ "${PROVIDER_NAME:-claude}" = "claude" ]; then
-            echo "$resolved" | sed 's/claude-\([a-z]*\).*/\1/'
-        else
-            echo "$resolved"
-        fi
+        echo "$resolved"
         return
     fi
 
@@ -1382,9 +1380,9 @@ get_provider_tier_param() {
     case "${PROVIDER_NAME:-claude}" in
         claude)
             case "$tier" in
-                planning) echo "${PROVIDER_MODEL_PLANNING:-opus}" | sed 's/claude-\([a-z]*\).*/\1/' ;;
-                development) echo "${PROVIDER_MODEL_DEVELOPMENT:-sonnet}" | sed 's/claude-\([a-z]*\).*/\1/' ;;
-                fast) echo "${PROVIDER_MODEL_FAST:-haiku}" | sed 's/claude-\([a-z]*\).*/\1/' ;;
+                planning) echo "${PROVIDER_MODEL_PLANNING:-opus}" ;;
+                development) echo "${PROVIDER_MODEL_DEVELOPMENT:-opus}" ;;
+                fast) echo "${PROVIDER_MODEL_FAST:-sonnet}" ;;
                 *) echo "sonnet" ;;
             esac
             ;;
@@ -1405,12 +1403,10 @@ get_provider_tier_param() {
             esac
             ;;
         cline)
-            # Cline uses single externally-configured model
-            echo "${LOKI_CLINE_MODEL:-default}"
+            echo "${CLINE_DEFAULT_MODEL:-${LOKI_CLINE_MODEL:-default}}"
             ;;
         aider)
-            # Aider uses single externally-configured model
-            echo "${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}"
+            echo "${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}"
             ;;
         *)
             echo "development"
@@ -2882,9 +2878,9 @@ _write_pricing_json() {
   "updated": "${updated}",
   "source": "static",
   "models": {
-    "opus":            {"input": 5.00,  "output": 25.00, "label": "Opus 4.6",       "provider": "claude"},
-    "sonnet":          {"input": 3.00,  "output": 15.00, "label": "Sonnet 4.5",     "provider": "claude"},
-    "haiku":           {"input": 1.00,  "output": 5.00,  "label": "Haiku 4.5",      "provider": "claude"},
+    "opus":            {"input": 5.00,  "output": 25.00, "label": "Opus (latest)",   "provider": "claude"},
+    "sonnet":          {"input": 3.00,  "output": 15.00, "label": "Sonnet (latest)", "provider": "claude"},
+    "haiku":           {"input": 1.00,  "output": 5.00,  "label": "Haiku (latest)",  "provider": "claude"},
     "gpt-5.3-codex":   {"input": 1.50,  "output": 12.00, "label": "GPT-5.3 Codex", "provider": "codex"},
     "gemini-3-pro":    {"input": 1.25,  "output": 10.00, "label": "Gemini 3 Pro",   "provider": "gemini"},
     "gemini-3-flash":  {"input": 0.10,  "output": 0.40,  "label": "Gemini 3 Flash", "provider": "gemini"}
@@ -2905,8 +2901,8 @@ invoke_gemini() {
     local prompt="$1"
     shift
 
-    local model="${PROVIDER_MODEL:-gemini-3-pro-preview}"
-    local fallback="${PROVIDER_MODEL_FALLBACK:-gemini-3-flash-preview}"
+    local model="${PROVIDER_MODEL:-${GEMINI_DEFAULT_PRO:-gemini-3-pro-preview}}"
+    local fallback="${PROVIDER_MODEL_FALLBACK:-${GEMINI_DEFAULT_FLASH:-gemini-3-flash-preview}}"
 
     # Create temp file for output to preserve streaming while checking for rate limit
     local tmp_output
@@ -2936,8 +2932,8 @@ invoke_gemini_capture() {
     local prompt="$1"
     shift
 
-    local model="${PROVIDER_MODEL:-gemini-3-pro-preview}"
-    local fallback="${PROVIDER_MODEL_FALLBACK:-gemini-3-flash-preview}"
+    local model="${PROVIDER_MODEL:-${GEMINI_DEFAULT_PRO:-gemini-3-pro-preview}}"
+    local fallback="${PROVIDER_MODEL_FALLBACK:-${GEMINI_DEFAULT_FLASH:-gemini-3-flash-preview}}"
     local output
 
     # Try primary model first
@@ -2990,7 +2986,7 @@ invoke_cline_capture() {
 invoke_aider() {
     local prompt="$1"
     shift
-    local model="${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}"
+    local model="${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}"
     local extra_flags="${LOKI_AIDER_FLAGS:-}"
     # shellcheck disable=SC2086
     # < /dev/null prevents aider from blocking on stdin in non-interactive mode
@@ -3003,7 +2999,7 @@ invoke_aider() {
 invoke_aider_capture() {
     local prompt="$1"
     shift
-    local model="${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}"
+    local model="${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}"
     local extra_flags="${LOKI_AIDER_FLAGS:-}"
     # shellcheck disable=SC2086
     aider --message "$prompt" --yes-always --no-auto-commits \
@@ -3518,17 +3514,15 @@ track_iteration_complete() {
 
     # Write efficiency tracking file for /api/cost endpoint
     mkdir -p .loki/metrics/efficiency
-    local model_tier="sonnet"
-    if [ "${PROVIDER_NAME:-claude}" = "claude" ]; then
-        model_tier="sonnet"
-    elif [ "${PROVIDER_NAME:-claude}" = "codex" ]; then
-        model_tier="gpt-5.3-codex"
+    local model_tier="${PROVIDER_MODEL_DEVELOPMENT:-sonnet}"
+    if [ "${PROVIDER_NAME:-claude}" = "codex" ]; then
+        model_tier="${PROVIDER_MODEL_DEVELOPMENT:-${CODEX_DEFAULT_MODEL:-gpt-5.3-codex}}"
     elif [ "${PROVIDER_NAME:-claude}" = "gemini" ]; then
-        model_tier="gemini-3-pro"
+        model_tier="${PROVIDER_MODEL_DEVELOPMENT:-${GEMINI_DEFAULT_PRO:-gemini-3-pro}}"
     elif [ "${PROVIDER_NAME:-claude}" = "cline" ]; then
-        model_tier="${LOKI_CLINE_MODEL:-sonnet}"
+        model_tier="${CLINE_DEFAULT_MODEL:-${LOKI_CLINE_MODEL:-sonnet}}"
     elif [ "${PROVIDER_NAME:-claude}" = "aider" ]; then
-        model_tier="${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}"
+        model_tier="${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}"
     fi
     local phase="${LAST_KNOWN_PHASE:-}"
     [ -z "$phase" ] && phase=$(python3 -c "import json; print(json.load(open('.loki/state/orchestrator.json')).get('currentPhase', 'unknown'))" 2>/dev/null || echo "unknown")
@@ -8187,8 +8181,8 @@ if __name__ == "__main__":
             gemini)
                 # Gemini: Degraded mode - no stream-json, no agent tracking
                 # Uses invoke_gemini helper for rate limit fallback to flash model
-                local model="${PROVIDER_MODEL:-gemini-3-pro-preview}"
-                local fallback="${PROVIDER_MODEL_FALLBACK:-gemini-3-flash-preview}"
+                local model="${PROVIDER_MODEL:-${GEMINI_DEFAULT_PRO:-gemini-3-pro-preview}}"
+                local fallback="${PROVIDER_MODEL_FALLBACK:-${GEMINI_DEFAULT_FLASH:-gemini-3-flash-preview}}"
                 echo "[loki] Gemini model: $model (fallback: $fallback), tier: $tier_param" >> "$log_file"
                 echo "[loki] Gemini model: $model (fallback: $fallback), tier: $tier_param" >> "$agent_log"
 
@@ -8216,8 +8210,8 @@ if __name__ == "__main__":
                 ;;
             aider)
                 # Aider: Tier 3 - degraded mode, 18+ providers
-                echo "[loki] Aider model: ${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}, tier: $tier_param" >> "$log_file"
-                echo "[loki] Aider model: ${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}, tier: $tier_param" >> "$agent_log"
+                echo "[loki] Aider model: ${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}, tier: $tier_param" >> "$log_file"
+                echo "[loki] Aider model: ${AIDER_DEFAULT_MODEL:-${LOKI_AIDER_MODEL:-claude-sonnet-4-5-20250929}}, tier: $tier_param" >> "$agent_log"
                 { invoke_aider "$prompt" 2>&1 | tee -a "$log_file" "$agent_log"; \
                 } && exit_code=0 || exit_code=$?
                 ;;

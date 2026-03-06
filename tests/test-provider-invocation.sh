@@ -105,18 +105,19 @@ result=$(
     fast=$(provider_get_tier_param "fast")
     default_val=$(provider_get_tier_param "unknown")
 
-    # Claude should return model shortnames
+    # Claude returns model aliases (default: opus for planning+dev, sonnet for fast)
+    # With LOKI_ALLOW_HAIKU=true: opus/sonnet/haiku
     if [ "$planning" = "opus" ] && \
-       [ "$development" = "sonnet" ] && \
-       [ "$fast" = "haiku" ] && \
-       [ "$default_val" = "sonnet" ]; then
+       [ "$development" = "opus" ] && \
+       [ "$fast" = "sonnet" ] && \
+       [ "$default_val" = "opus" ]; then
         echo "pass"
     else
         echo "fail: planning=$planning, development=$development, fast=$fast, default=$default_val"
     fi
 )
 if [ "$result" = "pass" ]; then
-    log_pass "provider_get_tier_param() returns correct values for claude (opus/sonnet/haiku)"
+    log_pass "provider_get_tier_param() returns correct values for claude (opus/opus/sonnet default)"
 else
     log_fail "provider_get_tier_param() returns incorrect values for claude - $result"
 fi

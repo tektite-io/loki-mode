@@ -50,9 +50,11 @@ PROVIDER_MAX_PARALLEL=1
 # Model Configuration
 # Cline supports 12+ providers; model configured via LOKI_CLINE_MODEL env var
 # or `cline auth` one-time setup. Defaults are placeholders.
-PROVIDER_MODEL_PLANNING="${LOKI_CLINE_MODEL:-claude-sonnet-4-5-20250929}"
-PROVIDER_MODEL_DEVELOPMENT="${LOKI_CLINE_MODEL:-claude-sonnet-4-5-20250929}"
-PROVIDER_MODEL_FAST="${LOKI_CLINE_MODEL:-claude-sonnet-4-5-20250929}"
+# NOTE: Cline uses its own model routing, so full model strings are needed (not CLI aliases)
+CLINE_DEFAULT_MODEL="${LOKI_CLINE_MODEL:-${LOKI_MODEL_DEVELOPMENT:-claude-sonnet-4-5-20250929}}"
+PROVIDER_MODEL_PLANNING="$CLINE_DEFAULT_MODEL"
+PROVIDER_MODEL_DEVELOPMENT="$CLINE_DEFAULT_MODEL"
+PROVIDER_MODEL_FAST="$CLINE_DEFAULT_MODEL"
 
 # No Task tool - model is configured externally
 PROVIDER_TASK_MODEL_PARAM=""
@@ -101,7 +103,7 @@ provider_invoke() {
 # Model tier to parameter (Cline uses single model, returns model name)
 provider_get_tier_param() {
     local tier="$1"
-    echo "${LOKI_CLINE_MODEL:-default}"
+    echo "$CLINE_DEFAULT_MODEL"
 }
 
 # Dynamic model resolution (v6.0.0)
@@ -109,7 +111,7 @@ provider_get_tier_param() {
 # just returns the configured model name. maxTier has no effect.
 resolve_model_for_tier() {
     local tier="$1"
-    echo "${LOKI_CLINE_MODEL:-default}"
+    echo "$CLINE_DEFAULT_MODEL"
 }
 
 # Tier-aware invocation

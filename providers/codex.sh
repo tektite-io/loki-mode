@@ -50,9 +50,10 @@ PROVIDER_MAX_PARALLEL=1
 # Model Configuration
 # Codex uses single model with effort parameter
 # NOTE: gpt-5.3-codex is the official model name for Codex CLI v0.98+
-PROVIDER_MODEL_PLANNING="gpt-5.3-codex"
-PROVIDER_MODEL_DEVELOPMENT="gpt-5.3-codex"
-PROVIDER_MODEL_FAST="gpt-5.3-codex"
+CODEX_DEFAULT_MODEL="gpt-5.3-codex"
+PROVIDER_MODEL_PLANNING="${LOKI_CODEX_MODEL:-${LOKI_MODEL_PLANNING:-$CODEX_DEFAULT_MODEL}}"
+PROVIDER_MODEL_DEVELOPMENT="${LOKI_CODEX_MODEL:-${LOKI_MODEL_DEVELOPMENT:-$CODEX_DEFAULT_MODEL}}"
+PROVIDER_MODEL_FAST="${LOKI_CODEX_MODEL:-${LOKI_MODEL_FAST:-$CODEX_DEFAULT_MODEL}}"
 
 # Effort levels (Codex-specific: maps to reasoning time, not model capability)
 PROVIDER_EFFORT_PLANNING="xhigh"

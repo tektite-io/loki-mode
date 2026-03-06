@@ -51,11 +51,14 @@ PROVIDER_MAX_PARALLEL=1
 # Gemini CLI supports --model flag to specify model
 # Primary: gemini-3-pro-preview (preview names - may change when GA is released)
 # Fallback: gemini-3-flash-preview (for rate limit scenarios)
-PROVIDER_MODEL="gemini-3-pro-preview"
-PROVIDER_MODEL_FALLBACK="gemini-3-flash-preview"
-PROVIDER_MODEL_PLANNING="gemini-3-pro-preview"
-PROVIDER_MODEL_DEVELOPMENT="gemini-3-pro-preview"
-PROVIDER_MODEL_FAST="gemini-3-flash-preview"
+GEMINI_DEFAULT_PRO="gemini-3-pro-preview"
+GEMINI_DEFAULT_FLASH="gemini-3-flash-preview"
+
+PROVIDER_MODEL_PLANNING="${LOKI_GEMINI_MODEL_PLANNING:-${LOKI_MODEL_PLANNING:-$GEMINI_DEFAULT_PRO}}"
+PROVIDER_MODEL_DEVELOPMENT="${LOKI_GEMINI_MODEL_DEVELOPMENT:-${LOKI_MODEL_DEVELOPMENT:-$GEMINI_DEFAULT_PRO}}"
+PROVIDER_MODEL_FAST="${LOKI_GEMINI_MODEL_FAST:-${LOKI_MODEL_FAST:-$GEMINI_DEFAULT_FLASH}}"
+PROVIDER_MODEL="${PROVIDER_MODEL_PLANNING}"
+PROVIDER_MODEL_FALLBACK="${LOKI_GEMINI_MODEL_FALLBACK:-$GEMINI_DEFAULT_FLASH}"
 
 # Thinking levels (Gemini-specific: maps to reasoning depth)
 PROVIDER_THINKING_PLANNING="high"

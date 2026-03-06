@@ -5,6 +5,23 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.8.0] - 2026-03-05
+
+### Added
+- Dynamic model configuration: all providers use env var override chains instead of hardcoded model strings
+- Claude provider uses aliases (`opus`/`sonnet`/`haiku`) that auto-resolve to latest versions via Claude CLI
+- 3-tier env var precedence: provider-specific (`LOKI_CLAUDE_MODEL_PLANNING`) > generic (`LOKI_MODEL_PLANNING`) > default
+- `loki provider models` diagnostic command showing resolved model config with source attribution
+- `parse_simple_yaml()` now supports `model.planning`, `model.development`, `model.fast` config keys
+- Codex/Gemini/Aider/Cline providers support env var overrides (`LOKI_CODEX_MODEL`, `LOKI_GEMINI_MODEL_*`, etc.)
+
+### Changed
+- Claude provider stores aliases instead of full model IDs (e.g., `opus` not `claude-opus-4-6`)
+- Pricing labels use generic names (`Opus (latest)` instead of `Opus 4.6`)
+- Removed all `sed` model-string extraction from `get_provider_tier_param()` and `provider_invoke_with_tier()`
+- Aider/Cline providers keep full model strings as last-resort defaults (litellm/own routing needs them)
+- All hardcoded model references in `autonomy/run.sh` now chain through provider config variables
+
 ## [6.7.1] - 2026-03-04
 
 ### Fixed

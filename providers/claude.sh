@@ -45,14 +45,20 @@ PROVIDER_MAX_PARALLEL=10
 
 # Model Configuration (Abstract Tiers)
 # Default: Haiku disabled for quality. Use --allow-haiku or LOKI_ALLOW_HAIKU=true to enable.
-PROVIDER_MODEL_PLANNING="claude-opus-4-6"
-PROVIDER_MODEL_DEVELOPMENT="claude-opus-4-6"  # Opus for dev (was sonnet)
+# Claude Code CLI resolves aliases (opus/sonnet/haiku) to latest versions automatically.
+CLAUDE_DEFAULT_PLANNING="opus"
+CLAUDE_DEFAULT_DEVELOPMENT="opus"  # Opus for dev (was sonnet)
+CLAUDE_DEFAULT_FAST="sonnet"
+
 if [ "${LOKI_ALLOW_HAIKU:-false}" = "true" ]; then
-    PROVIDER_MODEL_FAST="claude-haiku-4-5-20251001"
-    PROVIDER_MODEL_DEVELOPMENT="claude-sonnet-4-5-20250929"  # Sonnet for dev when haiku enabled
-else
-    PROVIDER_MODEL_FAST="claude-sonnet-4-5-20250929"  # Sonnet for fast (no haiku)
+    CLAUDE_DEFAULT_DEVELOPMENT="sonnet"  # Sonnet for dev when haiku enabled
+    CLAUDE_DEFAULT_FAST="haiku"
 fi
+
+# Resolution order: provider-specific env > generic env > haiku-aware default
+PROVIDER_MODEL_PLANNING="${LOKI_CLAUDE_MODEL_PLANNING:-${LOKI_MODEL_PLANNING:-$CLAUDE_DEFAULT_PLANNING}}"
+PROVIDER_MODEL_DEVELOPMENT="${LOKI_CLAUDE_MODEL_DEVELOPMENT:-${LOKI_MODEL_DEVELOPMENT:-$CLAUDE_DEFAULT_DEVELOPMENT}}"
+PROVIDER_MODEL_FAST="${LOKI_CLAUDE_MODEL_FAST:-${LOKI_MODEL_FAST:-$CLAUDE_DEFAULT_FAST}}"
 
 # Model Selection (for Task tool)
 PROVIDER_TASK_MODEL_PARAM="model"
@@ -168,15 +174,12 @@ resolve_model_for_tier() {
     echo "$model"
 }
 
-# Tier-aware invocation (Claude supports model selection via --model flag)
+# Tier-aware invocation (values are already aliases like opus/sonnet/haiku)
 provider_invoke_with_tier() {
     local tier="$1"
     local prompt="$2"
     shift 2
     local model
     model=$(resolve_model_for_tier "$tier")
-    # Extract short name for Task tool (opus/sonnet/haiku)
-    local short_model
-    short_model=$(echo "$model" | sed 's/claude-\([a-z]*\).*/\1/')
-    claude --dangerously-skip-permissions --model "$short_model" -p "$prompt" "$@"
+    claude --dangerously-skip-permissions --model "$model" -p "$prompt" "$@"
 }
