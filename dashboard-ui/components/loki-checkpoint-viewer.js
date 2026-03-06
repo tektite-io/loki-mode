@@ -253,21 +253,32 @@ export class LokiCheckpointViewer extends LokiElement {
   }
 
   _renderCheckpointCard(cp) {
-    const sha = cp.git_sha ? cp.git_sha.substring(0, 7) : 'unknown';
-    const filesCount = Array.isArray(cp.files) ? cp.files.length : (cp.files_count || 0);
+    const sha = cp.git_sha ? cp.git_sha.substring(0, 7) : '';
+    const filesCount = cp.files_count || (Array.isArray(cp.files) ? cp.files.length : 0);
     const isRollbackTarget = this._rollbackTarget === cp.id;
+    const iteration = cp.iteration != null ? `Iter ${cp.iteration}` : '';
+    const provider = cp.provider || '';
+    const phase = cp.phase || '';
+    const branch = cp.git_branch || '';
+
+    // Build tag list from available metadata
+    const tags = [iteration, provider, phase].filter(Boolean);
 
     return `
       <div class="checkpoint-card" data-checkpoint-id="${this._escapeHTML(cp.id)}">
         <div class="card-header">
-          <span class="checkpoint-sha mono">${this._escapeHTML(sha)}</span>
+          <div class="header-tags">
+            ${sha ? `<span class="checkpoint-sha mono">${this._escapeHTML(sha)}</span>` : ''}
+            ${tags.map(t => `<span class="checkpoint-tag">${this._escapeHTML(t)}</span>`).join('')}
+          </div>
           <span class="checkpoint-time">${this._formatRelativeTime(cp.created_at)}</span>
         </div>
         <div class="card-body">
-          <p class="checkpoint-message">${this._escapeHTML(cp.message || 'No message')}</p>
+          <p class="checkpoint-message">${this._escapeHTML(cp.message || 'Checkpoint')}</p>
           <div class="card-meta">
-            <span class="meta-item">${filesCount} file${filesCount !== 1 ? 's' : ''}</span>
-            <span class="meta-item mono">ID: ${this._escapeHTML(cp.id)}</span>
+            ${filesCount > 0 ? `<span class="meta-item">${filesCount} file${filesCount !== 1 ? 's' : ''}</span>` : ''}
+            ${branch ? `<span class="meta-item mono">${this._escapeHTML(branch)}</span>` : ''}
+            <span class="meta-item mono">${this._escapeHTML(cp.id)}</span>
           </div>
         </div>
         <div class="card-actions">
@@ -480,6 +491,23 @@ export class LokiCheckpointViewer extends LokiElement {
         justify-content: space-between;
         align-items: center;
         margin-bottom: 6px;
+      }
+
+      .header-tags {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .checkpoint-tag {
+        font-size: 10px;
+        font-weight: 500;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: var(--loki-bg-tertiary);
+        color: var(--loki-text-secondary);
+        text-transform: capitalize;
       }
 
       .checkpoint-sha {

@@ -5,6 +5,21 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.9.0] - 2026-03-06
+
+### Added
+- Dashboard task detail modal: click any task to view story, acceptance criteria, context files, and full specification
+- Dashboard checkpoint enrichment: checkpoints now show iteration number, provider, phase, git branch, and file count
+- Task markdown parser in dashboard API: extracts structured data from queue markdown files (metadata, spec, criteria, context)
+
+### Fixed
+- Path traversal hardening: checkpoint listing now validates IDs with `_SAFE_ID_RE` before filesystem access
+- XSS hardening: all dynamic values in task board kanban cards now escaped via `_escapeHtml()`
+- Removed dead code: unused `PRIORITY_COLORS` constant, redundant `import re`
+
+### Changed
+- Checkpoint API normalizes field names from run.sh format (ts/sha/task/iter) to frontend format (created_at/git_sha/message/iteration)
+
 ## [6.8.1] - 2026-03-06
 
 ### Fixed

@@ -794,6 +794,99 @@ async def delete_project(
     })
 
 
+def _parse_task_markdown(content: str, task_id: str) -> dict:
+    """Parse a markdown task file into a structured task dict."""
+
+    task = {
+        "id": task_id,
+        "title": task_id,
+        "description": "",
+        "status": "pending",
+        "priority": "medium",
+        "type": "task",
+        "position": 0,
+        "specification": "",
+        "acceptance_criteria": [],
+        "context_files": [],
+        "metadata": {},
+    }
+
+    lines = content.split("\n")
+
+    # Extract title from first heading
+    for line in lines:
+        if line.startswith("# "):
+            task["title"] = line[2:].strip()
+            break
+
+    # Parse sections
+    current_section = None
+    section_lines = []
+
+    for line in lines:
+        if line.startswith("## "):
+            # Save previous section
+            if current_section:
+                _apply_task_section(task, current_section, section_lines)
+            current_section = line[3:].strip().lower()
+            section_lines = []
+        elif current_section is not None:
+            section_lines.append(line)
+
+    # Save last section
+    if current_section:
+        _apply_task_section(task, current_section, section_lines)
+
+    # Store full markdown for detail view
+    task["full_content"] = content
+
+    return task
+
+
+def _apply_task_section(task: dict, section: str, lines: list):
+    """Apply parsed markdown section to task dict."""
+    text = "\n".join(lines).strip()
+
+    if section == "metadata":
+        for line in lines:
+            line = line.strip()
+            if line.startswith("- "):
+                parts = line[2:].split(":", 1)
+                if len(parts) == 2:
+                    key = parts[0].strip().lower().replace(" ", "_")
+                    val = parts[1].strip()
+                    task["metadata"][key] = val
+                    if key == "priority":
+                        task["priority"] = val.lower()
+                    elif key == "team":
+                        task["type"] = val
+    elif section == "specification":
+        task["specification"] = text
+        if not task["description"]:
+            # Use first paragraph as description
+            for para in text.split("\n\n"):
+                if para.strip():
+                    task["description"] = para.strip()[:200]
+                    break
+    elif section in ("acceptance criteria", "acceptance_criteria"):
+        criteria = []
+        for line in lines:
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith("- ")):
+                # Strip leading number/bullet
+                clean = line.lstrip("0123456789.-) ").strip()
+                if clean:
+                    criteria.append(clean)
+        task["acceptance_criteria"] = criteria
+    elif section in ("context files", "context files to read", "context_files"):
+        files = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith("- "):
+                files.append(line[2:].strip())
+        task["context_files"] = files
+
+
 # Task endpoints - reads from .loki/dashboard-state.json
 @app.get("/api/tasks")
 async def list_tasks(
@@ -866,6 +959,29 @@ async def list_tasks(
                                     "position": i,
                                 })
                 except (json.JSONDecodeError, KeyError):
+                    pass
+
+        # Read markdown task files from queue subdirectories
+        for subdir, q_status in [
+            ("pending", "pending"),
+            ("active", "in_progress"),
+            ("review", "review"),
+            ("done", "done"),
+        ]:
+            dir_path = queue_dir / subdir
+            if not dir_path.is_dir():
+                continue
+            for md_file in sorted(dir_path.glob("*.md")):
+                tid = md_file.stem
+                if any(t["id"] == tid for t in all_tasks):
+                    continue
+                try:
+                    content = md_file.read_text(errors="replace")
+                    parsed = _parse_task_markdown(content, tid)
+                    parsed["status"] = q_status
+                    parsed["position"] = len([t for t in all_tasks if t["status"] == q_status])
+                    all_tasks.append(parsed)
+                except Exception:
                     pass
 
     # Apply status filter if provided
@@ -2799,9 +2915,10 @@ def _sanitize_checkpoint_id(checkpoint_id: str) -> str:
 
 @app.get("/api/checkpoints")
 async def list_checkpoints(limit: int = Query(default=20, ge=1, le=200)):
-    """List recent checkpoints from index.jsonl."""
+    """List recent checkpoints from index.jsonl, enriched with metadata when available."""
     loki_dir = _get_loki_dir()
     index_file = loki_dir / "state" / "checkpoints" / "index.jsonl"
+    checkpoints_dir = loki_dir / "state" / "checkpoints"
     checkpoints = []
 
     if index_file.exists():
@@ -2809,7 +2926,41 @@ async def list_checkpoints(limit: int = Query(default=20, ge=1, le=200)):
             for line in index_file.read_text().strip().split("\n"):
                 if line.strip():
                     try:
-                        checkpoints.append(json.loads(line))
+                        raw = json.loads(line)
+                        # Normalize field names from run.sh index format
+                        # Index writes: {id, ts, iter, task, sha}
+                        # Frontend expects: {id, created_at, git_sha, message, iteration, ...}
+                        cp = {
+                            "id": raw.get("id", ""),
+                            "created_at": raw.get("ts", raw.get("created_at", raw.get("timestamp", ""))),
+                            "git_sha": raw.get("sha", raw.get("git_sha", "")),
+                            "message": raw.get("task", raw.get("message", raw.get("task_description", ""))),
+                            "iteration": raw.get("iter", raw.get("iteration")),
+                        }
+                        # Sanitize checkpoint id before using in path construction
+                        cp_id = cp["id"]
+                        if not cp_id or not _SAFE_ID_RE.match(cp_id):
+                            continue
+                        # Enrich from metadata.json if available
+                        meta_file = checkpoints_dir / cp_id / "metadata.json"
+                        if meta_file.exists():
+                            try:
+                                meta = json.loads(meta_file.read_text())
+                                cp["git_branch"] = meta.get("git_branch", "")
+                                cp["provider"] = meta.get("provider", "")
+                                cp["phase"] = meta.get("phase", "")
+                                # Count files in checkpoint dir
+                                cp_dir = checkpoints_dir / cp_id
+                                cp["files_count"] = sum(1 for f in cp_dir.rglob("*") if f.is_file() and f.name != "metadata.json")
+                                if not cp["message"]:
+                                    cp["message"] = meta.get("task_description", "")
+                                if not cp["git_sha"]:
+                                    cp["git_sha"] = meta.get("git_sha", "")
+                                if not cp["created_at"]:
+                                    cp["created_at"] = meta.get("timestamp", "")
+                            except (json.JSONDecodeError, IOError):
+                                pass
+                        checkpoints.append(cp)
                     except json.JSONDecodeError:
                         pass
         except Exception:

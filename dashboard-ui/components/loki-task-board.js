@@ -20,14 +20,6 @@ const COLUMNS = [
   { id: 'done', label: 'Completed', status: 'done', color: 'var(--loki-green)' },
 ];
 
-/** @type {Object<string, string>} Maps priority level to CSS color variable */
-const PRIORITY_COLORS = {
-  critical: 'var(--loki-red)',
-  high: 'var(--loki-red)',
-  medium: 'var(--loki-yellow)',
-  low: 'var(--loki-green)',
-};
-
 /**
  * @class LokiTaskBoard
  * @extends LokiElement
@@ -50,6 +42,7 @@ export class LokiTaskBoard extends LokiElement {
     this._loading = true;
     this._error = null;
     this._draggedTask = null;
+    this._selectedTask = null;
     this._api = null;
     this._state = getState();
   }
@@ -208,7 +201,97 @@ export class LokiTaskBoard extends LokiElement {
   }
 
   _openTaskDetail(task) {
+    this._selectedTask = task;
+    this.render();
     this.dispatchEvent(new CustomEvent('task-click', { detail: { task } }));
+  }
+
+  _closeTaskDetail() {
+    this._selectedTask = null;
+    this.render();
+  }
+
+  _renderTaskDetailModal(task) {
+    if (!task) return '';
+
+    const priority = (task.priority || 'medium').toLowerCase();
+    const priorityLabel = priority.charAt(0).toUpperCase() + priority.slice(1);
+    const status = task.status || 'pending';
+    const statusLabel = status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const meta = task.metadata || {};
+    const criteria = task.acceptance_criteria || [];
+    const contextFiles = task.context_files || [];
+    const spec = task.specification || task.description || '';
+    const fullContent = task.full_content || '';
+
+    return `
+      <div class="modal-overlay" id="task-detail-overlay">
+        <div class="modal-container">
+          <div class="modal-header">
+            <div class="modal-header-left">
+              <span class="task-id">${task.isLocal ? 'LOCAL' : '#' + this._escapeHtml(String(task.id))}</span>
+              <span class="task-priority ${priority}">${priorityLabel}</span>
+              <span class="task-status-badge ${status}">${statusLabel}</span>
+            </div>
+            <button class="modal-close" id="modal-close-btn" aria-label="Close">&times;</button>
+          </div>
+          <h2 class="modal-title">${this._escapeHtml(task.title || 'Untitled')}</h2>
+
+          ${Object.keys(meta).length > 0 ? `
+            <div class="modal-section">
+              <h3 class="modal-section-title">Metadata</h3>
+              <div class="meta-grid">
+                ${Object.entries(meta).map(([k, v]) => `
+                  <div class="meta-cell">
+                    <span class="meta-label">${this._escapeHtml(k.replace(/_/g, ' '))}</span>
+                    <span class="meta-value">${this._escapeHtml(String(v))}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          ${spec ? `
+            <div class="modal-section">
+              <h3 class="modal-section-title">Specification</h3>
+              <div class="modal-prose">${this._escapeHtml(spec)}</div>
+            </div>
+          ` : ''}
+
+          ${criteria.length > 0 ? `
+            <div class="modal-section">
+              <h3 class="modal-section-title">Acceptance Criteria</h3>
+              <ol class="criteria-list">
+                ${criteria.map(c => `<li>${this._escapeHtml(c)}</li>`).join('')}
+              </ol>
+            </div>
+          ` : ''}
+
+          ${contextFiles.length > 0 ? `
+            <div class="modal-section">
+              <h3 class="modal-section-title">Context Files</h3>
+              <ul class="context-files-list">
+                ${contextFiles.map(f => `<li class="mono">${this._escapeHtml(f)}</li>`).join('')}
+              </ul>
+            </div>
+          ` : ''}
+
+          ${fullContent && !spec ? `
+            <div class="modal-section">
+              <h3 class="modal-section-title">Full Content</h3>
+              <pre class="modal-pre">${this._escapeHtml(fullContent)}</pre>
+            </div>
+          ` : ''}
+
+          ${task.type ? `
+            <div class="modal-footer">
+              <span class="task-type">${this._escapeHtml(task.type)}</span>
+              ${task.assigned_agent_id ? `<span class="meta-value">Agent #${task.assigned_agent_id}</span>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
   }
 
   render() {
@@ -397,6 +480,13 @@ export class LokiTaskBoard extends LokiElement {
           color: var(--loki-text-primary);
         }
 
+        .task-desc {
+          font-size: 11px;
+          color: var(--loki-text-muted);
+          line-height: 1.4;
+          margin-bottom: 6px;
+        }
+
         .task-meta {
           display: flex;
           justify-content: space-between;
@@ -448,6 +538,182 @@ export class LokiTaskBoard extends LokiElement {
           stroke-width: 2;
           fill: none;
         }
+
+        /* Task Detail Modal */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.5);
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+        }
+
+        .modal-container {
+          background: var(--loki-bg-card);
+          border: 1px solid var(--loki-border);
+          border-radius: 8px;
+          width: 100%;
+          max-width: 640px;
+          max-height: 80vh;
+          overflow-y: auto;
+          padding: 24px;
+          box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .modal-header-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 22px;
+          color: var(--loki-text-muted);
+          cursor: pointer;
+          padding: 4px 8px;
+          border-radius: 4px;
+          line-height: 1;
+        }
+
+        .modal-close:hover {
+          background: var(--loki-bg-hover);
+          color: var(--loki-text-primary);
+        }
+
+        .modal-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: var(--loki-text-primary);
+          margin: 0 0 16px 0;
+          line-height: 1.3;
+        }
+
+        .task-status-badge {
+          font-size: 10px;
+          font-weight: 500;
+          padding: 2px 8px;
+          border-radius: 3px;
+          text-transform: capitalize;
+          background: var(--loki-bg-tertiary);
+          color: var(--loki-text-secondary);
+        }
+
+        .task-status-badge.in_progress { background: var(--loki-blue-muted, rgba(47,113,227,0.15)); color: var(--loki-blue); }
+        .task-status-badge.review { background: var(--loki-purple-muted, rgba(123,107,240,0.15)); color: var(--loki-purple); }
+        .task-status-badge.done { background: var(--loki-green-muted, rgba(31,197,168,0.15)); color: var(--loki-green); }
+
+        .modal-section {
+          margin-bottom: 16px;
+          padding-top: 12px;
+          border-top: 1px solid var(--loki-border);
+        }
+
+        .modal-section-title {
+          font-size: 11px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--loki-text-muted);
+          margin: 0 0 8px 0;
+        }
+
+        .modal-prose {
+          font-size: 13px;
+          line-height: 1.6;
+          color: var(--loki-text-primary);
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+
+        .meta-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+          gap: 8px;
+        }
+
+        .meta-cell {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .meta-label {
+          font-size: 10px;
+          font-weight: 500;
+          text-transform: capitalize;
+          color: var(--loki-text-muted);
+        }
+
+        .meta-value {
+          font-size: 12px;
+          color: var(--loki-text-primary);
+        }
+
+        .criteria-list {
+          margin: 0;
+          padding-left: 20px;
+          font-size: 13px;
+          line-height: 1.6;
+          color: var(--loki-text-primary);
+        }
+
+        .criteria-list li {
+          margin-bottom: 4px;
+        }
+
+        .context-files-list {
+          margin: 0;
+          padding-left: 16px;
+          font-size: 12px;
+          line-height: 1.8;
+          color: var(--loki-text-secondary);
+          list-style: disc;
+        }
+
+        .mono {
+          font-family: 'JetBrains Mono', monospace;
+        }
+
+        .modal-pre {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          line-height: 1.5;
+          background: var(--loki-bg-secondary);
+          border: 1px solid var(--loki-border);
+          border-radius: 4px;
+          padding: 12px;
+          overflow-x: auto;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+          max-height: 300px;
+          overflow-y: auto;
+          color: var(--loki-text-primary);
+        }
+
+        .modal-footer {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding-top: 12px;
+          border-top: 1px solid var(--loki-border);
+          font-size: 11px;
+          color: var(--loki-text-muted);
+        }
       </style>
     `;
 
@@ -493,19 +759,21 @@ export class LokiTaskBoard extends LokiElement {
                   ${tasks.length === 0 ? `<div class="empty-column">No tasks</div>` : ''}
                   ${tasks.map(task => `
                     <div class="task-card ${!readonly && !task.fromServer ? 'draggable' : ''} ${task.isLocal ? 'local' : ''}"
-                         data-task-id="${task.id}"
+                         data-task-id="${this._escapeHtml(String(task.id || ''))}"
                          tabindex="0"
                          role="button"
-                         aria-label="Task: ${this._escapeHtml(task.title || 'Untitled')}, ${task.priority || 'medium'} priority"
+                         aria-label="Task: ${this._escapeHtml(task.title || 'Untitled')}, ${this._escapeHtml(String(task.priority || 'medium'))} priority"
                          ${!readonly && !task.fromServer ? 'draggable="true"' : ''}>
                       <div class="task-card-header">
-                        <span class="task-id">${task.isLocal ? 'LOCAL' : '#' + task.id}</span>
-                        <span class="task-priority ${(task.priority || 'medium').toLowerCase()}">${task.priority || 'medium'}</span>
+                        <span class="task-id">${task.isLocal ? 'LOCAL' : '#' + this._escapeHtml(String(task.id || ''))}</span>
+                        <span class="task-priority ${this._escapeHtml(String(task.priority || 'medium').toLowerCase())}">${this._escapeHtml(String(task.priority || 'medium'))}</span>
                       </div>
                       <div class="task-title">${this._escapeHtml(task.title || 'Untitled')}</div>
+                      ${task.description ? `<div class="task-desc">${this._escapeHtml(task.description.substring(0, 80))}${task.description.length > 80 ? '...' : ''}</div>` : ''}
                       <div class="task-meta">
-                        <span class="task-type">${task.type || 'task'}</span>
-                        ${task.assigned_agent_id ? `<span>Agent #${task.assigned_agent_id}</span>` : ''}
+                        <span class="task-type">${this._escapeHtml(String(task.type || 'task'))}</span>
+                        ${task.acceptance_criteria?.length ? `<span>${task.acceptance_criteria.length} criteria</span>` : ''}
+                        ${task.assigned_agent_id ? `<span>Agent #${this._escapeHtml(String(task.assigned_agent_id))}</span>` : ''}
                       </div>
                     </div>
                   `).join('')}
@@ -538,6 +806,7 @@ export class LokiTaskBoard extends LokiElement {
         </div>
         ${content}
       </div>
+      ${this._selectedTask ? this._renderTaskDetailModal(this._selectedTask) : ''}
     `;
 
     this._attachEventListeners();
@@ -590,6 +859,18 @@ export class LokiTaskBoard extends LokiElement {
       zone.addEventListener('dragleave', (e) => this._handleDragLeave(e));
       zone.addEventListener('drop', (e) => this._handleDrop(e, zone.dataset.status));
     });
+
+    // Modal close
+    const closeBtn = this.shadowRoot.getElementById('modal-close-btn');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => this._closeTaskDetail());
+    }
+    const overlay = this.shadowRoot.getElementById('task-detail-overlay');
+    if (overlay) {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) this._closeTaskDetail();
+      });
+    }
   }
 
   _escapeHtml(text) {
