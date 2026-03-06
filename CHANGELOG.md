@@ -5,6 +5,16 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.10.0] - 2026-03-06
+
+### Fixed
+- Done signals safety valve: agent signaling "done" repeatedly now force-stops after 10 total signals (env: `LOKI_COUNCIL_DONE_SIGNAL_LIMIT`)
+- Arithmetic error in completion council: sanitize `grep -ciE` output before arithmetic to prevent bash errors
+- PRD scope misclassification: expanded header regex to match 16 section types (module, component, epic, etc.) plus word-count fallback for large PRDs
+- Monorepo test runner detection: scan workspace packages for vitest/jest when root package.json has no test runner
+- Auto-derive completion promise from PRD: sets promise and switches perpetual->checkpoint mode for PRD-driven work (env: `LOKI_AUTO_COMPLETION_PROMISE`, `LOKI_FORCE_PERPETUAL`)
+- Code review gate escalation ladder: auto-clear at 3 failures, escalate at 5, PAUSE at 10 consecutive failures (env: `LOKI_GATE_CLEAR_LIMIT`, `LOKI_GATE_ESCALATE_LIMIT`, `LOKI_GATE_PAUSE_LIMIT`)
+
 ## [6.9.0] - 2026-03-06
 
 ### Added

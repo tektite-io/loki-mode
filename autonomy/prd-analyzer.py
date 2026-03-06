@@ -252,7 +252,7 @@ class PrdAnalyzer:
         count = 0
         in_feature_section = False
         for line in self.lines:
-            if re.search(r"(?i)#+\s.*(?:feature|requirement|scope|functional)", line):
+            if re.search(r"(?i)#+\s.*(?:feature|requirement|scope|functional|module|component|service|endpoint|api|milestone|deliverable|workstream|epic|story|task|phase|capability|objective)", line):
                 in_feature_section = True
                 continue
             if in_feature_section and re.match(r"^\s*#+\s", line):
@@ -262,11 +262,24 @@ class PrdAnalyzer:
                 if re.match(r"^\s*[-*]\s+\S", line) or re.match(r"^\s*\d+\.\s+\S", line):
                     count += 1
 
+        # Fallback: count ## headings as feature indicators when bullet items are few
+        if count == 0:
+            for line in self.lines:
+                if re.match(r"^##\s+\S", line):
+                    count += 1
+
         self.feature_count = count
         for threshold, label in SCOPE_THRESHOLDS:
             if count <= threshold:
                 self.scope = label
                 break
+
+        # Word-count fallback: large PRDs should never be classified as small
+        word_count = len(self.content.split())
+        if word_count > 2000 and self.scope in ("small", "medium"):
+            self.scope = "large"
+        elif word_count > 500 and self.scope == "small":
+            self.scope = "medium"
 
     def generate_observations(self):
         """Generate the observations markdown content."""

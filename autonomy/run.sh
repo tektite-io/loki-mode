@@ -622,6 +622,11 @@ MAX_WORKTREES=${LOKI_MAX_WORKTREES:-5}
 MAX_PARALLEL_SESSIONS=${LOKI_MAX_PARALLEL_SESSIONS:-3}
 PARALLEL_TESTING=${LOKI_PARALLEL_TESTING:-true}
 PARALLEL_DOCS=${LOKI_PARALLEL_DOCS:-true}
+
+# Gate Escalation Ladder (v6.10.0)
+GATE_CLEAR_LIMIT=${LOKI_GATE_CLEAR_LIMIT:-3}
+GATE_ESCALATE_LIMIT=${LOKI_GATE_ESCALATE_LIMIT:-5}
+GATE_PAUSE_LIMIT=${LOKI_GATE_PAUSE_LIMIT:-10}
 TARGET_DIR="${LOKI_TARGET_DIR:-$(pwd)}"
 PARALLEL_BLOG=${LOKI_PARALLEL_BLOG:-false}
 AUTO_MERGE=${LOKI_AUTO_MERGE:-true}
@@ -5250,6 +5255,69 @@ SAFEOF
     fi
 }
 
+#===============================================================================
+# Gate Failure Tracking (v6.10.0)
+#===============================================================================
+
+track_gate_failure() {
+    local gate_name="$1"
+    local gate_file="${TARGET_DIR:-.}/.loki/quality/gate-failure-count.json"
+    mkdir -p "$(dirname "$gate_file")"
+
+    _GATE_FILE="$gate_file" _GATE_NAME="$gate_name" python3 -c "
+import json, os
+gate_file = os.environ['_GATE_FILE']
+gate_name = os.environ['_GATE_NAME']
+try:
+    with open(gate_file) as f:
+        counts = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError, OSError):
+    counts = {}
+counts[gate_name] = counts.get(gate_name, 0) + 1
+with open(gate_file, 'w') as f:
+    json.dump(counts, f, indent=2)
+print(counts[gate_name])
+" 2>/dev/null || echo "1"
+}
+
+clear_gate_failure() {
+    local gate_name="$1"
+    local gate_file="${TARGET_DIR:-.}/.loki/quality/gate-failure-count.json"
+    [ -f "$gate_file" ] || return 0
+
+    _GATE_FILE="$gate_file" _GATE_NAME="$gate_name" python3 -c "
+import json, os
+gate_file = os.environ['_GATE_FILE']
+gate_name = os.environ['_GATE_NAME']
+try:
+    with open(gate_file) as f:
+        counts = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError, OSError):
+    counts = {}
+counts[gate_name] = 0
+with open(gate_file, 'w') as f:
+    json.dump(counts, f, indent=2)
+" 2>/dev/null || true
+}
+
+get_gate_failure_count() {
+    local gate_name="$1"
+    local gate_file="${TARGET_DIR:-.}/.loki/quality/gate-failure-count.json"
+    [ -f "$gate_file" ] || { echo "0"; return; }
+
+    _GATE_FILE="$gate_file" _GATE_NAME="$gate_name" python3 -c "
+import json, os
+gate_file = os.environ['_GATE_FILE']
+gate_name = os.environ['_GATE_NAME']
+try:
+    with open(gate_file) as f:
+        counts = json.load(f)
+    print(counts.get(gate_name, 0))
+except (json.JSONDecodeError, FileNotFoundError, OSError):
+    print(0)
+" 2>/dev/null || echo "0"
+}
+
 # ============================================================================
 # Hard Quality Gate: Test Coverage (v6.7.0)
 # Detects test runner and runs tests with coverage reporting
@@ -5284,6 +5352,58 @@ enforce_test_coverage() {
             local output
             output=$(cd "${TARGET_DIR:-.}" && npx mocha 2>&1) || test_passed=false
             details="mocha: $(echo "$output" | tail -3 | tr '\n' ' ')"
+        fi
+    fi
+
+    # Monorepo: scan workspace packages for test runners (v6.10.0)
+    if [ "$test_runner" = "none" ] && [ -f "${TARGET_DIR:-.}/package.json" ]; then
+        local is_monorepo=false
+        # Detect monorepo indicators
+        if [ -f "${TARGET_DIR:-.}/pnpm-workspace.yaml" ] || \
+           [ -f "${TARGET_DIR:-.}/turbo.json" ] || \
+           [ -f "${TARGET_DIR:-.}/lerna.json" ] || \
+           grep -q '"workspaces"' "${TARGET_DIR:-.}/package.json" 2>/dev/null; then
+            is_monorepo=true
+        fi
+
+        if [ "$is_monorepo" = "true" ]; then
+            # Allow env override
+            if [ -n "${LOKI_MONOREPO_TEST_CMD:-}" ]; then
+                test_runner="monorepo-custom"
+                local output
+                output=$(cd "${TARGET_DIR:-.}" && eval "$LOKI_MONOREPO_TEST_CMD" 2>&1) || test_passed=false
+                details="monorepo-custom: $(echo "$output" | tail -3 | tr '\n' ' ')"
+            else
+                # Scan workspace packages for test runners
+                local workspace_runner=""
+                for pkg_json in "${TARGET_DIR:-.}"/packages/*/package.json \
+                                "${TARGET_DIR:-.}"/apps/*/package.json \
+                                "${TARGET_DIR:-.}"/services/*/package.json; do
+                    [ -f "$pkg_json" ] || continue
+                    if grep -q '"vitest"' "$pkg_json" 2>/dev/null; then
+                        workspace_runner="vitest"
+                        break
+                    elif grep -q '"jest"' "$pkg_json" 2>/dev/null; then
+                        workspace_runner="jest"
+                        break
+                    fi
+                done
+
+                if [ -n "$workspace_runner" ]; then
+                    test_runner="monorepo-$workspace_runner"
+                    local output
+                    if [ -f "${TARGET_DIR:-.}/turbo.json" ] && command -v turbo &>/dev/null; then
+                        output=$(cd "${TARGET_DIR:-.}" && npx turbo test 2>&1) || test_passed=false
+                        details="turbo test ($workspace_runner): $(echo "$output" | tail -3 | tr '\n' ' ')"
+                    elif [ -f "${TARGET_DIR:-.}/pnpm-workspace.yaml" ] && command -v pnpm &>/dev/null; then
+                        output=$(cd "${TARGET_DIR:-.}" && pnpm test --recursive 2>&1) || test_passed=false
+                        details="pnpm test --recursive ($workspace_runner): $(echo "$output" | tail -3 | tr '\n' ' ')"
+                    else
+                        output=$(cd "${TARGET_DIR:-.}" && npm test 2>&1) || test_passed=false
+                        details="npm test ($workspace_runner): $(echo "$output" | tail -3 | tr '\n' ' ')"
+                    fi
+                fi
+            fi
         fi
     fi
 
@@ -7398,11 +7518,16 @@ build_prompt() {
     if [ -n "$COMPLETION_PROMISE" ]; then
         completion_instruction="COMPLETION_PROMISE: [$COMPLETION_PROMISE]. ONLY output 'COMPLETION PROMISE FULFILLED: $COMPLETION_PROMISE' when this EXACT condition is met."
     else
-        completion_instruction="NO COMPLETION PROMISE SET. Run forever finding improvements. Iteration $iteration of max $MAX_ITERATIONS."
+        completion_instruction="NO COMPLETION PROMISE SET. Continue finding improvements. The Completion Council will evaluate your progress periodically. Iteration $iteration of max $MAX_ITERATIONS."
     fi
 
     # Core autonomous instructions - NO questions, NO waiting, NEVER say done
-    local autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) NEVER say 'done' or 'complete' - there's always more to improve. 4) NEVER stop voluntarily - if out of tasks, create new ones (add tests, optimize, refactor, add features). 5) Work continues PERPETUALLY. Even if PRD is implemented, find bugs, add tests, improve UX, optimize performance."
+    local autonomous_suffix=""
+    if [ "$AUTONOMY_MODE" = "perpetual" ] || [ "$PERPETUAL_MODE" = "true" ]; then
+        autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) NEVER say 'done' or 'complete' - there's always more to improve. 4) NEVER stop voluntarily - if out of tasks, create new ones (add tests, optimize, refactor, add features). 5) Work continues PERPETUALLY. Even if PRD is implemented, find bugs, add tests, improve UX, optimize performance."
+    else
+        autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) When all PRD requirements are implemented and tests pass, output the completion promise text EXACTLY: '$COMPLETION_PROMISE'. 4) If out of tasks but PRD is not fully implemented, continue working on remaining requirements. 5) Focus on completing PRD scope, not endless improvements."
+    fi
 
     # Skill files are always copied to .loki/skills/ for all providers
     local sdlc_instruction="SDLC_PHASES_ENABLED: [$phases]. Execute ALL enabled phases. Log results to .loki/logs/. See .loki/SKILL.md for phase details. Skill modules at .loki/skills/."
@@ -7820,6 +7945,21 @@ run_autonomous() {
         fi
         if type checklist_init &>/dev/null; then
             checklist_init "$prd_path"
+        fi
+    fi
+
+    # Auto-derive completion promise from PRD (v6.10.0)
+    # When PRD exists but no explicit promise, auto-derive one and switch to checkpoint mode
+    if [ -n "$prd_path" ] && [ -f "$prd_path" ] && [ -z "$COMPLETION_PROMISE" ]; then
+        if [ "${LOKI_AUTO_COMPLETION_PROMISE:-true}" = "true" ]; then
+            COMPLETION_PROMISE="All PRD requirements implemented and tests passing"
+            log_info "Auto-derived completion promise: $COMPLETION_PROMISE"
+            # PRD-driven work is finite; switch from perpetual to checkpoint
+            if [ "${LOKI_FORCE_PERPETUAL:-false}" != "true" ] && [ "$AUTONOMY_MODE" = "perpetual" ]; then
+                AUTONOMY_MODE="checkpoint"
+                PERPETUAL_MODE="false"
+                log_info "Switched autonomy mode: perpetual -> checkpoint (PRD-driven work is finite)"
+            fi
         fi
     fi
 
@@ -8302,29 +8442,55 @@ if __name__ == "__main__":
         # Checkpoint after each iteration (v5.57.0)
         create_checkpoint "iteration-${ITERATION_COUNT} complete" "iteration-${ITERATION_COUNT}"
 
-        # Quality gates (v6.7.0 - hard enforcement)
+        # Quality gates (v6.10.0 - escalation ladder)
         local gate_failures=""
         if [ "${LOKI_HARD_GATES:-true}" = "true" ]; then
             # Static analysis gate
             if [ "${PHASE_STATIC_ANALYSIS:-true}" = "true" ]; then
-                enforce_static_analysis || {
+                if enforce_static_analysis; then
+                    clear_gate_failure "static_analysis"
+                else
+                    local sa_count
+                    sa_count=$(track_gate_failure "static_analysis")
                     gate_failures="${gate_failures}static_analysis,"
-                    log_warn "Static analysis FAILED - findings injected into next iteration"
-                }
+                    log_warn "Static analysis FAILED ($sa_count consecutive) - findings injected into next iteration"
+                fi
             fi
             # Test coverage gate
             if [ "${PHASE_UNIT_TESTS:-true}" = "true" ]; then
-                enforce_test_coverage || {
+                if enforce_test_coverage; then
+                    clear_gate_failure "test_coverage"
+                else
+                    local tc_count
+                    tc_count=$(track_gate_failure "test_coverage")
                     gate_failures="${gate_failures}test_coverage,"
-                    log_warn "Test coverage gate FAILED - must pass next iteration"
-                }
+                    log_warn "Test coverage gate FAILED ($tc_count consecutive) - must pass next iteration"
+                fi
             fi
-            # Code review gate (upgraded from advisory)
+            # Code review gate (upgraded from advisory, with escalation)
             if [ "$PHASE_CODE_REVIEW" = "true" ] && [ "$ITERATION_COUNT" -gt 0 ]; then
-                run_code_review || {
-                    gate_failures="${gate_failures}code_review,"
-                    log_warn "Code review BLOCKED - Critical/High findings"
-                }
+                if run_code_review; then
+                    clear_gate_failure "code_review"
+                else
+                    local cr_count
+                    cr_count=$(track_gate_failure "code_review")
+                    if [ "$cr_count" -ge "$GATE_PAUSE_LIMIT" ]; then
+                        log_error "Gate escalation: code_review failed $cr_count times (>= $GATE_PAUSE_LIMIT) - forcing PAUSE for human intervention"
+                        echo "PAUSE" > "${TARGET_DIR:-.}/.loki/signals/GATE_ESCALATION"
+                        echo "code_review gate failed $cr_count consecutive times" >> "${TARGET_DIR:-.}/.loki/signals/GATE_ESCALATION"
+                        touch "${TARGET_DIR:-.}/.loki/signals/PAUSE"
+                    elif [ "$cr_count" -ge "$GATE_ESCALATE_LIMIT" ]; then
+                        log_warn "Gate escalation: code_review failed $cr_count times (>= $GATE_ESCALATE_LIMIT) - escalating"
+                        echo "ESCALATE" > "${TARGET_DIR:-.}/.loki/signals/GATE_ESCALATION"
+                        gate_failures="${gate_failures}code_review_ESCALATED,"
+                    elif [ "$cr_count" -ge "$GATE_CLEAR_LIMIT" ]; then
+                        log_warn "Gate cleared: code_review failed $cr_count times (>= $GATE_CLEAR_LIMIT) - clearing gate, agent tried"
+                        clear_gate_failure "code_review"
+                    else
+                        gate_failures="${gate_failures}code_review,"
+                        log_warn "Code review BLOCKED ($cr_count consecutive) - Critical/High findings"
+                    fi
+                fi
             fi
             # Store gate failures for prompt injection
             if [ -n "$gate_failures" ]; then

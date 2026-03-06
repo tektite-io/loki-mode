@@ -27,6 +27,7 @@
 #   LOKI_COUNCIL_MIN_ITERATIONS   - Minimum iterations before council runs (default: 3)
 #   LOKI_COUNCIL_CONVERGENCE_WINDOW - Iterations to track for convergence (default: 3)
 #   LOKI_COUNCIL_STAGNATION_LIMIT - Max iterations with no git changes (default: 5)
+#   LOKI_COUNCIL_DONE_SIGNAL_LIMIT - Max total done signals before force stop (default: 10)
 #
 # Usage:
 #   source autonomy/completion-council.sh
@@ -48,6 +49,7 @@ fi
 COUNCIL_MIN_ITERATIONS=${LOKI_COUNCIL_MIN_ITERATIONS:-3}
 COUNCIL_CONVERGENCE_WINDOW=${LOKI_COUNCIL_CONVERGENCE_WINDOW:-3}
 COUNCIL_STAGNATION_LIMIT=${LOKI_COUNCIL_STAGNATION_LIMIT:-5}
+COUNCIL_DONE_SIGNAL_LIMIT=${LOKI_COUNCIL_DONE_SIGNAL_LIMIT:-10}
 
 # Error budget: severity-aware completion (v5.49.0)
 # SEVERITY_THRESHOLD: minimum severity that blocks completion (critical, high, medium, low)
@@ -62,6 +64,7 @@ COUNCIL_STATE_DIR=""
 COUNCIL_PRD_PATH=""
 COUNCIL_CONSECUTIVE_NO_CHANGE=0
 COUNCIL_DONE_SIGNALS=0
+COUNCIL_TOTAL_DONE_SIGNALS=0
 COUNCIL_LAST_DIFF_HASH=""
 
 #===============================================================================
@@ -149,6 +152,7 @@ council_track_iteration() {
 
         if [ "$done_indicators" -gt 0 ]; then
             ((COUNCIL_DONE_SIGNALS++))
+            ((COUNCIL_TOTAL_DONE_SIGNALS++))
         else
             # Reset if agent stopped claiming done
             COUNCIL_DONE_SIGNALS=0
@@ -172,6 +176,7 @@ council_track_iteration() {
     _COUNCIL_STATE_FILE="$COUNCIL_STATE_DIR/state.json" \
     _COUNCIL_NO_CHANGE="$COUNCIL_CONSECUTIVE_NO_CHANGE" \
     _COUNCIL_DONE_SIGNALS="$COUNCIL_DONE_SIGNALS" \
+    _COUNCIL_TOTAL_DONE_SIGNALS="$COUNCIL_TOTAL_DONE_SIGNALS" \
     _COUNCIL_ITERATION="${ITERATION_COUNT:-0}" \
     _COUNCIL_FILES_CHANGED="$files_changed" \
     python3 -c "
@@ -184,6 +189,7 @@ except (json.JSONDecodeError, FileNotFoundError, OSError):
     state = {}
 state['consecutive_no_change'] = int(os.environ['_COUNCIL_NO_CHANGE'])
 state['done_signals'] = int(os.environ['_COUNCIL_DONE_SIGNALS'])
+state['total_done_signals'] = int(os.environ['_COUNCIL_TOTAL_DONE_SIGNALS'])
 state['last_track_iteration'] = int(os.environ['_COUNCIL_ITERATION'])
 state['files_changed'] = int(os.environ['_COUNCIL_FILES_CHANGED'])
 with open(state_file, 'w') as f:
@@ -459,7 +465,8 @@ EVIDENCE_SECTION
 
 ## Convergence Data
 - Consecutive iterations with no code changes: $COUNCIL_CONSECUTIVE_NO_CHANGE
-- Done signals from agent: $COUNCIL_DONE_SIGNALS
+- Done signals from agent (consecutive): $COUNCIL_DONE_SIGNALS
+- Total done signals from agent: $COUNCIL_TOTAL_DONE_SIGNALS
 - Current iteration: $ITERATION_COUNT
 
 ## Queue Status
@@ -990,6 +997,8 @@ council_evaluate_member() {
             if [ -f "$log_file" ]; then
                 local errs
                 errs=$(tail -50 "$log_file" 2>/dev/null | grep -ciE "(uncaught|unhandled|panic|fatal|segfault|traceback)" 2>/dev/null || echo "0")
+                errs=$(echo "$errs" | tr -dc '0-9')
+                errs="${errs:-0}"
                 error_count=$((error_count + errs))
             fi
         done
@@ -1365,6 +1374,13 @@ council_should_stop() {
         fi
     fi
 
+    # Safety valve 2: Total done signals exceed limit (agent keeps saying done)
+    if [ "$COUNCIL_TOTAL_DONE_SIGNALS" -ge "$COUNCIL_DONE_SIGNAL_LIMIT" ]; then
+        log_error "Safety valve: Agent signaled 'done' $COUNCIL_TOTAL_DONE_SIGNALS times (limit: $COUNCIL_DONE_SIGNAL_LIMIT)"
+        log_error "Forcing stop - agent believes work is complete"
+        return 0  # FORCE STOP
+    fi
+
     return 1  # CONTINUE
 }
 
@@ -1385,7 +1401,8 @@ council_write_report() {
 ## Convergence Data
 - Total iterations: $ITERATION_COUNT
 - Final consecutive no-change count: $COUNCIL_CONSECUTIVE_NO_CHANGE
-- Done signals from agent: $COUNCIL_DONE_SIGNALS
+- Done signals from agent (consecutive): $COUNCIL_DONE_SIGNALS
+- Total done signals from agent: $COUNCIL_TOTAL_DONE_SIGNALS
 
 ## Council Configuration
 - Council size: $COUNCIL_SIZE
