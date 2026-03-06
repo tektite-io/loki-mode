@@ -8484,8 +8484,7 @@ if __name__ == "__main__":
                         echo "ESCALATE" > "${TARGET_DIR:-.}/.loki/signals/GATE_ESCALATION"
                         gate_failures="${gate_failures}code_review_ESCALATED,"
                     elif [ "$cr_count" -ge "$GATE_CLEAR_LIMIT" ]; then
-                        log_warn "Gate cleared: code_review failed $cr_count times (>= $GATE_CLEAR_LIMIT) - clearing gate, agent tried"
-                        clear_gate_failure "code_review"
+                        log_warn "Gate cleared: code_review failed $cr_count times (>= $GATE_CLEAR_LIMIT) - passing gate this iteration, counter continues"
                     else
                         gate_failures="${gate_failures}code_review,"
                         log_warn "Code review BLOCKED ($cr_count consecutive) - Critical/High findings"
