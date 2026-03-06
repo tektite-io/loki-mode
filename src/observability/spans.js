@@ -18,15 +18,15 @@ const otel = require('./otel');
 // -------------------------------------------------------------------
 
 function _createSpan(name, parentSpan, attributes) {
-  const tracer = otel.tracerProvider.getTracer('loki-mode');
-  const options = { attributes: attributes || {} };
-
-  if (parentSpan) {
-    options.traceId = parentSpan.traceId;
-    options.parentSpanId = parentSpan.spanId;
-  }
-
-  return tracer.startSpan(name, options);
+  // Always use our custom Span class for consistent interface.
+  // The real OTEL SDK tracer (when available) returns span objects with
+  // a different API (spanContext(), etc.) that breaks our attribute access.
+  return new otel.Span(
+    name,
+    parentSpan ? parentSpan.traceId : undefined,
+    parentSpan ? parentSpan.spanId : undefined,
+    attributes || {}
+  );
 }
 
 // -------------------------------------------------------------------

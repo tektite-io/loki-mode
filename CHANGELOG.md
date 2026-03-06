@@ -5,6 +5,12 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.8.1] - 2026-03-06
+
+### Fixed
+- OTEL spans: use custom Span class directly in spans.js instead of tracer (real SDK returns incompatible span objects breaking parent-child hierarchy, status codes, and unique spanId generation)
+- `loki provider models` source attribution: single-model providers (aider, cline) no longer falsely report generic tier env vars as source
+
 ## [6.8.0] - 2026-03-05
 
 ### Added
