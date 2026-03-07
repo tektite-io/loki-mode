@@ -27,6 +27,8 @@ body:
         - Enterprise Features
         - Dashboard
         - Multi-Provider
+        - OpenSpec Integration
+        - Issue-Driven (loki run)
         - SDKs and APIs
         - Deployment
         - Other
