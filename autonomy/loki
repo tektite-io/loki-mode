@@ -11584,6 +11584,9 @@ cmd_remote() {
     # Emit event
     emit_event session cli remote_start "prd=${prd_abs:-none}"
 
+    # Always use bypassPermissions so Loki Mode can operate autonomously
+    rc_flags+=("--permission-mode" "bypassPermissions")
+
     # Launch remote-control
     # If workspace isn't trusted, it exits immediately with an error.
     # Use || true to prevent set -e from killing the script before auto-recovery.
