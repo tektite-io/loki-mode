@@ -27,6 +27,7 @@
 | Scale patterns (50+ agents) | `parallel-workflows.md` + `references/cursor-learnings.md` |
 | GitHub issues, PRs, syncing | `github-integration.md` |
 | Multi-provider (Codex, Gemini) | `providers.md` |
+| OpenSpec delta context, brownfield modifications | `openspec-integration.md` |
 | Plan deepening, knowledge extraction | `compound-learning.md` |
 
 ## Module Descriptions
@@ -108,6 +109,14 @@
 - Sync task status back to GitHub issues
 - Filter by labels, milestone, assignee
 - Requires `gh` CLI authenticated
+
+### openspec-integration.md
+**When:** Working with OpenSpec delta context, `--openspec` flag, brownfield modifications
+- Delta-aware development rules (ADDED/MODIFIED/REMOVED)
+- Task execution by group order
+- Scenario-to-test mapping (GIVEN/WHEN/THEN)
+- Source mapping and verification tracking
+- Complexity-based agent strategy
 
 ### compound-learning.md (v5.30.0)
 **When:** After architecture phase (deepen plan), after verification (extract learnings)

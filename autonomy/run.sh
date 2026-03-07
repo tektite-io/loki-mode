@@ -7710,6 +7710,29 @@ except: pass
         fi
     fi
 
+    # OpenSpec delta context injection (if available)
+    local openspec_context=""
+    if [[ -f ".loki/openspec/delta-context.json" ]]; then
+        openspec_context=$(_DELTA_FILE=".loki/openspec/delta-context.json" python3 -c "
+import json, os
+try:
+    with open(os.environ['_DELTA_FILE']) as f:
+        data = json.load(f)
+    parts = ['OPENSPEC DELTA CONTEXT:']
+    for domain, deltas in data.get('deltas', {}).items():
+        for req in deltas.get('added', []):
+            parts.append(f'  ADDED [{domain}]: {req[\"name\"]} - Create new code following existing patterns')
+        for req in deltas.get('modified', []):
+            parts.append(f'  MODIFIED [{domain}]: {req[\"name\"]} - Find and update existing code, do NOT create new files. Previously: {req.get(\"previously\", \"N/A\")}')
+        for req in deltas.get('removed', []):
+            parts.append(f'  REMOVED [{domain}]: {req[\"name\"]} - Deprecate or remove. Reason: {req.get(\"reason\", \"N/A\")}')
+    parts.append(f'Complexity: {data.get(\"complexity\", \"unknown\")}')
+    print(' '.join(parts))
+except Exception:
+    pass
+" 2>/dev/null || true)
+    fi
+
     # Degraded providers with small models need simplified prompts
     # Full RARV/SDLC instructions overwhelm models < 30B parameters
     if [ "${PROVIDER_DEGRADED:-false}" = "true" ]; then
@@ -7734,15 +7757,15 @@ except: pass
     else
         if [ $retry -eq 0 ]; then
             if [ -n "$prd" ]; then
-                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         else
             if [ -n "$prd" ]; then
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         fi
     fi
@@ -7868,6 +7891,91 @@ BMAD_QUEUE_EOF
 }
 
 #===============================================================================
+# OpenSpec Task Queue Population
+#===============================================================================
+
+# Populate the task queue from OpenSpec task artifacts
+# Only runs once -- skips if queue was already populated from OpenSpec
+populate_openspec_queue() {
+    # Skip if no OpenSpec tasks file
+    if [[ ! -f ".loki/openspec-tasks.json" ]]; then
+        return 0
+    fi
+
+    # Skip if already populated (marker file)
+    if [[ -f ".loki/queue/.openspec-populated" ]]; then
+        log_info "OpenSpec queue already populated, skipping"
+        return 0
+    fi
+
+    log_step "Populating task queue from OpenSpec tasks..."
+
+    # Ensure queue directory exists
+    mkdir -p ".loki/queue"
+
+    # Read OpenSpec tasks and create queue entries
+    python3 << 'OPENSPEC_QUEUE_EOF'
+import json
+import sys
+
+openspec_tasks_path = ".loki/openspec-tasks.json"
+pending_path = ".loki/queue/pending.json"
+
+try:
+    with open(openspec_tasks_path, "r") as f:
+        openspec_tasks = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError) as e:
+    print(f"Warning: Could not read OpenSpec tasks: {e}", file=sys.stderr)
+    sys.exit(0)
+
+# Load existing queue
+existing = []
+try:
+    with open(pending_path, "r") as f:
+        existing = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    pass
+
+# Convert OpenSpec tasks to queue format (skip completed tasks)
+for task in openspec_tasks:
+    if task.get("status") == "completed":
+        continue
+    queue_entry = {
+        "id": task.get("id", "openspec-unknown"),
+        "title": task.get("title", "Untitled"),
+        "description": f"[OpenSpec] {task.get('group', 'General')}: {task.get('title', '')}",
+        "priority": task.get("priority", "medium"),
+        "status": "pending",
+        "source": "openspec",
+        "metadata": {
+            "openspec_source": task.get("source", "tasks.md"),
+            "openspec_group": task.get("group", ""),
+        }
+    }
+    existing.append(queue_entry)
+
+with open(pending_path, "w") as f:
+    json.dump(existing, f, indent=2)
+
+pending_count = sum(1 for t in openspec_tasks if t.get('status') != 'completed')
+if pending_count == 0:
+    print("WARNING: All OpenSpec tasks are already marked as completed. No tasks added to queue.", file=sys.stderr)
+    print("Check your tasks.md file -- all checkboxes are checked.", file=sys.stderr)
+else:
+    print(f"Added {pending_count} OpenSpec tasks to queue")
+OPENSPEC_QUEUE_EOF
+
+    if [[ $? -ne 0 ]]; then
+        log_warn "Failed to populate OpenSpec queue (python3 error)"
+        return 0
+    fi
+
+    # Mark as populated so we don't re-add on restart
+    touch ".loki/queue/.openspec-populated"
+    log_info "OpenSpec queue population complete"
+}
+
+#===============================================================================
 # Main Autonomous Loop
 #===============================================================================
 
@@ -7965,6 +8073,9 @@ run_autonomous() {
 
     # Populate task queue from BMAD artifacts (if present, runs once)
     populate_bmad_queue
+
+    # Populate task queue from OpenSpec artifacts (if present, runs once)
+    populate_openspec_queue
 
     # Check max iterations before starting
     if check_max_iterations; then

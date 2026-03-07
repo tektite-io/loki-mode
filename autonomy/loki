@@ -448,6 +448,7 @@ show_help() {
     echo "  --compliance PRESET  Enable compliance mode (default|healthcare|fintech|government)"
     echo "  --budget USD     Set cost budget limit (display in dashboard/status)"
     echo "  --bmad-project PATH  Use BMAD Method project artifacts as input"
+    echo "  --openspec PATH      Use OpenSpec change directory as input"
     echo ""
     echo "Options for 'run' (v6.0.0):"
     echo "  --dry-run          Preview generated PRD without starting"
@@ -490,6 +491,7 @@ cmd_start() {
     local prd_file=""
     local provider=""
     local bmad_project_path=""
+    local openspec_change_path=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -514,6 +516,7 @@ cmd_start() {
                 echo "  --compliance PRESET   Enable compliance mode (default|healthcare|fintech|government)"
                 echo "  --budget USD          Cost budget limit (auto-pause when exceeded)"
                 echo "  --bmad-project PATH   Use BMAD Method project artifacts as input"
+                echo "  --openspec PATH       Use OpenSpec change directory as input"
                 echo "  --yes, -y             Skip confirmation prompts (auto-confirm)"
                 echo ""
                 echo "Environment Variables:"
@@ -529,6 +532,7 @@ cmd_start() {
                 echo "  loki start ./prd.md --parallel  # Parallel mode with worktrees"
                 echo "  loki start --provider codex     # Use OpenAI Codex CLI"
                 echo "  loki start --bmad-project ./my-project  # Start from BMAD artifacts"
+                echo "  loki start --openspec ./openspec/changes/my-feature  # Start from OpenSpec change"
                 echo "  loki start --yes                # Skip confirmation prompt"
                 echo "  LOKI_PRD_FILE=./prd.md loki start  # PRD via env var"
                 exit 0
@@ -652,6 +656,19 @@ cmd_start() {
                 bmad_project_path="${1#*=}"
                 shift
                 ;;
+            --openspec)
+                if [[ -n "${2:-}" ]]; then
+                    openspec_change_path="$2"
+                    shift 2
+                else
+                    echo -e "${RED}--openspec requires a path to an OpenSpec change directory${NC}"
+                    exit 1
+                fi
+                ;;
+            --openspec=*)
+                openspec_change_path="${1#*=}"
+                shift
+                ;;
             --budget)
                 if [[ -n "${2:-}" ]]; then
                     if ! echo "$2" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
@@ -688,6 +705,12 @@ cmd_start() {
     # Support LOKI_PRD_FILE environment variable as fallback
     if [ -z "$prd_file" ] && [ -n "${LOKI_PRD_FILE:-}" ]; then
         prd_file="$LOKI_PRD_FILE"
+    fi
+
+    # Mutual exclusivity: --openspec and --bmad-project cannot be used together
+    if [[ -n "${openspec_change_path:-}" ]] && [[ -n "${bmad_project_path:-}" ]]; then
+        echo -e "${RED}Error: --openspec and --bmad-project are mutually exclusive. Use one or the other.${NC}"
+        exit 1
     fi
 
     # BMAD project validation and adapter execution
@@ -749,6 +772,65 @@ cmd_start() {
         if [[ -z "$prd_file" ]] && [[ -f "$LOKI_DIR/bmad-prd-normalized.md" ]]; then
             prd_file="$LOKI_DIR/bmad-prd-normalized.md"
             echo -e "${CYAN}Using normalized BMAD PRD: $prd_file${NC}"
+        fi
+    fi
+
+    # OpenSpec change directory validation and adapter execution
+    if [[ -n "$openspec_change_path" ]]; then
+        # Resolve to absolute path
+        if [[ ! "$openspec_change_path" = /* ]]; then
+            local original_openspec_path="$openspec_change_path"
+            openspec_change_path="$(cd "$openspec_change_path" 2>/dev/null && pwd)" || {
+                echo -e "${RED}Error: OpenSpec change path does not exist: $original_openspec_path${NC}"
+                exit 1
+            }
+        fi
+
+        # Validate path is a directory
+        if [[ ! -d "$openspec_change_path" ]]; then
+            echo -e "${RED}Error: OpenSpec change path is not a directory: $openspec_change_path${NC}"
+            exit 1
+        fi
+
+        # Check for required OpenSpec artifacts
+        if [[ ! -f "$openspec_change_path/proposal.md" ]]; then
+            echo -e "${RED}Error: No proposal.md found in $openspec_change_path${NC}"
+            echo "Expected an OpenSpec change directory with proposal.md and specs/."
+            exit 1
+        fi
+
+        # Export for run.sh to access
+        export OPENSPEC_CHANGE_PATH="$openspec_change_path"
+
+        # Ensure .loki directory exists for adapter output
+        mkdir -p "$LOKI_DIR"
+
+        # Run the OpenSpec adapter to normalize artifacts
+        echo -e "${CYAN}Running OpenSpec adapter...${NC}"
+        local adapter_script="${SCRIPT_DIR:-$(dirname "$0")}/openspec-adapter.py"
+        if [[ ! -f "$adapter_script" ]]; then
+            echo -e "${RED}Error: OpenSpec adapter not found at $adapter_script${NC}"
+            echo "Please ensure autonomy/openspec-adapter.py exists."
+            exit 1
+        fi
+
+        # Validate first
+        if ! python3 "$adapter_script" "$openspec_change_path" --validate; then
+            echo -e "${RED}Error: OpenSpec adapter validation failed. Check the change artifacts.${NC}"
+            exit 1
+        fi
+
+        # Generate output files
+        if ! python3 "$adapter_script" "$openspec_change_path" --output-dir "$LOKI_DIR"; then
+            echo -e "${RED}Error: OpenSpec adapter failed to generate output files.${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}OpenSpec artifacts normalized successfully.${NC}"
+
+        # If no explicit PRD was provided, use the normalized OpenSpec PRD
+        if [[ -z "$prd_file" ]] && [[ -f "$LOKI_DIR/openspec-prd-normalized.md" ]]; then
+            prd_file="$LOKI_DIR/openspec-prd-normalized.md"
+            echo -e "${CYAN}Using normalized OpenSpec PRD: $prd_file${NC}"
         fi
     fi
 

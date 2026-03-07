@@ -5,6 +5,29 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.11.0] - 2026-03-07
+
+### New Features
+- **OpenSpec Bridge** (`loki start --openspec PATH`): New input pathway for spec-driven development
+  - Reads OpenSpec change directories (proposal.md, specs/, tasks.md, design.md)
+  - Normalizes to Loki-native formats (PRD, task queue, delta context)
+  - Supports ADDED/MODIFIED/REMOVED delta specs for brownfield development
+  - Complexity classification (simple/standard/complex/enterprise)
+  - Scenario-based verification mapping (GIVEN/WHEN/THEN)
+  - Follows BMAD adapter pattern (CLI flag -> validation -> adapter -> queue bridge)
+
+### New Files
+- `autonomy/openspec-adapter.py` - Stdlib-only Python adapter (~480 lines)
+- `skills/openspec-integration.md` - Delta-aware development skill module
+- `tests/test_openspec_adapter.py` - 28 unit tests for adapter
+- `examples/openspec/` - 6 test fixtures (simple, standard, complex, brownfield, partial, malformed)
+
+### Improvements
+- Mutual exclusivity check for `--openspec` and `--bmad-project` flags
+- Warning when all OpenSpec tasks are already completed
+- Delta context injection in agent prompts (ADDED/MODIFIED/REMOVED awareness)
+- OpenSpec task queue bridge (parallel to BMAD queue bridge)
+
 ## [6.10.0] - 2026-03-06
 
 ### Fixed
