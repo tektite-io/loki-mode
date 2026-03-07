@@ -11585,10 +11585,10 @@ cmd_remote() {
     emit_event session cli remote_start "prd=${prd_abs:-none}"
 
     # Launch remote-control
-    # If workspace isn't trusted, it exits immediately (non-interactive error).
-    # We catch this and auto-launch claude for trust, then retry seamlessly.
-    claude remote-control ${rc_flags[@]+"${rc_flags[@]}"}
-    local rc_exit=$?
+    # If workspace isn't trusted, it exits immediately with an error.
+    # Use || true to prevent set -e from killing the script before auto-recovery.
+    local rc_exit=0
+    claude remote-control ${rc_flags[@]+"${rc_flags[@]}"} || rc_exit=$?
 
     # Exit 0 = normal session end
     if [ $rc_exit -eq 0 ]; then
@@ -11599,7 +11599,7 @@ cmd_remote() {
     echo ""
     echo -e "${CYAN}Trusting workspace -- accept the prompt below, then type /exit${NC}"
     echo ""
-    claude
+    claude || true
     echo ""
     echo -e "${GREEN}Launching remote control...${NC}"
     echo ""
