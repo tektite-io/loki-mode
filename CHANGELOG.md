@@ -5,10 +5,10 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v6.11.2 - Remote Control Auto-Trust
+## v6.11.3 - Remote Control Auto-Trust with Auto-Recovery
 
 ### Bug Fixes
-- **`loki remote` auto-trust**: Automatically trusts the workspace via `claude -p` before launching remote-control, eliminating the need for users to manually run `claude` first
+- **`loki remote` auto-recovery**: When workspace isn't trusted, automatically opens interactive Claude Code for trust acceptance, then retries remote-control -- zero manual steps needed
 
 ## [6.11.1] - 2026-03-07
 
