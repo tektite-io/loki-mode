@@ -5,6 +5,30 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v6.12.0 - OpenSpec Bridge + Remote Control Improvements
+
+### New Features
+- **OpenSpec Bridge** (`loki start --openspec PATH`): Spec-driven development input pathway
+  - Reads OpenSpec change directories (proposal.md, specs/, tasks.md, design.md)
+  - Normalizes to Loki-native formats (PRD, task queue, delta context)
+  - Supports ADDED/MODIFIED/REMOVED delta specs for brownfield development
+  - Complexity classification (simple/standard/complex/enterprise)
+  - Scenario-based verification mapping (GIVEN/WHEN/THEN)
+  - Mutual exclusivity with --bmad-project flag
+  - Warning on all-completed task lists
+  - Delta context injection in agent prompts
+
+### Bug Fixes
+- **`loki remote` auto-trust**: Automatically trusts workspace via `claude -p` before launching remote-control, eliminating manual trust step
+- **OpenSpec adapter parser**: Fixed "Previously" annotation extraction for inline format, fixed "Deprecated" reason extraction for narrative descriptions
+- **CLI adapter invocation**: Fixed adapter running with --validate only (never generating output files)
+
+### New Files
+- `autonomy/openspec-adapter.py` -- Stdlib-only Python adapter (~480 lines)
+- `skills/openspec-integration.md` -- Delta-aware development skill module
+- `tests/test_openspec_adapter.py` -- 28 unit tests
+- `examples/openspec/` -- 6 test fixtures
+
 ## v6.11.3 - Remote Control Auto-Trust with Auto-Recovery
 
 ### Bug Fixes
