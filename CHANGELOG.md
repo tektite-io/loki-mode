@@ -5,6 +5,11 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v6.12.3 - Remote Control Zero-Friction Trust
+
+### Bug Fixes
+- **`loki remote` zero-friction trust**: Auto-trust workspace by piping `/exit` to `claude` instead of requiring manual interaction. Fully automatic recovery from untrusted workspace errors.
+
 ## v6.12.2 - Remote Control Trust Fix (set -e)
 
 ### Bug Fixes

@@ -11596,10 +11596,10 @@ cmd_remote() {
     fi
 
     # Failed -- most likely workspace trust. Auto-recover.
+    # Launch claude with /exit piped in to auto-accept trust and quit immediately.
     echo ""
-    echo -e "${CYAN}Trusting workspace -- accept the prompt below, then type /exit${NC}"
-    echo ""
-    claude || true
+    echo -e "${DIM}Auto-trusting workspace...${NC}"
+    printf '/exit\n' | claude --no-session-persistence 2>/dev/null || true
     echo ""
     echo -e "${GREEN}Launching remote control...${NC}"
     echo ""
