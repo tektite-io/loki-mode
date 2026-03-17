@@ -5,6 +5,14 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v6.15.0 - SQLite Memory Backend and MCP Memory Tools
+
+### Features
+- **SQLite + FTS5 memory storage**: New primary storage backend with full-text search. Factory auto-selects SQLite when available, falls back to JSON storage. Located in `memory/sqlite_storage.py`.
+- **Auto RARV capture**: Cleaned up duplicate `store_episode_trace` calls in the autonomous loop for cleaner episode recording.
+- **3 MCP memory tools**: Added `mem_search`, `mem_timeline`, and `mem_get` tools to `mcp/server.py` for programmatic memory access.
+- **Dashboard memory endpoints**: New `/api/memory/search` and `/api/memory/stats` endpoints plus 5 existing endpoints upgraded to use SQLite backend.
+
 ## v6.14.0 - Standalone Quality Review
 
 ### Features

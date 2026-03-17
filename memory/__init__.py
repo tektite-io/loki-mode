@@ -42,12 +42,18 @@ from .schemas import (
 
 from .storage import MemoryStorage, DEFAULT_NAMESPACE
 
+try:
+    from .sqlite_storage import SQLiteMemoryStorage
+except ImportError:
+    SQLiteMemoryStorage = None
+
 from .engine import (
     MemoryEngine,
     EpisodicMemory,
     SemanticMemory,
     ProceduralMemory,
     TASK_STRATEGIES,
+    create_storage,
 )
 
 from .retrieval import (
@@ -110,6 +116,8 @@ __all__ = [
     "ProceduralSkill",
     # Engine
     "MemoryStorage",
+    "SQLiteMemoryStorage",
+    "create_storage",
     "MemoryEngine",
     "EpisodicMemory",
     "SemanticMemory",

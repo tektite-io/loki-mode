@@ -1295,3 +1295,24 @@ class ProceduralMemory:
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Search skills by similarity."""
         return self._engine.retrieve_by_similarity(query, "procedural", top_k)
+
+
+def create_storage(base_path: str = ".loki/memory", namespace: Optional[str] = None):
+    """
+    Factory function to create the best available storage backend.
+
+    Tries SQLite+FTS5 first (faster search, single file), falls back to
+    JSON-based MemoryStorage if SQLite initialization fails.
+
+    Args:
+        base_path: Base path for memory data
+        namespace: Optional namespace for project isolation
+
+    Returns:
+        SQLiteMemoryStorage or MemoryStorage instance
+    """
+    try:
+        from .sqlite_storage import SQLiteMemoryStorage
+        return SQLiteMemoryStorage(base_path=base_path, namespace=namespace)
+    except Exception:
+        return MemoryStorage(base_path=base_path, namespace=namespace)

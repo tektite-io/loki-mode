@@ -1622,15 +1622,51 @@ def _sanitize_agent_id(agent_id: str) -> str:
 @app.get("/api/memory/summary")
 async def get_memory_summary():
     """Get memory system summary from .loki/memory/."""
+    # Try SQLite backend first for accurate counts
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            stats = storage.get_stats()
+            summary = {
+                "episodic": {"count": stats.get("episode_count", 0), "latestDate": None},
+                "semantic": {"patterns": stats.get("pattern_count", 0), "antiPatterns": 0},
+                "procedural": {"skills": stats.get("skill_count", 0)},
+                "backend": "sqlite",
+            }
+            # Get latest episode date
+            episode_ids = storage.list_episodes(limit=1)
+            if episode_ids:
+                ep = storage.load_episode(episode_ids[0])
+                if ep:
+                    summary["episodic"]["latestDate"] = ep.get("timestamp", "")
+            # Token economics from JSON (not in SQLite)
+            econ_file = _get_loki_dir() / "memory" / "token_economics.json"
+            if econ_file.exists():
+                try:
+                    econ = json.loads(econ_file.read_text())
+                    summary["tokenEconomics"] = {
+                        "discoveryTokens": econ.get("discoveryTokens", 0),
+                        "readTokens": econ.get("readTokens", 0),
+                        "savingsPercent": econ.get("savingsPercent", 0),
+                    }
+                except Exception:
+                    summary["tokenEconomics"] = {"discoveryTokens": 0, "readTokens": 0, "savingsPercent": 0}
+            else:
+                summary["tokenEconomics"] = {"discoveryTokens": 0, "readTokens": 0, "savingsPercent": 0}
+            return summary
+        except Exception:
+            pass
+
+    # Fallback to JSON file-based counts
     memory_dir = _get_loki_dir() / "memory"
     summary = {
         "episodic": {"count": 0, "latestDate": None},
         "semantic": {"patterns": 0, "antiPatterns": 0},
         "procedural": {"skills": 0},
         "tokenEconomics": {"discoveryTokens": 0, "readTokens": 0, "savingsPercent": 0},
+        "backend": "json",
     }
 
-    # Count episodic memories
     ep_dir = memory_dir / "episodic"
     if ep_dir.exists():
         episodes = sorted(ep_dir.glob("*.json"))
@@ -1642,7 +1678,6 @@ async def get_memory_summary():
             except Exception:
                 pass
 
-    # Count semantic patterns
     sem_dir = memory_dir / "semantic"
     patterns_file = sem_dir / "patterns.json"
     anti_file = sem_dir / "anti-patterns.json"
@@ -1659,12 +1694,10 @@ async def get_memory_summary():
         except Exception:
             pass
 
-    # Count skills
     skills_dir = memory_dir / "skills"
     if skills_dir.exists():
         summary["procedural"]["skills"] = len(list(skills_dir.glob("*.json")))
 
-    # Token economics
     econ_file = memory_dir / "token_economics.json"
     if econ_file.exists():
         try:
@@ -1683,6 +1716,21 @@ async def get_memory_summary():
 @app.get("/api/memory/episodes")
 async def list_episodes(limit: int = Query(default=50, ge=1, le=1000)):
     """List episodic memory entries."""
+    # Try SQLite backend first
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            ids = storage.list_episodes(limit=limit)
+            episodes = []
+            for eid in ids:
+                ep = storage.load_episode(eid)
+                if ep:
+                    episodes.append(ep)
+            return episodes
+        except Exception:
+            pass
+
+    # Fallback to JSON files
     ep_dir = _get_loki_dir() / "memory" / "episodic"
     episodes = []
     if ep_dir.exists():
@@ -1698,11 +1746,21 @@ async def list_episodes(limit: int = Query(default=50, ge=1, le=1000)):
 @app.get("/api/memory/episodes/{episode_id}")
 async def get_episode(episode_id: str):
     """Get a specific episodic memory entry."""
+    # Try SQLite first
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            ep = storage.load_episode(episode_id)
+            if ep:
+                return ep
+        except Exception:
+            pass
+
+    # Fallback to JSON files
     loki_dir = _get_loki_dir()
     ep_dir = loki_dir / "memory" / "episodic"
     if not ep_dir.exists():
         raise HTTPException(status_code=404, detail="Episode not found")
-    # Try direct filename match
     for f in ep_dir.glob("*.json"):
         resolved = os.path.realpath(f)
         if not resolved.startswith(os.path.realpath(str(loki_dir))):
@@ -1719,6 +1777,21 @@ async def get_episode(episode_id: str):
 @app.get("/api/memory/patterns")
 async def list_patterns():
     """List semantic patterns."""
+    # Try SQLite first
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            ids = storage.list_patterns()
+            patterns = []
+            for pid in ids:
+                p = storage.load_pattern(pid)
+                if p:
+                    patterns.append(p)
+            return patterns
+        except Exception:
+            pass
+
+    # Fallback to JSON
     sem_dir = _get_loki_dir() / "memory" / "semantic"
     patterns_file = sem_dir / "patterns.json"
     if patterns_file.exists():
@@ -1743,6 +1816,21 @@ async def get_pattern(pattern_id: str):
 @app.get("/api/memory/skills")
 async def list_skills():
     """List procedural skills."""
+    # Try SQLite first
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            ids = storage.list_skills()
+            skills = []
+            for sid in ids:
+                s = storage.load_skill(sid)
+                if s:
+                    skills.append(s)
+            return skills
+        except Exception:
+            pass
+
+    # Fallback to JSON
     skills_dir = _get_loki_dir() / "memory" / "skills"
     skills = []
     if skills_dir.exists():
@@ -1822,6 +1910,106 @@ async def get_memory_timeline():
     # Build from episodic memories if no timeline file
     episodes = await list_episodes(limit=100)
     return {"entries": episodes, "lastUpdated": None}
+
+
+# ---------------------------------------------------------------------------
+# Memory Search & Stats (v6.15.0) - SQLite FTS5 powered
+# ---------------------------------------------------------------------------
+
+def _get_memory_storage():
+    """Get the best available memory storage backend (SQLite preferred)."""
+    memory_dir = _get_loki_dir() / "memory"
+    base_path = str(memory_dir)
+    try:
+        import sys
+        project_root = str(_Path(__file__).resolve().parent.parent)
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from memory.sqlite_storage import SQLiteMemoryStorage
+        return SQLiteMemoryStorage(base_path=base_path)
+    except Exception:
+        return None
+
+
+@app.get("/api/memory/search")
+async def search_memory(
+    q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    collection: str = Query(default="all", regex="^(episodes|patterns|skills|all)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Full-text search across memory using FTS5."""
+    storage = _get_memory_storage()
+    if storage is None:
+        return {"results": [], "message": "SQLite memory backend not available"}
+
+    try:
+        results = storage.search_fts(q, collection=collection, limit=limit)
+        compact = []
+        for r in results:
+            entry = {
+                "id": r.get("id", ""),
+                "type": r.get("_type", "unknown"),
+                "summary": (
+                    r.get("goal", "") or
+                    r.get("pattern", "") or
+                    r.get("description", "") or
+                    r.get("name", "")
+                )[:300],
+                "score": round(r.get("_score", 0), 3),
+            }
+            if r.get("outcome"):
+                entry["outcome"] = r["outcome"]
+            if r.get("category"):
+                entry["category"] = r["category"]
+            if r.get("timestamp"):
+                entry["timestamp"] = r["timestamp"]
+            compact.append(entry)
+        return {"results": compact, "count": len(compact), "query": q, "collection": collection}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+
+
+@app.get("/api/memory/stats")
+async def get_memory_stats():
+    """Get memory system statistics (counts, size, backend info)."""
+    storage = _get_memory_storage()
+    if storage is not None:
+        try:
+            return storage.get_stats()
+        except Exception:
+            pass
+
+    # Fallback: compute stats from JSON files
+    memory_dir = _get_loki_dir() / "memory"
+    ep_count = 0
+    ep_dir = memory_dir / "episodic"
+    if ep_dir.exists():
+        for d in ep_dir.iterdir():
+            if d.is_dir():
+                ep_count += len(list(d.glob("*.json")))
+            elif d.suffix == ".json":
+                ep_count += 1
+
+    pat_count = 0
+    patterns_file = memory_dir / "semantic" / "patterns.json"
+    if patterns_file.exists():
+        try:
+            data = json.loads(patterns_file.read_text())
+            pat_count = len(data) if isinstance(data, list) else len(data.get("patterns", []))
+        except Exception:
+            pass
+
+    skill_count = 0
+    skills_dir = memory_dir / "skills"
+    if skills_dir.exists():
+        skill_count = len(list(skills_dir.glob("*.json")))
+
+    return {
+        "backend": "json",
+        "episode_count": ep_count,
+        "pattern_count": pat_count,
+        "skill_count": skill_count,
+    }
 
 
 # Learning/metrics endpoints

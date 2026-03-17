@@ -1377,6 +1377,265 @@ async def loki_code_search_stats() -> str:
 
 
 # ============================================================
+# MEMORY SEARCH TOOLS (v6.15.0) - SQLite FTS5 powered
+# ============================================================
+
+@mcp.tool()
+async def mem_search(
+    query: str,
+    collection: str = "all",
+    limit: int = 10,
+) -> str:
+    """
+    Search memory using full-text search (FTS5).
+
+    Fast keyword search across all memory types. Supports AND, OR, NOT
+    operators and prefix matching (e.g. "debug*").
+
+    Args:
+        query: Search query (plain text or FTS5 syntax)
+        collection: Which memories to search (episodes, patterns, skills, all)
+        limit: Maximum results to return
+
+    Returns:
+        JSON array of matching memories with relevance scores
+    """
+    _emit_tool_event_async(
+        'mem_search', 'start',
+        parameters={'query': query, 'collection': collection, 'limit': limit}
+    )
+    try:
+        base_path = safe_path_join('.loki', 'memory')
+        if not os.path.exists(base_path):
+            result = json.dumps({"results": [], "message": "Memory system not initialized"})
+            _emit_tool_event_async('mem_search', 'complete', result_status='success')
+            return result
+
+        # Try SQLite backend first (has FTS5), fall back to keyword search
+        try:
+            from memory.sqlite_storage import SQLiteMemoryStorage
+            storage = SQLiteMemoryStorage(base_path)
+            results = storage.search_fts(query, collection=collection, limit=limit)
+        except (ImportError, Exception):
+            # Fall back to retrieval-based search
+            from memory.retrieval import MemoryRetrieval
+            from memory.storage import MemoryStorage
+            storage = MemoryStorage(base_path)
+            retriever = MemoryRetrieval(storage)
+            context = {"goal": query, "task_type": "exploration"}
+            results = retriever.retrieve_task_aware(context, top_k=limit)
+
+        # Compact results for token efficiency
+        compact = []
+        for r in results:
+            entry = {
+                "id": r.get("id", ""),
+                "type": r.get("_type", r.get("type", "unknown")),
+                "summary": (
+                    r.get("goal", "") or
+                    r.get("pattern", "") or
+                    r.get("description", "") or
+                    r.get("name", "")
+                )[:200],
+            }
+            if r.get("_score"):
+                entry["score"] = round(r["_score"], 3)
+            if r.get("outcome"):
+                entry["outcome"] = r["outcome"]
+            if r.get("category"):
+                entry["category"] = r["category"]
+            compact.append(entry)
+
+        result = json.dumps({"results": compact, "count": len(compact)}, default=str)
+        _emit_tool_event_async('mem_search', 'complete', result_status='success')
+        return result
+    except PathTraversalError as e:
+        logger.error(f"Path traversal attempt blocked: {e}")
+        _emit_tool_event_async('mem_search', 'complete', result_status='error', error='Access denied')
+        return json.dumps({"error": "Access denied", "results": []})
+    except Exception as e:
+        logger.error(f"mem_search failed: {e}")
+        _emit_tool_event_async('mem_search', 'complete', result_status='error', error=str(e))
+        return json.dumps({"error": str(e), "results": []})
+
+
+@mcp.tool()
+async def mem_timeline(
+    around_id: str = "",
+    limit: int = 20,
+    since_hours: int = 24,
+) -> str:
+    """
+    Get chronological context from memory timeline.
+
+    Shows recent actions, key decisions, and episode traces in time order.
+    Use around_id to get context surrounding a specific memory entry.
+
+    Args:
+        around_id: Optional memory ID to center the timeline around
+        limit: Maximum timeline entries to return
+        since_hours: Only show entries from the last N hours (default 24)
+
+    Returns:
+        JSON timeline with actions and decisions
+    """
+    _emit_tool_event_async(
+        'mem_timeline', 'start',
+        parameters={'around_id': around_id, 'limit': limit, 'since_hours': since_hours}
+    )
+    try:
+        base_path = safe_path_join('.loki', 'memory')
+        if not os.path.exists(base_path):
+            result = json.dumps({"timeline": [], "message": "Memory system not initialized"})
+            _emit_tool_event_async('mem_timeline', 'complete', result_status='success')
+            return result
+
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+
+        try:
+            from memory.sqlite_storage import SQLiteMemoryStorage
+            storage = SQLiteMemoryStorage(base_path)
+
+            # Get timeline actions
+            timeline = storage.get_timeline()
+            actions = timeline.get("recent_actions", [])[:limit]
+
+            # Get recent episodes for richer context
+            episode_ids = storage.list_episodes(since=cutoff, limit=limit)
+            episodes = []
+            for eid in episode_ids:
+                ep = storage.load_episode(eid)
+                if ep:
+                    episodes.append({
+                        "id": ep.get("id"),
+                        "timestamp": ep.get("timestamp"),
+                        "phase": ep.get("phase"),
+                        "goal": (ep.get("goal", "") or "")[:150],
+                        "outcome": ep.get("outcome"),
+                        "duration_seconds": ep.get("duration_seconds"),
+                        "files_modified": ep.get("files_modified", [])[:5],
+                    })
+
+        except (ImportError, Exception):
+            from memory.storage import MemoryStorage
+            storage = MemoryStorage(base_path)
+            timeline = storage.get_timeline()
+            actions = timeline.get("recent_actions", [])[:limit]
+
+            episode_ids = storage.list_episodes(since=cutoff, limit=limit)
+            episodes = []
+            for eid in episode_ids:
+                ep = storage.load_episode(eid)
+                if ep:
+                    episodes.append({
+                        "id": ep.get("id"),
+                        "timestamp": ep.get("timestamp"),
+                        "phase": ep.get("phase"),
+                        "goal": (ep.get("goal", "") or "")[:150],
+                        "outcome": ep.get("outcome"),
+                    })
+
+        result = json.dumps({
+            "actions": actions,
+            "episodes": episodes,
+            "decisions": timeline.get("key_decisions", [])[:10],
+            "active_context": timeline.get("active_context", {}),
+        }, default=str)
+        _emit_tool_event_async('mem_timeline', 'complete', result_status='success')
+        return result
+    except PathTraversalError as e:
+        logger.error(f"Path traversal attempt blocked: {e}")
+        _emit_tool_event_async('mem_timeline', 'complete', result_status='error', error='Access denied')
+        return json.dumps({"error": "Access denied", "timeline": []})
+    except Exception as e:
+        logger.error(f"mem_timeline failed: {e}")
+        _emit_tool_event_async('mem_timeline', 'complete', result_status='error', error=str(e))
+        return json.dumps({"error": str(e), "timeline": []})
+
+
+@mcp.tool()
+async def mem_get(
+    ids: str,
+) -> str:
+    """
+    Fetch full details for one or more memory entries by ID.
+
+    Use after mem_search to get complete data for specific results.
+
+    Args:
+        ids: Comma-separated list of memory IDs to fetch
+
+    Returns:
+        JSON object with full memory details keyed by ID
+    """
+    _emit_tool_event_async(
+        'mem_get', 'start',
+        parameters={'ids': ids}
+    )
+    try:
+        base_path = safe_path_join('.loki', 'memory')
+        if not os.path.exists(base_path):
+            result = json.dumps({"entries": {}, "message": "Memory system not initialized"})
+            _emit_tool_event_async('mem_get', 'complete', result_status='success')
+            return result
+
+        id_list = [i.strip() for i in ids.split(",") if i.strip()]
+        if not id_list:
+            return json.dumps({"entries": {}, "error": "No IDs provided"})
+
+        # Cap at 20 to prevent abuse
+        id_list = id_list[:20]
+
+        try:
+            from memory.sqlite_storage import SQLiteMemoryStorage
+            storage = SQLiteMemoryStorage(base_path)
+        except (ImportError, Exception):
+            from memory.storage import MemoryStorage
+            storage = MemoryStorage(base_path)
+
+        entries = {}
+        for mem_id in id_list:
+            mem_id = mem_id.strip()
+            # Try each collection
+            data = storage.load_episode(mem_id)
+            if data:
+                data["_type"] = "episode"
+                entries[mem_id] = data
+                continue
+
+            data = storage.load_pattern(mem_id)
+            if data:
+                data["_type"] = "pattern"
+                entries[mem_id] = data
+                continue
+
+            data = storage.load_skill(mem_id)
+            if data:
+                data["_type"] = "skill"
+                entries[mem_id] = data
+                continue
+
+            entries[mem_id] = None  # Not found
+
+        result = json.dumps({
+            "entries": entries,
+            "found": sum(1 for v in entries.values() if v is not None),
+            "total_requested": len(id_list),
+        }, default=str)
+        _emit_tool_event_async('mem_get', 'complete', result_status='success')
+        return result
+    except PathTraversalError as e:
+        logger.error(f"Path traversal attempt blocked: {e}")
+        _emit_tool_event_async('mem_get', 'complete', result_status='error', error='Access denied')
+        return json.dumps({"error": "Access denied", "entries": {}})
+    except Exception as e:
+        logger.error(f"mem_get failed: {e}")
+        _emit_tool_event_async('mem_get', 'complete', result_status='error', error=str(e))
+        return json.dumps({"error": str(e), "entries": {}})
+
+
+# ============================================================
 # PROMPTS - Pre-built prompt templates
 # ============================================================
 

@@ -7267,6 +7267,83 @@ except Exception as e:
 PYEOF
 }
 
+# Automatic episode capture with enriched context (v6.15.0)
+# Captures git changes, files modified, and RARV phase automatically
+# after every iteration -- no manual invocation needed.
+auto_capture_episode() {
+    local iteration="$1"
+    local exit_code="$2"
+    local rarv_phase="$3"
+    local goal="$4"
+    local duration="$5"
+    local log_file="$6"
+    local target_dir="${TARGET_DIR:-.}"
+
+    # Only capture if memory system exists
+    if [ ! -d "$target_dir/.loki/memory" ]; then
+        return
+    fi
+
+    # Collect git context: files modified in this iteration
+    local files_modified=""
+    files_modified=$(cd "$target_dir" && git diff --name-only HEAD 2>/dev/null | head -20 | tr '\n' '|' || true)
+
+    # Collect last git commit if any
+    local git_commit=""
+    git_commit=$(cd "$target_dir" && git rev-parse --short HEAD 2>/dev/null || true)
+
+    # Determine outcome
+    local outcome="success"
+    if [ "$exit_code" -ne 0 ]; then
+        outcome="failure"
+    fi
+
+    # Pass all context via environment variables (prevents injection)
+    _LOKI_PROJECT_DIR="$PROJECT_DIR" _LOKI_TARGET_DIR="$target_dir" \
+    _LOKI_ITERATION="$iteration" _LOKI_EXIT_CODE="$exit_code" \
+    _LOKI_RARV_PHASE="$rarv_phase" _LOKI_GOAL="$goal" \
+    _LOKI_DURATION="$duration" _LOKI_OUTCOME="$outcome" \
+    _LOKI_FILES_MODIFIED="$files_modified" _LOKI_GIT_COMMIT="$git_commit" \
+    python3 << 'PYEOF' 2>/dev/null || true
+import sys
+import os
+
+project_dir = os.environ.get('_LOKI_PROJECT_DIR', '')
+target_dir = os.environ.get('_LOKI_TARGET_DIR', '.')
+iteration = os.environ.get('_LOKI_ITERATION', '0')
+rarv_phase = os.environ.get('_LOKI_RARV_PHASE', 'iteration')
+goal = os.environ.get('_LOKI_GOAL', '')
+duration = os.environ.get('_LOKI_DURATION', '0')
+outcome = os.environ.get('_LOKI_OUTCOME', 'success')
+files_modified = os.environ.get('_LOKI_FILES_MODIFIED', '')
+git_commit = os.environ.get('_LOKI_GIT_COMMIT', '')
+
+sys.path.insert(0, project_dir)
+try:
+    from memory.engine import MemoryEngine, create_storage
+    from memory.schemas import EpisodeTrace
+
+    storage = create_storage(f'{target_dir}/.loki/memory')
+    engine = MemoryEngine(storage=storage, base_path=f'{target_dir}/.loki/memory')
+    engine.initialize()
+
+    trace = EpisodeTrace.create(
+        task_id=f'iteration-{iteration}',
+        agent='loki-orchestrator',
+        phase=rarv_phase.upper() if rarv_phase else 'ACT',
+        goal=goal,
+    )
+    trace.outcome = outcome
+    trace.duration_seconds = int(duration) if duration.isdigit() else 0
+    trace.git_commit = git_commit if git_commit else None
+    trace.files_modified = [f for f in files_modified.split('|') if f] if files_modified else []
+
+    engine.store_episode(trace)
+except Exception:
+    pass  # Silently fail -- memory capture must never break the loop
+PYEOF
+}
+
 # Run memory consolidation pipeline
 run_memory_consolidation() {
     local target_dir="${TARGET_DIR:-.}"
@@ -8614,13 +8691,15 @@ if __name__ == "__main__":
             fi
         fi
 
+        # Automatic episode capture after every RARV iteration (v6.15.0)
+        # Captures RARV phase, git changes, and iteration context automatically
+        auto_capture_episode "$ITERATION_COUNT" "$exit_code" "${rarv_phase:-iteration}" \
+            "${prd_path:-codebase-analysis}" "$duration" "$log_file"
+
         # Check for success - ONLY stop on explicit completion promise
         # There's never a "complete" product - always improvements, bugs, features
         if [ $exit_code -eq 0 ]; then
-            # Store episode trace for successful iteration
-            local task_id="iteration-$ITERATION_COUNT"
-            local goal_desc="${prd_path:-codebase-analysis}"
-            store_episode_trace "$task_id" "success" "iteration" "$goal_desc" "$duration"
+            # Episode trace already captured by auto_capture_episode above (v6.15.0)
 
             # Track iteration for Completion Council convergence detection
             if type council_track_iteration &>/dev/null; then
@@ -8673,10 +8752,7 @@ if __name__ == "__main__":
         fi
 
         # Only apply retry logic for ERRORS (non-zero exit code)
-        # Store episode trace for failed iteration (useful for learning from failures)
-        local task_id="iteration-$ITERATION_COUNT"
-        local goal_desc="${prd_path:-codebase-analysis}"
-        store_episode_trace "$task_id" "failure" "iteration" "$goal_desc" "$duration"
+        # Episode trace already captured by auto_capture_episode above (v6.15.0)
 
         # Checkpoint failed iteration state (v5.57.0)
         create_checkpoint "iteration-${ITERATION_COUNT} failed (exit=$exit_code)" "iteration-${ITERATION_COUNT}-fail"
