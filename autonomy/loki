@@ -419,6 +419,7 @@ show_help() {
     echo "  checkpoint|cp    Save/restore session checkpoints"
     echo "  projects         Multi-project registry management"
     echo "  audit [cmd]      Agent audit log and quality scanning (log|scan)"
+    echo "  review [dir]     Run quality gates on any project (standalone, no AI needed)"
     echo "  optimize         Optimize prompts based on session history"
     echo "  enterprise       Enterprise feature management (tokens, OIDC)"
     echo "  metrics          Prometheus/OpenMetrics metrics from dashboard"
@@ -7848,6 +7849,9 @@ main() {
         audit)
             cmd_audit "$@"
             ;;
+        review)
+            cmd_review "$@"
+            ;;
         optimize)
             cmd_optimize "$@"
             ;;
@@ -7893,6 +7897,223 @@ main() {
             exit 1
             ;;
     esac
+}
+
+# Standalone project review - run quality gates on any codebase (v6.14.0)
+cmd_review() {
+    local target_dir="."
+    local json_output=""
+    local verbose=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_output="true"; shift ;;
+            --verbose|-v) verbose="true"; shift ;;
+            --help|-h)
+                echo -e "${BOLD}loki review${NC} - Run quality gates on any project (standalone)"
+                echo ""
+                echo "Usage: loki review [directory] [options]"
+                echo ""
+                echo "Arguments:"
+                echo "  directory       Path to project (default: current directory)"
+                echo ""
+                echo "Options:"
+                echo "  --json          Machine-readable JSON output"
+                echo "  --verbose, -v   Show detailed output per gate"
+                echo "  --help, -h      Show this help"
+                echo ""
+                echo "Gates: project-type, lint, tests, security, dependencies, structure"
+                echo "Exit code: 0 if all pass, 1 if any fail"
+                return 0
+                ;;
+            -*) echo -e "${RED}Unknown option: $1${NC}"; return 1 ;;
+            *) target_dir="$1"; shift ;;
+        esac
+    done
+
+    # Resolve and validate directory
+    target_dir="$(cd "$target_dir" 2>/dev/null && pwd)" || {
+        echo -e "${RED}Error: Directory not found: $target_dir${NC}"; return 1
+    }
+
+    local project_type="unknown"
+    local results=()  # gate:status pairs
+    local total_pass=0 total_warn=0 total_fail=0
+    local gate_details=()
+
+    # Helper: record gate result
+    _review_gate() {
+        local gate="$1" status="$2" detail="${3:-}"
+        results+=("$gate:$status")
+        gate_details+=("$gate:$detail")
+        case "$status" in
+            PASS) total_pass=$((total_pass + 1)) ;;
+            WARN) total_warn=$((total_warn + 1)) ;;
+            FAIL) total_fail=$((total_fail + 1)) ;;
+        esac
+    }
+
+    # Gate 1: Detect project type
+    if [ -f "$target_dir/package.json" ]; then
+        project_type="node"
+    elif [ -f "$target_dir/pyproject.toml" ] || [ -f "$target_dir/setup.py" ] || [ -f "$target_dir/requirements.txt" ]; then
+        project_type="python"
+    elif [ -f "$target_dir/go.mod" ]; then
+        project_type="go"
+    elif [ -f "$target_dir/Cargo.toml" ]; then
+        project_type="rust"
+    fi
+    if [ "$project_type" != "unknown" ]; then
+        _review_gate "project-type" "PASS" "Detected: $project_type"
+    else
+        _review_gate "project-type" "WARN" "Could not detect project type"
+    fi
+
+    # Gate 2: Lint check
+    local lint_output="" lint_status="PASS"
+    case "$project_type" in
+        node)
+            if [ -f "$target_dir/.eslintrc.js" ] || [ -f "$target_dir/.eslintrc.json" ] || [ -f "$target_dir/.eslintrc.yml" ] || [ -f "$target_dir/eslint.config.js" ] || [ -f "$target_dir/eslint.config.mjs" ]; then
+                lint_output=$(cd "$target_dir" && npx eslint . --max-warnings=0 2>&1) || lint_status="FAIL"
+            else
+                lint_output="No ESLint config found"; lint_status="WARN"
+            fi ;;
+        python)
+            if command -v ruff &>/dev/null; then
+                lint_output=$(cd "$target_dir" && ruff check . 2>&1) || lint_status="FAIL"
+            elif command -v pylint &>/dev/null; then
+                lint_output=$(cd "$target_dir" && pylint --recursive=y . 2>&1) || lint_status="FAIL"
+            else
+                lint_output="No linter available (install ruff or pylint)"; lint_status="WARN"
+            fi ;;
+        go)
+            if command -v golangci-lint &>/dev/null; then
+                lint_output=$(cd "$target_dir" && golangci-lint run 2>&1) || lint_status="FAIL"
+            else
+                lint_output=$(cd "$target_dir" && go vet ./... 2>&1) || lint_status="FAIL"
+            fi ;;
+        rust)
+            lint_output=$(cd "$target_dir" && cargo clippy -- -D warnings 2>&1) || lint_status="FAIL"
+            ;;
+        *) lint_output="Skipped (unknown project type)"; lint_status="WARN" ;;
+    esac
+    _review_gate "lint" "$lint_status" "$lint_output"
+
+    # Gate 3: Tests
+    local test_output="" test_status="PASS"
+    case "$project_type" in
+        node)
+            if grep -q '"test"' "$target_dir/package.json" 2>/dev/null; then
+                test_output=$(cd "$target_dir" && npm test 2>&1) || test_status="FAIL"
+            else
+                test_output="No test script in package.json"; test_status="WARN"
+            fi ;;
+        python)
+            if command -v pytest &>/dev/null; then
+                test_output=$(cd "$target_dir" && pytest --tb=short 2>&1) || test_status="FAIL"
+            else
+                test_output="pytest not available"; test_status="WARN"
+            fi ;;
+        go) test_output=$(cd "$target_dir" && go test ./... 2>&1) || test_status="FAIL" ;;
+        rust) test_output=$(cd "$target_dir" && cargo test 2>&1) || test_status="FAIL" ;;
+        *) test_output="Skipped (unknown project type)"; test_status="WARN" ;;
+    esac
+    _review_gate "tests" "$test_status" "$test_output"
+
+    # Gate 4: Security - grep for hardcoded secrets
+    local secret_output="" secret_status="PASS"
+    local secret_patterns='(API_KEY|SECRET_KEY|PASSWORD|TOKEN|PRIVATE_KEY)\s*[=:]\s*["\x27][A-Za-z0-9+/=_-]{8,}'
+    secret_output=$(grep -rEn "$secret_patterns" "$target_dir" \
+        --include="*.js" --include="*.ts" --include="*.py" --include="*.go" --include="*.rs" \
+        --include="*.jsx" --include="*.tsx" --include="*.java" --include="*.rb" \
+        --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor \
+        --exclude-dir=__pycache__ --exclude-dir=.venv --exclude-dir=target 2>/dev/null) || true
+    if [ -n "$secret_output" ]; then
+        secret_status="FAIL"
+        secret_output="Potential hardcoded secrets found:
+$secret_output"
+    else
+        secret_output="No hardcoded secrets detected"
+    fi
+    _review_gate "security" "$secret_status" "$secret_output"
+
+    # Gate 5: Dependency audit
+    local dep_output="" dep_status="PASS"
+    case "$project_type" in
+        node)
+            if [ -f "$target_dir/package-lock.json" ] || [ -f "$target_dir/yarn.lock" ]; then
+                dep_output=$(cd "$target_dir" && npm audit --production 2>&1) || dep_status="WARN"
+            else
+                dep_output="No lockfile found"; dep_status="WARN"
+            fi ;;
+        python)
+            if command -v pip-audit &>/dev/null; then
+                dep_output=$(cd "$target_dir" && pip-audit 2>&1) || dep_status="WARN"
+            else
+                dep_output="pip-audit not available"; dep_status="WARN"
+            fi ;;
+        *) dep_output="No dependency audit available for $project_type"; dep_status="WARN" ;;
+    esac
+    _review_gate "dependencies" "$dep_status" "$dep_output"
+
+    # Gate 6: Structure check
+    local struct_output="" struct_status="PASS" struct_issues=()
+    [ ! -f "$target_dir/README.md" ] && [ ! -f "$target_dir/README.rst" ] && [ ! -f "$target_dir/README" ] && struct_issues+=("Missing README")
+    local file_count
+    file_count=$(find "$target_dir" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/vendor/*' -not -path '*/__pycache__/*' -not -path '*/.venv/*' -not -path '*/target/*' 2>/dev/null | wc -l | tr -d ' ')
+    [ "$file_count" -gt 5000 ] && struct_issues+=("Large project: $file_count files")
+    local huge_files
+    huge_files=$(find "$target_dir" -type f -size +1M -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/vendor/*' -not -path '*/target/*' 2>/dev/null | head -5)
+    [ -n "$huge_files" ] && struct_issues+=("Files >1MB found: $(echo "$huge_files" | wc -l | tr -d ' ')")
+    if [ ${#struct_issues[@]} -gt 0 ]; then
+        struct_status="WARN"
+        struct_output=$(printf '%s\n' "${struct_issues[@]}")
+    else
+        struct_output="README present, $file_count files, no oversized files"
+    fi
+    _review_gate "structure" "$struct_status" "$struct_output"
+
+    # Output results
+    if [ -n "$json_output" ]; then
+        local gates_json="["
+        local first="true"
+        for r in "${results[@]}"; do
+            local gate="${r%%:*}" status="${r#*:}"
+            [ "$first" = "true" ] && first="" || gates_json+=","
+            gates_json+="{\"gate\":\"$gate\",\"status\":\"$status\"}"
+        done
+        gates_json+="]"
+        printf '{"directory":"%s","project_type":"%s","pass":%d,"warn":%d,"fail":%d,"gates":%s}\n' \
+            "$target_dir" "$project_type" "$total_pass" "$total_warn" "$total_fail" "$gates_json"
+    else
+        echo -e "${BOLD}Loki Review: $target_dir${NC}"
+        echo -e "Project type: ${CYAN}$project_type${NC}"
+        echo "---"
+        for r in "${results[@]}"; do
+            local gate="${r%%:*}" status="${r#*:}"
+            case "$status" in
+                PASS) echo -e "  ${GREEN}[PASS]${NC} $gate" ;;
+                WARN) echo -e "  ${YELLOW}[WARN]${NC} $gate" ;;
+                FAIL) echo -e "  ${RED}[FAIL]${NC} $gate" ;;
+            esac
+        done
+        echo "---"
+        echo -e "Results: ${GREEN}$total_pass passed${NC}, ${YELLOW}$total_warn warnings${NC}, ${RED}$total_fail failed${NC}"
+
+        if [ -n "$verbose" ]; then
+            echo ""
+            echo -e "${BOLD}Details:${NC}"
+            for d in "${gate_details[@]}"; do
+                local gate="${d%%:*}" detail="${d#*:}"
+                echo -e "\n${CYAN}[$gate]${NC}"
+                echo "$detail" | head -30
+            done
+        fi
+    fi
+
+    # Exit code: 1 if any failures
+    [ "$total_fail" -gt 0 ] && return 1
+    return 0
 }
 
 # Worktree management (v6.7.0)

@@ -5,6 +5,12 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v6.14.0 - Standalone Quality Review
+
+### Features
+- **`loki review <dir>` command**: Standalone quality gate runner for any project directory. Runs 6 gates: project-type detection, lint, tests, security, dependencies, and structure. Supports `--json` and `--verbose` flags. No AI provider needed. Works as a CI/CD step.
+- **GitHub Action (`review`)**: New reusable action at `.github/actions/review/action.yml` -- enables `loki review` in any GitHub Actions workflow.
+
 ## v6.13.1 - PRD Template Quality Fixes
 
 ### Bug Fixes
