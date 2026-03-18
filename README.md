@@ -10,7 +10,7 @@
 [![Autonomi](https://img.shields.io/badge/Autonomi-autonomi.dev-5B4EEA)](https://www.autonomi.dev/)
 [![Docker Pulls](https://img.shields.io/docker/pulls/asklokesh/loki-mode)](https://hub.docker.com/r/asklokesh/loki-mode)
 
-**Current Version: v6.32.0**
+**Current Version: v6.33.0**
 
 ### Traction
 

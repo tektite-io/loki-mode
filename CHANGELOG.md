@@ -1,3 +1,21 @@
+## v6.33.0 (2026-03-18)
+
+### New Features
+- `loki watch [prd-path]` command: auto-rerun on PRD file changes
+  - Monitors a PRD file and automatically re-runs `loki start` when the file is saved
+  - Enables a tight edit-PRD-see-results development loop
+  - Auto-detects PRD files: prd.md, PRD.md, or first *.md in current directory
+  - Native filesystem watching: fswatch (macOS), inotifywait (Linux), stat polling fallback
+  - `--once` flag: run once immediately then exit
+  - `--interval N` flag: poll interval in seconds for fallback watcher (default: 2)
+  - `--no-auto-start` flag: watch but do not auto-start, just print change timestamps
+  - `--debounce N` flag: wait N seconds after change before triggering (default: 3)
+  - Graceful shutdown: Ctrl+C stops any running loki session and exits cleanly
+  - Shell completions updated for bash
+
+### Tests
+- New test suite: tests/test-watch-command.sh (12 tests)
+
 ## v6.32.1 (2026-03-18)
 
 ### Fixed
