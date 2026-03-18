@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.27.0] - 2026-03-18
 
+### Added
+- `loki report` command -- session report generator with text, markdown, and HTML output formats
+- Report reads .loki/ session data (autonomy state, quality gates, agents, queue, council, events)
+- Flags: `--format text|markdown|html`, `--output <file>`, `--no-gates`, `--no-agents`, `--no-timeline`
+- HTML output uses dark theme with inline CSS (no external deps), highlights pass/fail status
+- Graceful empty state when .loki/ directory has no data
+- 10 tests in tests/test-report-command.sh
+
 ### Changed
 - Separated Purple Lab (web-app/) from Loki Dashboard (dashboard/) -- they are now fully independent products
 - Dashboard server (port 57374) no longer serves web-app files; only serves dashboard-ui/dist/ and dashboard/static/

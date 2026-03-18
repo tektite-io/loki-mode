@@ -441,6 +441,7 @@ show_help() {
     echo "  plan <PRD>       Dry-run PRD analysis: complexity, cost, and execution plan"
     echo "  ci [opts]        CI/CD quality gate integration (--pr, --report, --github-comment)"
     echo "  test [opts]      AI-powered test generation (--file, --dir, --changed, --dry-run)"
+    echo "  report [opts]    Session report generator (--format text|markdown|html, --output)"
     echo "  version          Show version"
     echo "  help             Show this help"
     echo ""
@@ -9434,6 +9435,9 @@ main() {
         test)
             cmd_test "$@"
             ;;
+        report)
+            cmd_report "$@"
+            ;;
         version|--version|-v)
             cmd_version
             ;;
@@ -16520,6 +16524,594 @@ _test_gen_bats() {
         echo "}"
         echo ""
     done
+}
+
+# Session report generator (v6.27.0)
+cmd_report() {
+    local session_id=""
+    local format="text"
+    local output_file=""
+    local include_gates=true
+    local include_agents=true
+    local include_timeline=true
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                echo -e "${BOLD}loki report${NC} - Session report generator (v6.27.0)"
+                echo ""
+                echo "Usage: loki report [options]"
+                echo ""
+                echo "Generates a readable session report from .loki/ data."
+                echo ""
+                echo "Options:"
+                echo "  --session <id>       Report for specific session (default: latest)"
+                echo "  --format <fmt>       Output format: text, markdown, html (default: text)"
+                echo "  --output <file>      Save to file (default: stdout)"
+                echo "  --no-gates           Exclude quality gate details"
+                echo "  --no-agents          Exclude agent activity"
+                echo "  --no-timeline        Exclude event timeline"
+                echo "  --help, -h           Show this help"
+                echo ""
+                echo "Examples:"
+                echo "  loki report                            # Text report to stdout"
+                echo "  loki report --format markdown          # Markdown report"
+                echo "  loki report --format html -o report.html  # HTML to file"
+                echo "  loki report --no-gates --no-agents     # Minimal report"
+                exit 0
+                ;;
+            --session) session_id="${2:-}"; shift 2 ;;
+            --session=*) session_id="${1#*=}"; shift ;;
+            --format) format="${2:-text}"; shift 2 ;;
+            --format=*) format="${1#*=}"; shift ;;
+            --output|-o) output_file="${2:-}"; shift 2 ;;
+            --output=*) output_file="${1#*=}"; shift ;;
+            --no-gates) include_gates=false; shift ;;
+            --no-agents) include_agents=false; shift ;;
+            --no-timeline) include_timeline=false; shift ;;
+            --include-gates) include_gates=true; shift ;;
+            --include-agents) include_agents=true; shift ;;
+            --include-timeline) include_timeline=true; shift ;;
+            *) echo -e "${RED}Unknown option: $1${NC}"; echo "Run 'loki report --help' for usage."; exit 1 ;;
+        esac
+    done
+
+    case "$format" in
+        text|markdown|md|html) ;;
+        *) echo -e "${RED}Unknown format: $format${NC}"; echo "Supported: text, markdown, html"; exit 1 ;;
+    esac
+
+    # Normalize md -> markdown
+    [ "$format" = "md" ] && format="markdown"
+
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${RED}python3 is required for report generation${NC}"
+        exit 1
+    fi
+
+    local report_output
+    report_output=$(LOKI_DIR="${LOKI_DIR:-.loki}" \
+        REPORT_FORMAT="$format" \
+        REPORT_SESSION="$session_id" \
+        REPORT_GATES="$include_gates" \
+        REPORT_AGENTS="$include_agents" \
+        REPORT_TIMELINE="$include_timeline" \
+        python3 << 'REPORT_SCRIPT'
+import json
+import os
+import glob
+from datetime import datetime, timezone
+
+loki_dir = os.environ.get("LOKI_DIR", ".loki")
+fmt = os.environ.get("REPORT_FORMAT", "text")
+session_id = os.environ.get("REPORT_SESSION", "")
+show_gates = os.environ.get("REPORT_GATES", "true") == "true"
+show_agents = os.environ.get("REPORT_AGENTS", "true") == "true"
+show_timeline = os.environ.get("REPORT_TIMELINE", "true") == "true"
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except:
+        return None
+
+def load_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except:
+        return None
+
+def format_duration(start_str, end_str=None):
+    try:
+        start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        if end_str:
+            end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        else:
+            end = datetime.now(timezone.utc)
+        delta = end - start
+        hours, remainder = divmod(int(delta.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            return f"{minutes}m {seconds}s"
+        else:
+            return f"{seconds}s"
+    except:
+        return "unknown"
+
+# --- Gather data ---
+
+# Session/autonomy state
+autonomy = load_json(os.path.join(loki_dir, "autonomy-state.json")) or {}
+orchestrator = load_json(os.path.join(loki_dir, "state", "orchestrator.json")) or {}
+metrics = load_json(os.path.join(loki_dir, "state", "metrics.json")) or {}
+config = load_json(os.path.join(loki_dir, "config.json")) or {}
+dashboard_state = load_json(os.path.join(loki_dir, "dashboard-state.json")) or {}
+
+# Project info
+project_name = config.get("project_name", "")
+if not project_name:
+    # Try to get from git or cwd
+    try:
+        project_name = os.path.basename(os.getcwd())
+    except:
+        project_name = "Unknown Project"
+
+# Timestamps
+started_at = orchestrator.get("startedAt", autonomy.get("lastRun", ""))
+status = autonomy.get("status", orchestrator.get("currentPhase", "unknown"))
+version = orchestrator.get("version", "")
+current_phase = orchestrator.get("currentPhase", "unknown")
+retry_count = autonomy.get("retryCount", 0)
+
+# Provider
+provider_file = os.path.join(loki_dir, "state", "provider")
+provider = "unknown"
+if os.path.isdir(provider_file):
+    for pf in glob.glob(os.path.join(provider_file, "*.json")):
+        pd = load_json(pf)
+        if pd and pd.get("name"):
+            provider = pd["name"]
+            break
+elif os.path.isfile(provider_file):
+    provider = load_text(provider_file) or "unknown"
+
+# PRD
+prd_path = autonomy.get("prdPath", "")
+prd_summary = ""
+if prd_path and os.path.exists(prd_path):
+    prd_text = load_text(prd_path) or ""
+    # Extract first non-empty, non-heading line as summary
+    for line in prd_text.split("\n"):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and len(stripped) > 20:
+            prd_summary = stripped[:200]
+            break
+
+# Quality gates
+gate_failures = load_json(os.path.join(loki_dir, "quality", "gate-failure-count.json")) or {}
+test_results = load_json(os.path.join(loki_dir, "quality", "test-results.json")) or {}
+static_analysis = load_json(os.path.join(loki_dir, "quality", "static-analysis.json")) or {}
+gate_failure_text = load_text(os.path.join(loki_dir, "quality", "gate-failures.txt")) or ""
+
+# Reviews
+reviews_dir = os.path.join(loki_dir, "quality", "reviews")
+review_files = []
+if os.path.isdir(reviews_dir):
+    review_files = sorted(glob.glob(os.path.join(reviews_dir, "*.json")), reverse=True)[:5]
+
+# Agents
+agents = load_json(os.path.join(loki_dir, "state", "agents.json")) or []
+if isinstance(agents, dict):
+    agents = list(agents.values()) if agents else []
+
+# Agent audit log
+audit_log = os.path.join(loki_dir, "logs", "agent-audit.jsonl")
+audit_entries = []
+if os.path.exists(audit_log):
+    try:
+        with open(audit_log) as f:
+            for line in f:
+                try:
+                    audit_entries.append(json.loads(line.strip()))
+                except:
+                    pass
+    except:
+        pass
+
+# Queue stats
+queue_completed = load_json(os.path.join(loki_dir, "queue", "completed.json")) or []
+queue_failed = load_json(os.path.join(loki_dir, "queue", "failed.json")) or []
+queue_pending = load_json(os.path.join(loki_dir, "queue", "pending.json")) or []
+queue_in_progress = load_json(os.path.join(loki_dir, "queue", "in-progress.json")) or []
+
+# Ensure lists
+if isinstance(queue_completed, dict): queue_completed = queue_completed.get("tasks", [])
+if isinstance(queue_failed, dict): queue_failed = queue_failed.get("tasks", [])
+if isinstance(queue_pending, dict): queue_pending = queue_pending.get("tasks", [])
+if isinstance(queue_in_progress, dict): queue_in_progress = queue_in_progress.get("tasks", [])
+
+# Council
+council_state = load_json(os.path.join(loki_dir, "council", "state.json")) or {}
+
+# Events
+events_file = os.path.join(loki_dir, "events.jsonl")
+events = []
+if os.path.exists(events_file):
+    try:
+        with open(events_file) as f:
+            for line in f:
+                try:
+                    events.append(json.loads(line.strip()))
+                except:
+                    pass
+    except:
+        pass
+
+# Git diff stats (run git command)
+git_stats = ""
+try:
+    import subprocess
+    result = subprocess.run(
+        ["git", "diff", "--stat", "HEAD~1", "HEAD"],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        git_stats = result.stdout.strip()
+except:
+    pass
+
+# --- Build report sections ---
+
+sections = []
+
+# 1. Header
+header_lines = []
+header_lines.append(f"Project: {project_name}")
+if version:
+    header_lines.append(f"Version: {version}")
+header_lines.append(f"Status: {status}")
+if started_at:
+    header_lines.append(f"Started: {started_at}")
+    header_lines.append(f"Duration: {format_duration(started_at)}")
+if provider != "unknown":
+    header_lines.append(f"Provider: {provider}")
+if current_phase != "unknown":
+    header_lines.append(f"Phase: {current_phase}")
+sections.append(("Session Overview", header_lines))
+
+# 2. Executive Summary
+summary_lines = []
+tasks_done = len(queue_completed) if isinstance(queue_completed, list) else 0
+tasks_failed_count = len(queue_failed) if isinstance(queue_failed, list) else 0
+tasks_total = tasks_done + tasks_failed_count + (len(queue_pending) if isinstance(queue_pending, list) else 0) + (len(queue_in_progress) if isinstance(queue_in_progress, list) else 0)
+
+if tasks_total > 0:
+    summary_lines.append(f"Tasks: {tasks_done} completed, {tasks_failed_count} failed, {tasks_total} total")
+else:
+    summary_lines.append("No task queue data available")
+
+summary_lines.append(f"Iterations: {retry_count}")
+
+mc = metrics.get("tasks_completed", 0)
+mf = metrics.get("tasks_failed", 0)
+if mc or mf:
+    summary_lines.append(f"Metrics: {mc} tasks completed, {mf} failed")
+
+loc_added = metrics.get("lines_of_code_added", 0)
+loc_test = metrics.get("lines_of_test_added", 0)
+if loc_added or loc_test:
+    summary_lines.append(f"Lines added: {loc_added} code, {loc_test} test")
+
+council_votes = council_state.get("total_votes", 0)
+if council_votes:
+    approve = council_state.get("approve_votes", 0)
+    reject = council_state.get("reject_votes", 0)
+    summary_lines.append(f"Council: {council_votes} votes ({approve} approve, {reject} reject)")
+
+if prd_summary:
+    summary_lines.append(f"PRD: {prd_summary}")
+
+sections.append(("Executive Summary", summary_lines))
+
+# 3. RARV Cycles
+rarv_lines = []
+rarv_lines.append(f"Total iterations: {retry_count}")
+rarv_lines.append(f"Max retries: {autonomy.get('maxRetries', 'N/A')}")
+rarv_lines.append(f"Current phase: {current_phase}")
+if autonomy.get("lastExitCode") is not None:
+    rarv_lines.append(f"Last exit code: {autonomy.get('lastExitCode')}")
+sections.append(("RARV Cycles", rarv_lines))
+
+# 4. Agent Activity
+if show_agents:
+    agent_lines = []
+    if agents:
+        for a in agents:
+            if isinstance(a, dict):
+                aid = a.get("agent_id", a.get("agent_type", "unknown"))
+                atype = a.get("agent_type", "")
+                astatus = a.get("status", "unknown")
+                model = a.get("model", "")
+                completed = a.get("tasks_completed", [])
+                task_count = len(completed) if isinstance(completed, list) else completed
+                desc = f"{aid}"
+                if atype:
+                    desc += f" ({atype})"
+                if model:
+                    desc += f" [{model}]"
+                desc += f" - {astatus}"
+                if task_count:
+                    desc += f", {task_count} tasks done"
+                agent_lines.append(desc)
+    else:
+        agent_lines.append("No agent data recorded")
+
+    if audit_entries:
+        # Summarize by action type
+        action_counts = {}
+        for entry in audit_entries:
+            action = entry.get("action", "unknown")
+            action_counts[action] = action_counts.get(action, 0) + 1
+        agent_lines.append("")
+        agent_lines.append(f"Audit log: {len(audit_entries)} entries")
+        for action, count in sorted(action_counts.items(), key=lambda x: -x[1])[:10]:
+            agent_lines.append(f"  {action}: {count}")
+
+    sections.append(("Agent Activity", agent_lines))
+
+# 5. Quality Gates
+if show_gates:
+    gate_lines = []
+
+    gate_names = [
+        "static_analysis", "test_coverage", "code_review",
+        "security_scan", "lint", "type_check",
+        "integration_test", "e2e_test", "performance"
+    ]
+
+    if gate_failures:
+        for gate in gate_names:
+            failures = gate_failures.get(gate, 0)
+            if failures > 0:
+                gate_lines.append(f"  {gate}: {failures} failure(s)")
+            else:
+                gate_lines.append(f"  {gate}: PASS")
+        if not any(gate_failures.get(g, 0) for g in gate_names):
+            # Check if we have any non-standard gates
+            for g, c in gate_failures.items():
+                if g not in gate_names:
+                    gate_lines.append(f"  {g}: {c} failure(s)")
+    else:
+        gate_lines.append("No quality gate data recorded")
+
+    if test_results:
+        gate_lines.append("")
+        runner = test_results.get("runner", "unknown")
+        passed = test_results.get("pass", "unknown")
+        gate_lines.append(f"Test runner: {runner}")
+        gate_lines.append(f"Tests passed: {passed}")
+        if test_results.get("summary"):
+            gate_lines.append(f"Summary: {test_results['summary'][:200]}")
+
+    if gate_failure_text:
+        gate_lines.append("")
+        gate_lines.append("Gate failure details:")
+        for line in gate_failure_text.split("\n")[:10]:
+            gate_lines.append(f"  {line}")
+
+    sections.append(("Quality Gates", gate_lines))
+
+# 6. What Changed
+change_lines = []
+if git_stats:
+    for line in git_stats.split("\n"):
+        change_lines.append(line)
+else:
+    change_lines.append("No git diff data available (run from project root)")
+sections.append(("What Changed", change_lines))
+
+# 7. Tests
+test_lines = []
+if test_results:
+    test_lines.append(f"Runner: {test_results.get('runner', 'unknown')}")
+    test_lines.append(f"Passed: {test_results.get('pass', 'unknown')}")
+    test_lines.append(f"Timestamp: {test_results.get('timestamp', 'unknown')}")
+    if test_results.get("min_coverage"):
+        test_lines.append(f"Min coverage target: {test_results['min_coverage']}%")
+else:
+    test_lines.append("No test result data recorded")
+sections.append(("Tests", test_lines))
+
+# 8. Key Decisions (from events and council)
+decision_lines = []
+verdicts = council_state.get("verdicts", [])
+if verdicts:
+    for v in verdicts[-10:]:
+        result = v.get("result", "UNKNOWN")
+        iteration = v.get("iteration", "?")
+        ts = v.get("timestamp", "")
+        approve = v.get("approve", 0)
+        reject = v.get("reject", 0)
+        decision_lines.append(f"Iteration {iteration}: {result} ({approve} approve / {reject} reject) {ts}")
+
+stagnation = council_state.get("consecutive_no_change", 0)
+if stagnation > 0:
+    decision_lines.append(f"Stagnation streak: {stagnation} iterations with no change")
+
+done_signals = council_state.get("done_signals", 0)
+if done_signals > 0:
+    decision_lines.append(f"Done signals detected: {done_signals}")
+
+if not decision_lines:
+    decision_lines.append("No key decisions recorded")
+sections.append(("Key Decisions", decision_lines))
+
+# 9. Timeline (from events)
+if show_timeline and events:
+    timeline_lines = []
+    for evt in events[-20:]:
+        ts = evt.get("timestamp", evt.get("ts", ""))
+        etype = evt.get("type", evt.get("event", "unknown"))
+        data = evt.get("data", evt.get("payload", {}))
+        summary = ""
+        if isinstance(data, dict):
+            summary = data.get("message", data.get("description", json.dumps(data)[:80]))
+        elif isinstance(data, str):
+            summary = data[:80]
+        if ts:
+            timeline_lines.append(f"[{ts}] {etype}: {summary}")
+        else:
+            timeline_lines.append(f"{etype}: {summary}")
+    if timeline_lines:
+        sections.append(("Timeline", timeline_lines))
+
+# --- Render ---
+
+def render_text(sections):
+    lines = []
+    width = 72
+    lines.append("=" * width)
+    lines.append("  LOKI MODE SESSION REPORT")
+    lines.append("=" * width)
+    lines.append("")
+    for title, content in sections:
+        lines.append(f"--- {title} ---")
+        for line in content:
+            lines.append(f"  {line}")
+        lines.append("")
+    lines.append("-" * width)
+    lines.append(f"  Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append(f"  Loki Mode v{version or 'unknown'}")
+    lines.append("-" * width)
+    return "\n".join(lines)
+
+def render_markdown(sections):
+    lines = []
+    lines.append("# Loki Mode Session Report")
+    lines.append("")
+    for title, content in sections:
+        lines.append(f"## {title}")
+        lines.append("")
+        for line in content:
+            if line.strip() == "":
+                lines.append("")
+            elif line.strip().startswith("  "):
+                lines.append(f"- {line.strip()}")
+            else:
+                lines.append(line)
+        lines.append("")
+    lines.append("---")
+    lines.append(f"*Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} | Loki Mode v{version or 'unknown'}*")
+    return "\n".join(lines)
+
+def render_html(sections):
+    lines = []
+    lines.append("<!DOCTYPE html>")
+    lines.append("<html lang=\"en\">")
+    lines.append("<head>")
+    lines.append("<meta charset=\"UTF-8\">")
+    lines.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")
+    lines.append("<title>Loki Mode Session Report</title>")
+    lines.append("<style>")
+    lines.append("""
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    max-width: 800px;
+    margin: 40px auto;
+    padding: 0 20px;
+    background: #0d1117;
+    color: #c9d1d9;
+    line-height: 1.6;
+}
+h1 {
+    color: #58a6ff;
+    border-bottom: 2px solid #30363d;
+    padding-bottom: 12px;
+}
+h2 {
+    color: #8b949e;
+    font-size: 1.1em;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 32px;
+    border-bottom: 1px solid #21262d;
+    padding-bottom: 8px;
+}
+.section-content {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 12px 0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.9em;
+    white-space: pre-wrap;
+}
+.footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid #30363d;
+    color: #484f58;
+    font-size: 0.85em;
+}
+.pass { color: #3fb950; }
+.fail { color: #f85149; }
+.warn { color: #d29922; }
+""")
+    lines.append("</style>")
+    lines.append("</head>")
+    lines.append("<body>")
+    lines.append("<h1>Loki Mode Session Report</h1>")
+
+    for title, content in sections:
+        lines.append(f"<h2>{_html_escape(title)}</h2>")
+        lines.append("<div class=\"section-content\">")
+        for line in content:
+            escaped = _html_escape(line)
+            # Highlight pass/fail
+            if "PASS" in line:
+                escaped = escaped.replace("PASS", "<span class=\"pass\">PASS</span>")
+            if "failure" in line.lower() or "FAIL" in line.lower() or "failed" in line.lower():
+                escaped = escaped.replace("failure", "<span class=\"fail\">failure</span>")
+                escaped = escaped.replace("FAIL", "<span class=\"fail\">FAIL</span>")
+                escaped = escaped.replace("failed", "<span class=\"fail\">failed</span>")
+                escaped = escaped.replace("Failed", "<span class=\"fail\">Failed</span>")
+            lines.append(escaped)
+        lines.append("</div>")
+
+    lines.append("<div class=\"footer\">")
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    lines.append(f"Generated: {ts} | Loki Mode v{_html_escape(version or 'unknown')}")
+    lines.append("</div>")
+    lines.append("</body>")
+    lines.append("</html>")
+    return "\n".join(lines)
+
+def _html_escape(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+if fmt == "text":
+    print(render_text(sections))
+elif fmt == "markdown":
+    print(render_markdown(sections))
+elif fmt == "html":
+    print(render_html(sections))
+REPORT_SCRIPT
+    ) || {
+        echo -e "${RED}Report generation failed${NC}"
+        exit 1
+    }
+
+    if [ -n "$output_file" ]; then
+        echo "$report_output" > "$output_file"
+        echo -e "${GREEN}Report saved to: $output_file${NC}"
+    else
+        echo "$report_output"
+    fi
 }
 
 main "$@"

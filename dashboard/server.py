@@ -4338,7 +4338,6 @@ PROJECT_ROOT = os.path.dirname(DASHBOARD_DIR)
 # Possible static file locations (in order of preference)
 # Resolves correctly regardless of PYTHONPATH, symlinks, or install method
 STATIC_LOCATIONS = [
-    os.path.join(PROJECT_ROOT, "web-app", "dist"),       # web-app/dist/ (web app SPA)
     os.path.join(DASHBOARD_DIR, "static"),           # dashboard/static/ (production)
     os.path.join(PROJECT_ROOT, "dashboard-ui", "dist"),  # dashboard-ui/dist/ (development)
 ]
@@ -4346,14 +4345,12 @@ STATIC_LOCATIONS = [
 # Add LOKI_SKILL_DIR env var fallback (set by loki CLI and run.sh)
 _skill_dir = os.environ.get("LOKI_SKILL_DIR", "")
 if _skill_dir:
-    STATIC_LOCATIONS.append(os.path.join(_skill_dir, "web-app", "dist"))
     STATIC_LOCATIONS.append(os.path.join(_skill_dir, "dashboard", "static"))
     STATIC_LOCATIONS.append(os.path.join(_skill_dir, "dashboard-ui", "dist"))
 
 # Add ~/.claude/skills/loki-mode fallback (installed skill location)
 _home_skill = os.path.join(os.path.expanduser("~"), ".claude", "skills", "loki-mode")
 if os.path.isdir(_home_skill):
-    STATIC_LOCATIONS.append(os.path.join(_home_skill, "web-app", "dist"))
     STATIC_LOCATIONS.append(os.path.join(_home_skill, "dashboard", "static"))
     STATIC_LOCATIONS.append(os.path.join(_home_skill, "dashboard-ui", "dist"))
 
@@ -4786,7 +4783,7 @@ def start_migration_phase(migration_id: str, request_body: dict):
 
 # ---------------------------------------------------------------------------
 # SPA catch-all: serve index.html for any path not matched by API routes
-# or static asset mounts.  This lets the web-app handle client-side routing.
+# or static asset mounts.  This lets the dashboard UI handle client-side routing.
 # Must be registered LAST so it never shadows an API endpoint.
 # ---------------------------------------------------------------------------
 @app.get("/{full_path:path}", include_in_schema=False)
