@@ -439,6 +439,7 @@ show_help() {
     echo "  onboard [path]   Analyze a repo and generate CLAUDE.md (structure, conventions, commands)"
     echo "  plan <PRD>       Dry-run PRD analysis: complexity, cost, and execution plan"
     echo "  ci [opts]        CI/CD quality gate integration (--pr, --report, --github-comment)"
+    echo "  test [opts]      AI-powered test generation (--file, --dir, --changed, --dry-run)"
     echo "  version          Show version"
     echo "  help             Show this help"
     echo ""
@@ -9197,6 +9198,9 @@ main() {
         ci)
             cmd_ci "$@"
             ;;
+        test)
+            cmd_test "$@"
+            ;;
         version|--version|-v)
             cmd_version
             ;;
@@ -15324,6 +15328,965 @@ for t in tests:
     fi
 
     return "$exit_code"
+}
+
+# AI-powered test generation (v6.24.0)
+cmd_test() {
+    local test_file=""
+    local test_dir=""
+    local test_changed=false
+    local test_coverage=80
+    local test_format=""
+    local test_output=""
+    local test_dry_run=false
+    local test_json=false
+    local test_verbose=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                echo -e "${BOLD}loki test${NC} - AI-powered test generation"
+                echo ""
+                echo "Usage: loki test [options] [file-or-dir]"
+                echo ""
+                echo "Analyzes source files and generates comprehensive test suites."
+                echo "Detects language and framework automatically. Works without API keys."
+                echo ""
+                echo "Sources (default: git-changed files):"
+                echo "  --file <path>        Test a specific file"
+                echo "  --dir <path>         Test all files in a directory"
+                echo "  --changed            Test only git-changed files (default if no source given)"
+                echo "  <file-or-dir>        Positional: auto-detect file or directory"
+                echo ""
+                echo "Options:"
+                echo "  --coverage <n>       Target coverage percentage (default: 80)"
+                echo "  --format <fmt>       Test framework: auto, jest, pytest, vitest, mocha, go-test"
+                echo "  --output <path>      Custom output directory for generated tests"
+                echo "  --dry-run            Preview what tests would be generated without writing"
+                echo "  --json               JSON output"
+                echo "  --verbose            Detailed output"
+                echo "  --help, -h           Show this help"
+                echo ""
+                echo "Supported languages:"
+                echo "  JavaScript/TypeScript  (.js, .ts, .jsx, .tsx)  -> jest, vitest, mocha"
+                echo "  Python                 (.py)                   -> pytest"
+                echo "  Go                     (.go)                   -> go-test"
+                echo "  Rust                   (.rs)                   -> cargo-test"
+                echo "  Java                   (.java)                 -> junit"
+                echo "  Ruby                   (.rb)                   -> rspec"
+                echo "  Shell/Bash             (.sh)                   -> bats"
+                echo ""
+                echo "Exit codes:"
+                echo "  0  Tests generated successfully"
+                echo "  1  No testable files found"
+                echo "  2  Error (invalid arguments, missing paths)"
+                echo ""
+                echo "Examples:"
+                echo "  loki test                           # Generate tests for git-changed files"
+                echo "  loki test --file src/utils.ts       # Test a specific file"
+                echo "  loki test --dir src/lib/            # Test all files in directory"
+                echo "  loki test --changed --format jest   # Changed files, force Jest format"
+                echo "  loki test --dry-run                 # Preview without writing"
+                echo "  loki test --coverage 90             # Target 90% coverage"
+                echo "  loki test --json                    # Machine-readable output"
+                echo "  loki test src/utils.ts              # Positional file argument"
+                return 0
+                ;;
+            --file)
+                shift
+                test_file="${1:-}"
+                if [ -z "$test_file" ]; then
+                    echo -e "${RED}Error: --file requires a path${NC}"
+                    return 2
+                fi
+                shift
+                ;;
+            --dir)
+                shift
+                test_dir="${1:-}"
+                if [ -z "$test_dir" ]; then
+                    echo -e "${RED}Error: --dir requires a path${NC}"
+                    return 2
+                fi
+                shift
+                ;;
+            --changed) test_changed=true; shift ;;
+            --coverage)
+                shift
+                test_coverage="${1:-80}"
+                if ! [[ "$test_coverage" =~ ^[0-9]+$ ]] || [ "$test_coverage" -lt 1 ] || [ "$test_coverage" -gt 100 ]; then
+                    echo -e "${RED}Error: --coverage must be a number between 1 and 100${NC}"
+                    return 2
+                fi
+                shift
+                ;;
+            --format)
+                shift
+                test_format="${1:-}"
+                if [ -z "$test_format" ]; then
+                    echo -e "${RED}Error: --format requires a framework name${NC}"
+                    return 2
+                fi
+                test_format="$(echo "$test_format" | tr '[:upper:]' '[:lower:]')"
+                case "$test_format" in
+                    auto|jest|pytest|vitest|mocha|go-test|cargo-test|junit|rspec|bats) ;;
+                    *) echo -e "${RED}Error: unsupported format '$test_format'. Use: auto, jest, pytest, vitest, mocha, go-test, cargo-test, junit, rspec, bats${NC}"; return 2 ;;
+                esac
+                shift
+                ;;
+            --output)
+                shift
+                test_output="${1:-}"
+                if [ -z "$test_output" ]; then
+                    echo -e "${RED}Error: --output requires a path${NC}"
+                    return 2
+                fi
+                shift
+                ;;
+            --dry-run) test_dry_run=true; shift ;;
+            --json) test_json=true; shift ;;
+            --verbose) test_verbose=true; shift ;;
+            -*)
+                echo -e "${RED}Unknown option: $1${NC}"
+                echo "Run 'loki test --help' for usage."
+                return 2
+                ;;
+            *)
+                # Positional argument: auto-detect file or directory
+                if [ -f "$1" ]; then
+                    test_file="$1"
+                elif [ -d "$1" ]; then
+                    test_dir="$1"
+                else
+                    echo -e "${RED}Error: '$1' is not a file or directory${NC}"
+                    return 2
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Default to --changed if no source specified
+    if [ -z "$test_file" ] && [ -z "$test_dir" ] && [ "$test_changed" = false ]; then
+        test_changed=true
+    fi
+
+    # --- Collect source files ---
+    local -a source_files=()
+
+    if [ -n "$test_file" ]; then
+        if [ ! -f "$test_file" ]; then
+            echo -e "${RED}Error: file not found: $test_file${NC}"
+            return 2
+        fi
+        source_files+=("$test_file")
+    elif [ -n "$test_dir" ]; then
+        if [ ! -d "$test_dir" ]; then
+            echo -e "${RED}Error: directory not found: $test_dir${NC}"
+            return 2
+        fi
+        while IFS= read -r f; do
+            source_files+=("$f")
+        done < <(_test_find_source_files "$test_dir")
+    elif [ "$test_changed" = true ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] && source_files+=("$f")
+        done < <(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached 2>/dev/null; git diff --name-only 2>/dev/null)
+        # Deduplicate
+        if [ ${#source_files[@]} -gt 0 ]; then
+            local -a unique_files=()
+            local seen_list=""
+            for f in "${source_files[@]}"; do
+                if [[ "$seen_list" != *"|$f|"* ]]; then
+                    seen_list="${seen_list}|$f|"
+                    unique_files+=("$f")
+                fi
+            done
+            source_files=("${unique_files[@]}")
+        fi
+    fi
+
+    # Filter to testable source files only (exclude test files, configs, etc.)
+    local -a testable_files=()
+    for f in "${source_files[@]}"; do
+        if _test_is_testable_file "$f"; then
+            testable_files+=("$f")
+        fi
+    done
+
+    if [ ${#testable_files[@]} -eq 0 ]; then
+        if [ "$test_json" = true ]; then
+            echo '{"status":"no_files","message":"No testable source files found","files_scanned":'"${#source_files[@]}"'}'
+        else
+            echo -e "${YELLOW}No testable source files found.${NC}"
+            if [ "$test_changed" = true ]; then
+                echo "Tip: Use --file or --dir to specify source files directly."
+            fi
+        fi
+        return 1
+    fi
+
+    # --- Generate tests ---
+    local total_files=${#testable_files[@]}
+    local generated=0
+    local skipped=0
+    local -a generated_paths=()
+    local json_entries=""
+
+    if [ "$test_json" = false ] && [ "$test_dry_run" = false ]; then
+        echo -e "${BOLD}Loki Test Generator${NC}"
+        echo -e "Target coverage: ${CYAN}${test_coverage}%${NC}"
+        echo -e "Files to process: ${CYAN}${total_files}${NC}"
+        echo ""
+    elif [ "$test_json" = false ] && [ "$test_dry_run" = true ]; then
+        echo -e "${BOLD}Loki Test Generator (dry run)${NC}"
+        echo -e "Files to process: ${CYAN}${total_files}${NC}"
+        echo ""
+    fi
+
+    for src_file in "${testable_files[@]}"; do
+        local lang=""
+        local framework=""
+        local test_path=""
+
+        # Detect language
+        lang=$(_test_detect_language "$src_file")
+        if [ -z "$lang" ]; then
+            ((++skipped))
+            [ "$test_verbose" = true ] && echo -e "  ${DIM}Skip: $src_file (unsupported language)${NC}"
+            continue
+        fi
+
+        # Detect or use specified framework
+        if [ -n "$test_format" ] && [ "$test_format" != "auto" ]; then
+            framework="$test_format"
+        else
+            framework=$(_test_detect_framework "$lang")
+        fi
+
+        # Determine test output path
+        test_path=$(_test_output_path "$src_file" "$lang" "$framework" "$test_output")
+
+        # Extract testable constructs
+        local constructs=""
+        constructs=$(_test_extract_constructs "$src_file" "$lang")
+
+        if [ -z "$constructs" ]; then
+            ((++skipped))
+            [ "$test_verbose" = true ] && echo -e "  ${DIM}Skip: $src_file (no testable constructs found)${NC}"
+            continue
+        fi
+
+        local construct_count
+        construct_count=$(echo "$constructs" | wc -l | tr -d ' ')
+
+        if [ "$test_dry_run" = true ]; then
+            if [ "$test_json" = true ]; then
+                local json_entry
+                json_entry=$(printf '{"source":"%s","test_path":"%s","language":"%s","framework":"%s","constructs":%d}' \
+                    "$src_file" "$test_path" "$lang" "$framework" "$construct_count")
+                if [ -n "$json_entries" ]; then
+                    json_entries="${json_entries},${json_entry}"
+                else
+                    json_entries="$json_entry"
+                fi
+            else
+                echo -e "  ${CYAN}$src_file${NC}"
+                echo -e "    -> ${GREEN}$test_path${NC}"
+                echo -e "    Language: $lang | Framework: $framework | Constructs: $construct_count"
+                if [ "$test_verbose" = true ]; then
+                    echo "$constructs" | while IFS= read -r c; do
+                        echo -e "      - $c"
+                    done
+                fi
+            fi
+            ((++generated))
+            continue
+        fi
+
+        # Generate test content
+        local test_content=""
+        test_content=$(_test_generate_content "$src_file" "$lang" "$framework" "$constructs" "$test_coverage")
+
+        # Write test file
+        local test_dir_path
+        test_dir_path=$(dirname "$test_path")
+        mkdir -p "$test_dir_path"
+        echo "$test_content" > "$test_path"
+
+        generated_paths+=("$test_path")
+        ((++generated))
+
+        if [ "$test_json" = false ]; then
+            echo -e "  ${GREEN}[generated]${NC} $test_path  (${construct_count} constructs, $framework)"
+        else
+            local json_entry
+            json_entry=$(printf '{"source":"%s","test_path":"%s","language":"%s","framework":"%s","constructs":%d,"status":"generated"}' \
+                "$src_file" "$test_path" "$lang" "$framework" "$construct_count")
+            if [ -n "$json_entries" ]; then
+                json_entries="${json_entries},${json_entry}"
+            else
+                json_entries="$json_entry"
+            fi
+        fi
+    done
+
+    # --- Output summary ---
+    if [ "$test_json" = true ]; then
+        local mode="generate"
+        [ "$test_dry_run" = true ] && mode="dry_run"
+        printf '{"status":"success","mode":"%s","files_scanned":%d,"tests_generated":%d,"skipped":%d,"coverage_target":%d,"results":[%s]}\n' \
+            "$mode" "$total_files" "$generated" "$skipped" "$test_coverage" "$json_entries"
+    else
+        echo ""
+        if [ "$test_dry_run" = true ]; then
+            echo -e "${BOLD}Dry run summary:${NC} $generated test files would be generated, $skipped skipped"
+        else
+            echo -e "${BOLD}Summary:${NC} $generated test files generated, $skipped skipped"
+            if [ ${#generated_paths[@]} -gt 0 ] && [ "$test_verbose" = true ]; then
+                echo ""
+                echo "Generated files:"
+                for p in "${generated_paths[@]}"; do
+                    echo "  $p"
+                done
+            fi
+        fi
+    fi
+
+    if [ "$generated" -eq 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+# --- Test generation helper functions ---
+
+# Find source files in a directory (non-test, non-config files)
+_test_find_source_files() {
+    local dir="$1"
+    find "$dir" -type f \( \
+        -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \
+        -o -name "*.py" -o -name "*.go" -o -name "*.rs" \
+        -o -name "*.java" -o -name "*.rb" -o -name "*.sh" \
+    \) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/vendor/*" \
+       ! -path "*/__pycache__/*" ! -path "*/target/*" ! -path "*/dist/*" \
+       ! -path "*/build/*" ! -path "*/.loki/*" \
+    2>/dev/null | sort
+}
+
+# Check if a file is a testable source file (not a test, config, or generated file)
+_test_is_testable_file() {
+    local f="$1"
+    local base
+    base=$(basename "$f")
+
+    # Must be a recognized source file extension
+    case "$f" in
+        *.js|*.ts|*.jsx|*.tsx|*.py|*.go|*.rs|*.java|*.rb|*.sh) ;;
+        *) return 1 ;;
+    esac
+
+    # Skip test files
+    case "$base" in
+        test_*|*_test.*|*.test.*|*.spec.*|*_spec.*|test.*) return 1 ;;
+    esac
+    case "$f" in
+        */__tests__/*|*/tests/*|*/test/*|*/spec/*|*_test/*) return 1 ;;
+    esac
+
+    # Skip config and generated files
+    case "$base" in
+        setup.*|config.*|*.config.*|*.d.ts|__init__.py|conftest.py) return 1 ;;
+        jest.config.*|vitest.config.*|webpack.config.*|rollup.config.*) return 1 ;;
+        .eslintrc.*|.prettierrc.*|tsconfig.*|package.json) return 1 ;;
+        Makefile|Dockerfile|*.lock|*.min.js|*.min.css) return 1 ;;
+    esac
+
+    return 0
+}
+
+# Detect language from file extension
+_test_detect_language() {
+    local f="$1"
+    case "$f" in
+        *.ts|*.tsx) echo "typescript" ;;
+        *.js|*.jsx) echo "javascript" ;;
+        *.py) echo "python" ;;
+        *.go) echo "go" ;;
+        *.rs) echo "rust" ;;
+        *.java) echo "java" ;;
+        *.rb) echo "ruby" ;;
+        *.sh) echo "bash" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Detect test framework based on language and project files
+_test_detect_framework() {
+    local lang="$1"
+    case "$lang" in
+        typescript|javascript)
+            if [ -f "vitest.config.ts" ] || [ -f "vitest.config.js" ]; then
+                echo "vitest"
+            elif [ -f ".mocharc.yml" ] || [ -f ".mocharc.json" ] || [ -f ".mocharc.js" ]; then
+                echo "mocha"
+            elif [ -f "jest.config.ts" ] || [ -f "jest.config.js" ] || [ -f "jest.config.json" ]; then
+                echo "jest"
+            elif [ -f "package.json" ] && grep -q '"vitest"' package.json 2>/dev/null; then
+                echo "vitest"
+            elif [ -f "package.json" ] && grep -q '"jest"' package.json 2>/dev/null; then
+                echo "jest"
+            else
+                echo "jest"
+            fi
+            ;;
+        python) echo "pytest" ;;
+        go) echo "go-test" ;;
+        rust) echo "cargo-test" ;;
+        java) echo "junit" ;;
+        ruby) echo "rspec" ;;
+        bash) echo "bats" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# Determine output path for generated test file
+_test_output_path() {
+    local src="$1"
+    local lang="$2"
+    local framework="$3"
+    local custom_output="$4"
+
+    local dir
+    local base
+    local name
+    local ext
+    dir=$(dirname "$src")
+    base=$(basename "$src")
+    name="${base%.*}"
+    ext="${base##*.}"
+
+    # Use custom output dir if specified
+    if [ -n "$custom_output" ]; then
+        dir="$custom_output"
+    fi
+
+    case "$framework" in
+        jest|vitest)
+            # __tests__/ directory convention
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}.test.${ext}"
+            else
+                echo "${dir}/__tests__/${name}.test.${ext}"
+            fi
+            ;;
+        mocha)
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}.spec.${ext}"
+            else
+                echo "${dir}/test/${name}.spec.${ext}"
+            fi
+            ;;
+        pytest)
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/test_${name}.py"
+            else
+                echo "${dir}/tests/test_${name}.py"
+            fi
+            ;;
+        go-test)
+            # Go tests live alongside source
+            echo "${dir}/${name}_test.go"
+            ;;
+        cargo-test)
+            # Rust tests in same file or tests/ dir
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}_test.rs"
+            else
+                echo "${dir}/tests/${name}_test.rs"
+            fi
+            ;;
+        junit)
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}Test.java"
+            else
+                echo "${dir}/test/${name}Test.java"
+            fi
+            ;;
+        rspec)
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}_spec.rb"
+            else
+                echo "${dir}/spec/${name}_spec.rb"
+            fi
+            ;;
+        bats)
+            if [ -n "$custom_output" ]; then
+                echo "${dir}/${name}.bats"
+            else
+                echo "${dir}/tests/${name}.bats"
+            fi
+            ;;
+        *)
+            echo "${dir}/tests/test_${name}.${ext}"
+            ;;
+    esac
+}
+
+# Extract testable constructs from a source file (functions, classes, exports)
+_test_extract_constructs() {
+    local src="$1"
+    local lang="$2"
+
+    case "$lang" in
+        javascript|typescript)
+            # Match exported functions, classes, consts, and standalone functions
+            grep -E '^\s*(export\s+)?(default\s+)?(async\s+)?function\s+\w+|^\s*(export\s+)?(const|let|var)\s+\w+\s*=\s*(async\s+)?\(|^\s*(export\s+)?class\s+\w+|^module\.exports' "$src" 2>/dev/null \
+                | sed 's/^\s*//' | head -50
+            ;;
+        python)
+            # Match function definitions, class definitions
+            grep -E '^\s*(async\s+)?def\s+\w+|^\s*class\s+\w+' "$src" 2>/dev/null \
+                | grep -v '^\s*def\s+_' \
+                | sed 's/^\s*//' | head -50
+            ;;
+        go)
+            # Match function definitions (exported only - capitalized)
+            grep -E '^func\s+(\([^)]+\)\s+)?[A-Z]\w*\(' "$src" 2>/dev/null \
+                | head -50
+            ;;
+        rust)
+            # Match pub functions and impl blocks
+            grep -E '^\s*pub\s+(async\s+)?fn\s+\w+|^\s*impl\s+' "$src" 2>/dev/null \
+                | sed 's/^\s*//' | head -50
+            ;;
+        java)
+            # Match public methods and classes
+            grep -E '^\s*public\s+(static\s+)?\w+\s+\w+\s*\(|^\s*public\s+class\s+\w+' "$src" 2>/dev/null \
+                | sed 's/^\s*//' | head -50
+            ;;
+        ruby)
+            # Match def and class
+            grep -E '^\s*def\s+\w+|^\s*class\s+\w+' "$src" 2>/dev/null \
+                | sed 's/^\s*//' | head -50
+            ;;
+        bash)
+            # Match function definitions
+            grep -E '^\s*\w+\s*\(\)\s*\{|^\s*function\s+\w+' "$src" 2>/dev/null \
+                | sed 's/^\s*//' | head -50
+            ;;
+        *) echo "" ;;
+    esac
+}
+
+# Generate test file content for a given source file
+_test_generate_content() {
+    local src="$1"
+    local lang="$2"
+    local framework="$3"
+    local constructs="$4"
+    local coverage="$5"
+
+    local base
+    local name
+    base=$(basename "$src")
+    name="${base%.*}"
+
+    case "$framework" in
+        jest|vitest)
+            _test_gen_jest_vitest "$src" "$name" "$base" "$framework" "$constructs" "$coverage"
+            ;;
+        mocha)
+            _test_gen_mocha "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        pytest)
+            _test_gen_pytest "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        go-test)
+            _test_gen_go "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        cargo-test)
+            _test_gen_rust "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        junit)
+            _test_gen_junit "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        rspec)
+            _test_gen_rspec "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        bats)
+            _test_gen_bats "$src" "$name" "$base" "$constructs" "$coverage"
+            ;;
+        *)
+            echo "// Unsupported framework: $framework"
+            ;;
+    esac
+}
+
+# --- Framework-specific generators ---
+
+_test_gen_jest_vitest() {
+    local src="$1" name="$2" base="$3" framework="$4" constructs="$5" coverage="$6"
+
+    local import_style="require"
+    local ext="${base##*.}"
+    if [[ "$ext" == "ts" || "$ext" == "tsx" ]]; then
+        import_style="import"
+    fi
+
+    # Header
+    if [ "$framework" = "vitest" ]; then
+        echo "import { describe, it, expect, beforeEach, afterEach } from 'vitest';"
+    fi
+
+    # Import statement
+    local rel_path
+    rel_path=$(echo "$src" | sed 's|^\./||')
+    local import_path="../${base%.*}"
+
+    if [ "$import_style" = "import" ]; then
+        echo "import { /* TODO: import constructs */ } from '${import_path}';"
+    else
+        echo "const ${name} = require('${import_path}');"
+    fi
+    echo ""
+    echo "// Generated test suite for ${base}"
+    echo "// Target coverage: ${coverage}%"
+    echo "// Source: ${src}"
+    echo ""
+    echo "describe('${name}', () => {"
+
+    # Generate test cases from constructs
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        # Skip module.exports lines
+        echo "$construct" | grep -q '^module\.exports' && continue
+        local func_name=""
+        # Extract function/class name
+        func_name=$(echo "$construct" | grep -oE '(function|const|let|var|class)\s+\w+' | awk '{print $2}')
+        if [ -z "$func_name" ]; then
+            func_name=$(echo "$construct" | grep -oE '\w+\s*=' | sed 's/\s*=$//')
+        fi
+        [ -z "$func_name" ] && continue
+
+        # Check if it's a class
+        if echo "$construct" | grep -q 'class\s'; then
+            echo ""
+            echo "  describe('${func_name}', () => {"
+            echo "    it('should be instantiable', () => {"
+            echo "      // TODO: const instance = new ${func_name}();"
+            echo "      // expect(instance).toBeDefined();"
+            echo "    });"
+            echo ""
+            echo "    it('should have expected properties', () => {"
+            echo "      // TODO: verify instance properties"
+            echo "    });"
+            echo "  });"
+        else
+            echo ""
+            echo "  describe('${func_name}', () => {"
+            echo "    it('should return expected result for valid input', () => {"
+            echo "      // TODO: const result = ${func_name}(/* args */);"
+            echo "      // expect(result).toEqual(/* expected */);"
+            echo "    });"
+            echo ""
+            echo "    it('should handle edge cases', () => {"
+            echo "      // TODO: test with null, undefined, empty, boundary values"
+            echo "    });"
+            echo ""
+            echo "    it('should throw on invalid input', () => {"
+            echo "      // TODO: expect(() => ${func_name}(/* invalid */)).toThrow();"
+            echo "    });"
+            echo "  });"
+        fi
+    done
+
+    echo "});"
+}
+
+_test_gen_mocha() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    echo "const { expect } = require('chai');"
+    echo "const ${name} = require('../${name}');"
+    echo ""
+    echo "// Generated test suite for ${base}"
+    echo "// Target coverage: ${coverage}%"
+    echo ""
+    echo "describe('${name}', function () {"
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        echo "$construct" | grep -q '^module\.exports' && continue
+        local func_name=""
+        func_name=$(echo "$construct" | grep -oE '(function|const|let|var|class)\s+\w+' | awk '{print $2}')
+        [ -z "$func_name" ] && continue
+
+        echo ""
+        echo "  describe('${func_name}', function () {"
+        echo "    it('should return expected result', function () {"
+        echo "      // TODO: const result = ${name}.${func_name}(/* args */);"
+        echo "      // expect(result).to.equal(/* expected */);"
+        echo "    });"
+        echo ""
+        echo "    it('should handle edge cases', function () {"
+        echo "      // TODO: test edge cases"
+        echo "    });"
+        echo "  });"
+    done
+
+    echo "});"
+}
+
+_test_gen_pytest() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    local module_name
+    module_name=$(echo "$name" | tr '-' '_')
+
+    echo "\"\"\"Tests for ${base}."
+    echo ""
+    echo "Target coverage: ${coverage}%"
+    echo "Source: ${src}"
+    echo "\"\"\""
+    echo "import pytest"
+    echo "# from ${module_name} import  # TODO: import from source module"
+    echo ""
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+
+        if echo "$construct" | grep -q '^\s*class\s'; then
+            func_name=$(echo "$construct" | grep -oE 'class\s+\w+' | awk '{print $2}')
+            [ -z "$func_name" ] && continue
+            echo ""
+            echo "class Test${func_name}:"
+            echo "    \"\"\"Tests for ${func_name} class.\"\"\""
+            echo ""
+            echo "    def test_init(self):"
+            echo "        \"\"\"Test ${func_name} instantiation.\"\"\""
+            echo "        # TODO: instance = ${func_name}()"
+            echo "        # assert instance is not None"
+            echo "        pass"
+            echo ""
+            echo "    def test_expected_behavior(self):"
+            echo "        \"\"\"Test ${func_name} expected behavior.\"\"\""
+            echo "        # TODO: implement"
+            echo "        pass"
+        else
+            func_name=$(echo "$construct" | grep -oE 'def\s+\w+' | awk '{print $2}')
+            [ -z "$func_name" ] && continue
+            echo ""
+            echo "def test_${func_name}_valid_input():"
+            echo "    \"\"\"Test ${func_name} with valid input.\"\"\""
+            echo "    # TODO: result = ${func_name}(/* args */)"
+            echo "    # assert result == expected"
+            echo "    pass"
+            echo ""
+            echo ""
+            echo "def test_${func_name}_edge_cases():"
+            echo "    \"\"\"Test ${func_name} edge cases.\"\"\""
+            echo "    # TODO: test with None, empty, boundary values"
+            echo "    pass"
+            echo ""
+            echo ""
+            echo "def test_${func_name}_invalid_input():"
+            echo "    \"\"\"Test ${func_name} with invalid input.\"\"\""
+            echo "    # TODO: with pytest.raises(ValueError):"
+            echo "    #     ${func_name}(/* invalid */)"
+            echo "    pass"
+        fi
+    done
+}
+
+_test_gen_go() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    local pkg
+    pkg=$(grep -m1 '^package\s' "$src" 2>/dev/null | awk '{print $2}')
+    [ -z "$pkg" ] && pkg="main"
+
+    echo "package ${pkg}"
+    echo ""
+    echo "import ("
+    echo "	\"testing\""
+    echo ")"
+    echo ""
+    echo "// Generated tests for ${base}"
+    echo "// Target coverage: ${coverage}%"
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+        func_name=$(echo "$construct" | grep -oE 'func\s+(\([^)]+\)\s+)?\w+' | grep -oE '\w+$')
+        [ -z "$func_name" ] && continue
+
+        echo ""
+        echo "func Test${func_name}(t *testing.T) {"
+        echo "	t.Run(\"valid input\", func(t *testing.T) {"
+        echo "		// TODO: result := ${func_name}(/* args */)"
+        echo "		// if result != expected {"
+        echo "		// 	t.Errorf(\"${func_name}() = %v, want %v\", result, expected)"
+        echo "		// }"
+        echo "	})"
+        echo ""
+        echo "	t.Run(\"edge cases\", func(t *testing.T) {"
+        echo "		// TODO: test boundary values"
+        echo "	})"
+        echo "}"
+    done
+}
+
+_test_gen_rust() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    echo "// Generated tests for ${base}"
+    echo "// Target coverage: ${coverage}%"
+    echo ""
+    echo "#[cfg(test)]"
+    echo "mod tests {"
+    echo "    use super::*;"
+    echo ""
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+        func_name=$(echo "$construct" | grep -oE 'fn\s+\w+' | awk '{print $2}')
+        [ -z "$func_name" ] && continue
+
+        echo "    #[test]"
+        echo "    fn test_${func_name}_valid_input() {"
+        echo "        // TODO: let result = ${func_name}(/* args */);"
+        echo "        // assert_eq!(result, expected);"
+        echo "    }"
+        echo ""
+        echo "    #[test]"
+        echo "    fn test_${func_name}_edge_cases() {"
+        echo "        // TODO: test boundary values"
+        echo "    }"
+        echo ""
+    done
+
+    echo "}"
+}
+
+_test_gen_junit() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    echo "import org.junit.jupiter.api.Test;"
+    echo "import org.junit.jupiter.api.BeforeEach;"
+    echo "import static org.junit.jupiter.api.Assertions.*;"
+    echo ""
+    echo "/**"
+    echo " * Generated tests for ${base}"
+    echo " * Target coverage: ${coverage}%"
+    echo " */"
+    echo "class ${name}Test {"
+    echo ""
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+        func_name=$(echo "$construct" | grep -oE '(class|void|int|String|boolean|double|float|long)\s+\w+' | awk '{print $NF}')
+        [ -z "$func_name" ] && continue
+
+        # Skip class definitions
+        if echo "$construct" | grep -q 'class\s'; then
+            continue
+        fi
+
+        echo "    @Test"
+        echo "    void test${func_name^}ValidInput() {"
+        echo "        // TODO: var result = instance.${func_name}(/* args */);"
+        echo "        // assertEquals(expected, result);"
+        echo "    }"
+        echo ""
+        echo "    @Test"
+        echo "    void test${func_name^}EdgeCases() {"
+        echo "        // TODO: test boundary values"
+        echo "    }"
+        echo ""
+    done
+
+    echo "}"
+}
+
+_test_gen_rspec() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    echo "# Generated tests for ${base}"
+    echo "# Target coverage: ${coverage}%"
+    echo ""
+    echo "require_relative '../${name}'"
+    echo ""
+    echo "RSpec.describe ${name^} do"
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+
+        if echo "$construct" | grep -q 'class\s'; then
+            func_name=$(echo "$construct" | grep -oE 'class\s+\w+' | awk '{print $2}')
+            [ -z "$func_name" ] && continue
+            echo ""
+            echo "  describe ${func_name} do"
+            echo "    it 'is instantiable' do"
+            echo "      # TODO: instance = ${func_name}.new"
+            echo "      # expect(instance).not_to be_nil"
+            echo "    end"
+            echo "  end"
+        else
+            func_name=$(echo "$construct" | grep -oE 'def\s+\w+' | awk '{print $2}')
+            [ -z "$func_name" ] && continue
+            echo ""
+            echo "  describe '#${func_name}' do"
+            echo "    it 'returns expected result' do"
+            echo "      # TODO: result = subject.${func_name}"
+            echo "      # expect(result).to eq(expected)"
+            echo "    end"
+            echo ""
+            echo "    it 'handles edge cases' do"
+            echo "      # TODO: test edge cases"
+            echo "    end"
+            echo "  end"
+        fi
+    done
+
+    echo "end"
+}
+
+_test_gen_bats() {
+    local src="$1" name="$2" base="$3" constructs="$4" coverage="$5"
+
+    echo "#!/usr/bin/env bats"
+    echo "# Generated tests for ${base}"
+    echo "# Target coverage: ${coverage}%"
+    echo ""
+    echo "setup() {"
+    echo "    source \"\$(dirname \"\$BATS_TEST_FILENAME\")/../${base}\""
+    echo "}"
+    echo ""
+
+    echo "$constructs" | while IFS= read -r construct; do
+        [ -z "$construct" ] && continue
+        local func_name=""
+        func_name=$(echo "$construct" | grep -oE '\w+' | head -1)
+        [ -z "$func_name" ] && continue
+
+        echo "@test \"${func_name} returns expected result\" {"
+        echo "    # TODO: run ${func_name} args"
+        echo "    # [ \"\$status\" -eq 0 ]"
+        echo "    # [ \"\$output\" = \"expected\" ]"
+        echo "    skip \"TODO: implement\""
+        echo "}"
+        echo ""
+        echo "@test \"${func_name} handles edge cases\" {"
+        echo "    # TODO: test edge cases"
+        echo "    skip \"TODO: implement\""
+        echo "}"
+        echo ""
+    done
 }
 
 main "$@"

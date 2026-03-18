@@ -5,6 +5,23 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.24.0] - 2026-03-18
+
+### Added
+- `loki test` command: AI-powered test generation for any language/framework
+- Auto-detects language (JavaScript, TypeScript, Python, Go, Rust, Java, Ruby, Shell)
+- Auto-detects test framework (jest, vitest, mocha, pytest, go-test, cargo-test, junit, rspec, bats)
+- Extracts testable constructs (functions, classes, exports) and generates test skeletons
+- Source selection: --file (single file), --dir (directory), --changed (git diff, default)
+- Test framework override: --format (force specific framework)
+- Coverage targeting: --coverage (default 80%)
+- Dry-run mode: --dry-run (preview without writing)
+- JSON output: --json (machine-readable for CI integration)
+- Custom output directory: --output
+- Works without API keys -- generates templates/skeletons locally
+- Exit codes: 0=success, 1=no testable files, 2=error
+- Test suite: tests/test-test-command.sh with 15 tests
+
 ## [6.23.0] - 2026-03-18
 
 ### Added
