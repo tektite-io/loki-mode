@@ -5,6 +5,22 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.17.0] - 2026-03-18
+
+### Added
+- `loki trigger` command: event-driven autonomous execution (analogous to Cursor Automations)
+- `autonomy/trigger-server.py`: GitHub webhook receiver (issues, pull_request, workflow_run events)
+  - HMAC-SHA256 signature validation (X-Hub-Signature-256)
+  - issues.opened -> `loki run <issue> --pr --detach`
+  - pull_request.synchronize -> `loki run <pr> --detach`
+  - workflow_run.failure -> `loki run --detach`
+  - Configurable port (default 7373), dry-run mode, event logging to `.loki/triggers/events.log`
+- `autonomy/trigger-schedule.py`: cron-based schedule daemon
+  - Reads `.loki/triggers/schedules.json` for schedule entries
+  - Actions: `run`, `status`, `quality-review`
+  - Called via `loki trigger daemon` (invoke from system cron)
+- `tests/test_trigger.py`: 40 unit tests covering signature validation, event routing, schedule parsing, dry-run mode
+
 ## [6.16.1] - 2026-03-18
 
 ### Fixed

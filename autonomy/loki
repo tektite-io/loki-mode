@@ -433,6 +433,7 @@ show_help() {
     echo "  worktree [cmd]   Parallel worktree management (list|merge|clean|status)"
     echo "  agent [cmd]      Agent type dispatch (list|info|run|start|review)"
     echo "  remote [PRD]     Start remote session (connect from phone/browser, Claude Pro/Max)"
+  echo "  trigger          Event-driven autonomous execution (schedules, webhooks)"
     echo "  version          Show version"
     echo "  help             Show this help"
     echo ""
@@ -7725,6 +7726,290 @@ print('Template validated. Lifecycle hooks active.')
     esac
 }
 
+# Event-driven trigger management (v6.17.0)
+cmd_trigger() {
+    local subcmd="${1:-help}"
+    shift || true
+
+    local trigger_server_script
+    trigger_server_script="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/trigger-server.py"
+    local trigger_schedule_script
+    trigger_schedule_script="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/trigger-schedule.py"
+    local pid_file=".loki/triggers/server.pid"
+
+    case "$subcmd" in
+        start)
+            local port=""
+            local secret=""
+            local dry_run_flag=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --port) port="$2"; shift 2 ;;
+                    --port=*) port="${1#--port=}"; shift ;;
+                    --secret) secret="$2"; shift 2 ;;
+                    --secret=*) secret="${1#--secret=}"; shift ;;
+                    --dry-run) dry_run_flag="--dry-run"; shift ;;
+                    *) shift ;;
+                esac
+            done
+            if [[ -f "$pid_file" ]]; then
+                local existing_pid
+                existing_pid=$(cat "$pid_file" 2>/dev/null)
+                if kill -0 "$existing_pid" 2>/dev/null; then
+                    echo "Trigger server already running (pid=$existing_pid)"
+                    return 0
+                fi
+            fi
+            local args=()
+            [[ -n "$port" ]] && args+=("--port" "$port")
+            [[ -n "$secret" ]] && args+=("--secret" "$secret")
+            [[ -n "$dry_run_flag" ]] && args+=("--dry-run")
+            mkdir -p .loki/triggers
+            nohup python3 "$trigger_server_script" "${args[@]}" \
+                > .loki/triggers/server.log 2>&1 &
+            local server_pid=$!
+            echo "$server_pid" > "$pid_file"
+            sleep 0.5
+            if kill -0 "$server_pid" 2>/dev/null; then
+                echo "Trigger server started (pid=$server_pid)"
+                local p="${port:-7373}"
+                echo "Webhook endpoint: POST http://localhost:$p/webhook"
+            else
+                echo -e "${RED}Trigger server failed to start. Check .loki/triggers/server.log${NC}"
+                return 1
+            fi
+            ;;
+        stop)
+            if [[ ! -f "$pid_file" ]]; then
+                echo "Trigger server not running (no pid file)"
+                return 0
+            fi
+            local pid
+            pid=$(cat "$pid_file" 2>/dev/null)
+            if [[ -z "$pid" ]]; then
+                echo "Trigger server not running"
+                rm -f "$pid_file"
+                return 0
+            fi
+            if kill "$pid" 2>/dev/null; then
+                echo "Trigger server stopped (pid=$pid)"
+                rm -f "$pid_file"
+            else
+                echo "Trigger server was not running (pid=$pid)"
+                rm -f "$pid_file"
+            fi
+            ;;
+        status)
+            if [[ -f "$pid_file" ]]; then
+                local pid
+                pid=$(cat "$pid_file" 2>/dev/null)
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo "Trigger server: running (pid=$pid)"
+                    if command -v curl >/dev/null 2>&1; then
+                        local config_port
+                        config_port=$(python3 -c "
+import json, pathlib
+p = pathlib.Path('.loki/triggers/config.json')
+print(json.loads(p.read_text()).get('port', 7373) if p.exists() else 7373)
+" 2>/dev/null || echo "7373")
+                        curl -sf "http://localhost:$config_port/status" 2>/dev/null | \
+                            python3 -m json.tool 2>/dev/null || true
+                    fi
+                else
+                    echo "Trigger server: stopped (stale pid=$pid)"
+                    rm -f "$pid_file"
+                fi
+            else
+                echo "Trigger server: not running"
+            fi
+            local sched_file=".loki/triggers/schedules.json"
+            if [[ -f "$sched_file" ]]; then
+                local count
+                count=$(python3 -c "import json; d=json.load(open('$sched_file')); print(len(d) if isinstance(d,list) else len(d.get('schedules',[])))" 2>/dev/null || echo "?")
+                echo "Schedules configured: $count"
+            else
+                echo "Schedules configured: 0"
+            fi
+            ;;
+        list)
+            python3 "$trigger_schedule_script" list
+            ;;
+        add)
+            local add_type="${1:-}"
+            shift || true
+            if [[ "$add_type" == "schedule" ]]; then
+                local name="${1:-}"
+                local cron_expr="${2:-}"
+                local action="${3:-}"
+                shift 3 || true
+                if [[ -z "$name" || -z "$cron_expr" || -z "$action" ]]; then
+                    echo "Usage: loki trigger add schedule <name> <cron_expr> <action> [args...]"
+                    echo ""
+                    echo "Example:"
+                    echo "  loki trigger add schedule daily-review '0 9 * * 1-5' quality-review"
+                    echo "  loki trigger add schedule auto-issue '*/30 * * * *' run 42"
+                    return 1
+                fi
+                python3 "$trigger_schedule_script" add "$name" "$cron_expr" "$action" "$@"
+            else
+                echo "Usage: loki trigger add schedule <name> <cron_expr> <action> [args...]"
+                return 1
+            fi
+            ;;
+        remove)
+            local name="${1:-}"
+            if [[ -z "$name" ]]; then
+                echo "Usage: loki trigger remove <name>"
+                return 1
+            fi
+            python3 "$trigger_schedule_script" remove "$name"
+            ;;
+        daemon)
+            local dry_run_flag=""
+            [[ "${1:-}" == "--dry-run" ]] && dry_run_flag="--dry-run"
+            python3 "$trigger_schedule_script" daemon $dry_run_flag
+            ;;
+        test)
+            local event_type="${1:-issues}"
+            shift || true
+            local repo=""
+            local issue_num=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --repo) repo="$2"; shift 2 ;;
+                    --repo=*) repo="${1#--repo=}"; shift ;;
+                    --issue) issue_num="$2"; shift 2 ;;
+                    --issue=*) issue_num="${1#--issue=}"; shift ;;
+                    *) shift ;;
+                esac
+            done
+            local config_port
+            config_port=$(python3 -c "
+import json, pathlib
+p = pathlib.Path('.loki/triggers/config.json')
+print(json.loads(p.read_text()).get('port', 7373) if p.exists() else 7373)
+" 2>/dev/null || echo "7373")
+
+            local payload
+            case "$event_type" in
+                issues)
+                    local num="${issue_num:-1}"
+                    local r="${repo:-owner/repo}"
+                    payload="{\"action\":\"opened\",\"issue\":{\"number\":$num,\"title\":\"Test issue\"},\"repository\":{\"full_name\":\"$r\"}}"
+                    ;;
+                pull_request)
+                    local num="${issue_num:-1}"
+                    local r="${repo:-owner/repo}"
+                    payload="{\"action\":\"synchronize\",\"pull_request\":{\"number\":$num,\"title\":\"Test PR\"},\"repository\":{\"full_name\":\"$r\"}}"
+                    ;;
+                workflow_run)
+                    local r="${repo:-owner/repo}"
+                    payload="{\"action\":\"completed\",\"workflow_run\":{\"name\":\"CI\",\"conclusion\":\"failure\"},\"repository\":{\"full_name\":\"$r\"}}"
+                    ;;
+                *)
+                    echo "Supported event types: issues, pull_request, workflow_run"
+                    return 1
+                    ;;
+            esac
+
+            if command -v curl >/dev/null 2>&1; then
+                echo "Sending test $event_type event to http://localhost:$config_port/webhook"
+                curl -sf -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "X-GitHub-Event: $event_type" \
+                    -d "$payload" \
+                    "http://localhost:$config_port/webhook" | python3 -m json.tool 2>/dev/null || \
+                    echo "Server not running or request failed. Start with: loki trigger start"
+            else
+                echo "curl not available. Cannot send test event."
+                return 1
+            fi
+            ;;
+        logs)
+            local tail_n="50"
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --tail) tail_n="$2"; shift 2 ;;
+                    --tail=*) tail_n="${1#--tail=}"; shift ;;
+                    *) shift ;;
+                esac
+            done
+            local log_file=".loki/triggers/events.log"
+            if [[ -f "$log_file" ]]; then
+                tail -n "$tail_n" "$log_file" | python3 -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+        print('[%s] %-15s %-12s %-8s %s' % (
+            e.get('timestamp','?'),
+            e.get('event','?'),
+            e.get('action','?'),
+            e.get('status','?'),
+            e.get('summary',''),
+        ))
+    except Exception:
+        print(line)
+" 2>/dev/null || cat "$log_file" | tail -n "$tail_n"
+            else
+                echo "No events logged yet. (.loki/triggers/events.log does not exist)"
+            fi
+            local server_log=".loki/triggers/server.log"
+            if [[ -f "$server_log" ]]; then
+                echo ""
+                echo "--- Server log (last $tail_n lines) ---"
+                tail -n "$tail_n" "$server_log"
+            fi
+            ;;
+        help|--help|-h)
+            echo -e "${BOLD}loki trigger${NC} - Event-driven autonomous execution"
+            echo ""
+            echo "Usage: loki trigger <subcommand> [options]"
+            echo ""
+            echo "Subcommands:"
+            echo "  start [--port PORT] [--secret SECRET] [--dry-run]"
+            echo "                        Start the webhook receiver server (default port: 7373)"
+            echo "  stop                  Stop the webhook receiver server"
+            echo "  status                Show server and schedule status"
+            echo "  list                  List configured schedules"
+            echo "  add schedule <name> <cron_expr> <action> [args...]"
+            echo "                        Add a cron-based schedule trigger"
+            echo "  remove <name>         Remove a schedule trigger"
+            echo "  daemon [--dry-run]    Run one pass of schedule checks (call from cron)"
+            echo "  test <event-type> [--repo owner/repo] [--issue NUM]"
+            echo "                        Send a test webhook event (event-types: issues, pull_request, workflow_run)"
+            echo "  logs [--tail N]       Show recent trigger event log (default: last 50)"
+            echo "  help                  Show this help"
+            echo ""
+            echo "Webhook events handled:"
+            echo "  issues (opened)        -> loki run <issue_number> --pr --detach"
+            echo "  pull_request (sync)    -> loki run <pr_number> --detach"
+            echo "  workflow_run (failure) -> loki run --detach"
+            echo ""
+            echo "Schedule cron format: minute hour day-of-month month day-of-week"
+            echo "  Examples:"
+            echo "    '0 9 * * 1-5'   - 9am Mon-Fri"
+            echo "    '*/30 * * * *'  - Every 30 minutes"
+            echo "    '0 0 * * 0'     - Midnight Sunday"
+            echo ""
+            echo "Examples:"
+            echo "  loki trigger start --port 7373 --secret mywebhooksecret"
+            echo "  loki trigger add schedule daily-review '0 9 * * 1-5' quality-review"
+            echo "  loki trigger test issues --repo owner/repo --issue 42"
+            echo "  loki trigger logs --tail 20"
+            echo "  loki trigger stop"
+            ;;
+        *)
+            echo -e "${RED}Unknown trigger command: $subcmd${NC}"
+            echo "Run 'loki trigger help' for usage."
+            return 1
+            ;;
+    esac
+}
+
 # Main command dispatcher
 main() {
     if [ $# -eq 0 ]; then
@@ -7881,6 +8166,9 @@ main() {
             ;;
         remote|rc)
             cmd_remote "$@"
+            ;;
+        trigger)
+            cmd_trigger "$@"
             ;;
         version|--version|-v)
             cmd_version
