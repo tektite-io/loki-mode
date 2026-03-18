@@ -308,13 +308,48 @@ ls -la dashboard/static/index.html
 ### 3. Run Tests
 
 ```bash
-# E2E dashboard tests (requires dashboard running on port 57374)
-cd dashboard-ui && npx playwright test && cd ..
-
 # Shell script validation
 bash -n autonomy/run.sh
 bash -n autonomy/loki
+
+# Python syntax validation
+python3 -c "import ast, os; [ast.parse(open(f'dashboard/{f}').read()) for f in os.listdir('dashboard') if f.endswith('.py')]"
+
+# JSON validation
+python3 -c "import json; json.load(open('package.json')); json.load(open('vscode-extension/package.json')); print('JSON OK')"
+
+# E2E dashboard tests (requires dashboard running on port 57374)
+cd dashboard-ui && npx playwright test && cd ..
 ```
+
+### 3a. Pre-Publish Validation (MANDATORY -- do NOT skip)
+
+This step prevents broken releases. Every single release MUST pass these checks BEFORE committing.
+
+```bash
+# 1. Verify npm tarball contains expected files
+#    If web-app/dist/ or dashboard/static/ are missing, the release is broken.
+npm pack --dry-run 2>&1 | grep -E "web-app/dist|dashboard/static" || echo "FAIL: expected files missing from tarball"
+
+# 2. Verify built artifacts exist in git (not just locally)
+git ls-files web-app/dist/index.html | grep -q . || echo "FAIL: web-app/dist/ not tracked in git"
+git ls-files dashboard/static/index.html | grep -q . || echo "FAIL: dashboard/static/ not tracked in git"
+
+# 3. Local install test -- install from tarball like a real user
+npm pack && npm install -g ./loki-mode-*.tgz
+loki --version  # should show new version
+loki web --no-open &  # should start without "Web app not built" error
+sleep 3
+curl -s http://127.0.0.1:57374/ | grep -q "Loki" && echo "PASS: web app serves" || echo "FAIL: web app broken"
+curl -s http://127.0.0.1:57374/api/status | python3 -c "import json,sys; json.load(sys.stdin); print('PASS: API responds')" 2>/dev/null || echo "FAIL: API broken"
+loki web stop
+npm install -g loki-mode  # restore previous version
+rm -f loki-mode-*.tgz
+
+# 4. If ANY check above fails, DO NOT release. Fix the root cause first.
+```
+
+**Why this exists:** v6.25.0-v6.26.5 shipped 6 broken patches because we tested locally from the repo but never verified the npm tarball or a fresh global install. `.gitignore` excluded `web-app/dist/` so CI never had the files. This checklist catches that class of bug before it reaches users.
 
 ### 4. Commit and Push
 
