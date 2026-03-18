@@ -15,8 +15,8 @@ __pycache__/
 **/node_modules/
 
 # Build artifacts
-**/dist/
-!web-app/dist/
+dashboard-ui/dist/
+vscode-extension/dist/
 **/.next/
 **/build/
 
