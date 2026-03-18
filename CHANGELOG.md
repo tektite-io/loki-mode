@@ -5,6 +5,21 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.22.0] - 2026-03-18
+
+### Added
+- `loki ci` command: CI/CD quality gate integration for GitHub Actions, GitLab CI, Jenkins, CircleCI
+- Auto-detects CI environment from standard env vars (GITHUB_ACTIONS, GITLAB_CI, JENKINS_URL, CIRCLECI)
+- PR diff review with static analysis, security scanning, and anti-pattern detection
+- Test suggestions for changed files (--test-suggest) with language-aware test path generation
+- Output formats: json (machine-parseable), markdown (terminal), github (PR comments)
+- GitHub PR comment posting via --github-comment (requires GITHUB_TOKEN)
+- Configurable failure thresholds via --fail-on (critical, high, medium, low)
+- Exit codes: 0=pass, 1=threshold exceeded, 2=error
+- Example GitHub Actions workflow: .github/workflows/loki-ci-example.yml
+- Test suite: tests/test-ci-command.sh with 14 tests
+- Reuses quality gate logic from loki review (shellcheck, eslint, security patterns)
+
 ## [6.21.0] - 2026-03-18
 
 ### Added
