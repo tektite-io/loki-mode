@@ -1,3 +1,14 @@
+## [6.30.3] - 2026-03-18
+
+### Fixed
+- Purple Lab: eliminated network connection explosion (was 27+ unique TCP connections per session)
+  - Server: added timeout_keep_alive=30 to uvicorn so connections are reused
+  - Server: WebSocket now pushes state_update bundles (status + agents + logs) every 2s when running, 30s when idle -- eliminates 3 of 6 polling loops entirely
+  - Frontend: removed usePolling for status, agents, logs -- these now come from WebSocket push
+  - Frontend: kept 30s HTTP fallback for status (safety net when WS is down)
+  - Frontend: memory, checklist, files still poll at 30s (rarely change, not worth pushing)
+- Net result: idle = 1 WS connection + 0 HTTP polls; running = 1 WS connection + 3 slow HTTP polls every 30s
+
 ## [6.30.2] - 2026-03-18
 
 ### Fixed

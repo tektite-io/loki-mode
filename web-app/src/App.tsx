@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { api } from './api/client';
 import { usePolling } from './hooks/usePolling';
-import { useWebSocket } from './hooks/useWebSocket';
+import { useWebSocket, StateUpdate } from './hooks/useWebSocket';
 import { Header } from './components/Header';
 import { ControlBar } from './components/ControlBar';
 import { StatusOverview } from './components/StatusOverview';
@@ -12,41 +12,59 @@ import { TerminalOutput } from './components/TerminalOutput';
 import { QualityGatesPanel } from './components/QualityGatesPanel';
 import { FileBrowser } from './components/FileBrowser';
 import { MemoryViewer } from './components/MemoryViewer';
+import type { StatusResponse, Agent, LogEntry } from './types/api';
 
 export default function App() {
-  const { connected, subscribe } = useWebSocket();
   const [startError, setStartError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
 
+  // Primary state -- populated by WebSocket state_update pushes
+  const [wsStatus, setWsStatus] = useState<StatusResponse | null>(null);
+  const [wsAgents, setWsAgents] = useState<Agent[] | null>(null);
+  const [wsLogs, setWsLogs] = useState<LogEntry[] | null>(null);
+
+  // Called by WebSocket hook when a state_update message arrives
+  const handleStateUpdate = useCallback((update: StateUpdate) => {
+    setWsStatus(update.status);
+    setWsAgents(update.agents);
+    setWsLogs(update.logs);
+    setIsRunning(update.status.running ?? false);
+  }, []);
+
+  const { connected, subscribe } = useWebSocket(handleStateUpdate);
+
+  // Fallback HTTP poll for status (30s) -- keeps UI alive if WebSocket is down
   const fetchStatus = useCallback(() => api.getStatus(), []);
-  const fetchAgents = useCallback(() => api.getAgents(), []);
-  const fetchLogs = useCallback(() => api.getLogs(200), []);
+  const { data: httpStatus } = usePolling(fetchStatus, 30000);
+
+  // Sync isRunning and status from HTTP fallback when WebSocket has no data yet
+  useEffect(() => {
+    if (wsStatus === null && httpStatus !== null) {
+      setIsRunning(httpStatus.running ?? false);
+    }
+  }, [httpStatus, wsStatus]);
+
+  // Rarely-changing data: memory, checklist, files -- slow HTTP polls (30s)
+  // These are not pushed over WebSocket since they change infrequently
   const fetchMemory = useCallback(() => api.getMemorySummary(), []);
   const fetchChecklist = useCallback(() => api.getChecklist(), []);
   const fetchFiles = useCallback(() => api.getFiles(), []);
 
-  // Status polls at 2s when running, 30s when idle -- everything else pauses when idle
-  const [isRunning, setIsRunning] = useState(false);
-  const { data: status } = usePolling(fetchStatus, isRunning ? 2000 : 30000);
-  const { data: agents, loading: agentsLoading } = usePolling(fetchAgents, 3000, isRunning);
-  const { data: logs, loading: logsLoading } = usePolling(fetchLogs, 2000, isRunning);
-  const { data: memory, loading: memoryLoading } = usePolling(fetchMemory, 5000, isRunning);
-  const { data: checklist, loading: checklistLoading } = usePolling(fetchChecklist, 5000, isRunning);
-  const { data: files, loading: filesLoading } = usePolling(fetchFiles, 10000, isRunning);
+  const { data: memory, loading: memoryLoading } = usePolling(fetchMemory, 30000, isRunning);
+  const { data: checklist, loading: checklistLoading } = usePolling(fetchChecklist, 30000, isRunning);
+  const { data: files, loading: filesLoading } = usePolling(fetchFiles, 30000, isRunning);
 
-  // Sync isRunning from status response
-  useEffect(() => {
-    if (status !== null) setIsRunning(status.running ?? false);
-  }, [status]);
+  // Resolve status/agents/logs: prefer WebSocket push, fall back to HTTP
+  const status = wsStatus ?? httpStatus;
+  const agents = wsAgents;
+  const logs = wsLogs;
+  const agentsLoading = wsAgents === null;
+  const logsLoading = wsLogs === null;
 
   const handleStartBuild = useCallback(async (prd: string, provider: string) => {
     setStartError(null);
     try {
-      const result = await api.startSession({ prd, provider });
-      if (result.started) {
-        setIsRunning(true); // immediately switch to running view -- don't wait for next poll
-      } else {
-        setStartError('Session did not start. Check that loki is installed and a provider is configured.');
-      }
+      await api.startSession({ prd, provider });
     } catch (e) {
       setStartError(e instanceof Error ? e.message : 'Failed to start session');
     }
@@ -55,7 +73,6 @@ export default function App() {
   const handleStopBuild = useCallback(async () => {
     try {
       await api.stopSession();
-      setIsRunning(false); // immediately switch back to idle view
     } catch {
       // ignore stop errors
     }
