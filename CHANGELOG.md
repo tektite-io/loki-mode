@@ -1,3 +1,14 @@
+## v6.31.0 (2026-03-18)
+
+### New Features
+- `loki explain [path]` command: analyze any codebase and generate a plain-English architectural explanation
+  - Executive summary, architecture overview, technology stack, key patterns, getting started, and contributor guide
+  - Auto-detects language, framework, build system, test framework, CI/CD, and architecture patterns
+  - Supports --json for machine-readable output, --brief for condensed one-pager, --save to write EXPLAIN.md
+  - Works on any repository (JS/TS, Python, Go, Rust, Ruby, Java/Kotlin, C/C++)
+  - Detects monorepos (Lerna, Turborepo, Nx, pnpm/npm workspaces)
+  - Identifies patterns: REST, GraphQL, gRPC, tRPC, WebSocket, MVC, event-driven, middleware, and more
+
 ## [6.30.3] - 2026-03-18
 
 ### Fixed
