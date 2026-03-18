@@ -401,6 +401,7 @@ show_help() {
     echo "  pause            Pause after current session"
     echo "  resume           Resume paused execution"
     echo "  status [--json]  Show current status (--json for machine-readable)"
+    echo "  stats [flags]    Session statistics (--json, --efficiency)"
     echo "  logs             Show recent log output"
     echo "  dashboard [cmd]  Dashboard server (start|stop|status|url|open)"
     echo "  provider [cmd]   Manage AI provider (show|set|list|info)"
@@ -1711,6 +1712,293 @@ print(json.dumps(result, indent=2))
         echo '{"error": "Failed to generate JSON status. Ensure python3 is available."}' >&2
         return 1
     fi
+}
+
+# Session statistics
+cmd_stats() {
+    local show_json=false
+    local show_efficiency=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) show_json=true; shift ;;
+            --efficiency) show_efficiency=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ ! -d "$LOKI_DIR" ]; then
+        if [ "$show_json" = true ]; then
+            echo '{"error": "No active session"}'
+        else
+            echo -e "${YELLOW}No active session found.${NC}"
+            echo "Start a session with: loki start <prd>"
+        fi
+        return 0
+    fi
+
+    local loki_dir="$LOKI_DIR"
+    local eff_flag="$show_efficiency"
+    local json_flag="$show_json"
+
+    python3 -c "
+import json, os, sys, glob
+
+loki_dir = sys.argv[1]
+show_efficiency = sys.argv[2] == 'true'
+show_json = sys.argv[3] == 'true'
+
+# --- Gather data ---
+
+# Session state (orchestrator)
+phase = 'N/A'
+iteration_count = 0
+orch_file = os.path.join(loki_dir, 'state', 'orchestrator.json')
+if os.path.isfile(orch_file):
+    try:
+        with open(orch_file) as f:
+            orch = json.load(f)
+        phase = orch.get('currentPhase', 'N/A')
+        iteration_count = orch.get('currentIteration', 0)
+    except Exception:
+        pass
+
+# Per-iteration metrics
+eff_dir = os.path.join(loki_dir, 'metrics', 'efficiency')
+iterations = []
+if os.path.isdir(eff_dir):
+    for path in sorted(glob.glob(os.path.join(eff_dir, 'iteration-*.json'))):
+        try:
+            with open(path) as f:
+                iterations.append(json.load(f))
+        except Exception:
+            pass
+
+# If we have iteration files, use their count (more accurate)
+if iterations:
+    iteration_count = max(iteration_count, len(iterations))
+
+total_input = sum(it.get('input_tokens', 0) for it in iterations)
+total_output = sum(it.get('output_tokens', 0) for it in iterations)
+total_tokens = total_input + total_output
+total_cost = sum(it.get('cost_usd', 0) for it in iterations)
+total_duration = sum(it.get('duration_seconds', 0) for it in iterations)
+
+# Budget
+budget_limit = 0
+budget_used = 0
+budget_file = os.path.join(loki_dir, 'metrics', 'budget.json')
+if os.path.isfile(budget_file):
+    try:
+        with open(budget_file) as f:
+            bd = json.load(f)
+        budget_limit = bd.get('budget_limit', 0)
+        budget_used = bd.get('budget_used', 0)
+    except Exception:
+        pass
+
+# Quality gates
+gates_passed = 0
+gates_total = 0
+gates_file = os.path.join(loki_dir, 'state', 'quality-gates.json')
+if os.path.isfile(gates_file):
+    try:
+        with open(gates_file) as f:
+            gates = json.load(f)
+        if isinstance(gates, dict):
+            for k, v in gates.items():
+                if isinstance(v, dict):
+                    gates_total += 1
+                    if v.get('passed') or v.get('status') == 'passed':
+                        gates_passed += 1
+                elif isinstance(v, bool):
+                    gates_total += 1
+                    if v:
+                        gates_passed += 1
+        elif isinstance(gates, list):
+            for g in gates:
+                gates_total += 1
+                if isinstance(g, dict) and (g.get('passed') or g.get('status') == 'passed'):
+                    gates_passed += 1
+                elif g is True:
+                    gates_passed += 1
+    except Exception:
+        pass
+
+# Gate failures
+gate_failures = {}
+gf_file = os.path.join(loki_dir, 'quality', 'gate-failure-count.json')
+if os.path.isfile(gf_file):
+    try:
+        with open(gf_file) as f:
+            gate_failures = json.load(f)
+        if not isinstance(gate_failures, dict):
+            gate_failures = {}
+    except Exception:
+        pass
+
+# Code reviews
+reviews_total = 0
+reviews_approved = 0
+reviews_revision = 0
+quality_dir = os.path.join(loki_dir, 'quality')
+if os.path.isdir(quality_dir):
+    for fname in os.listdir(quality_dir):
+        if not fname.endswith('.json') or fname == 'gate-failure-count.json':
+            continue
+        fpath = os.path.join(quality_dir, fname)
+        try:
+            with open(fpath) as f:
+                rev = json.load(f)
+            if isinstance(rev, dict) and ('verdict' in rev or 'approved' in rev or 'reviewers' in rev):
+                reviews_total += 1
+                verdict = rev.get('verdict', '').lower()
+                if rev.get('approved') or verdict in ('approved', 'approve', 'pass'):
+                    reviews_approved += 1
+                elif verdict in ('revision', 'revise', 'changes_requested', 'reject'):
+                    reviews_revision += 1
+        except Exception:
+            pass
+
+# --- Format duration helper ---
+def fmt_duration(secs):
+    secs = int(secs)
+    if secs < 60:
+        return f'{secs}s'
+    hours = secs // 3600
+    mins = (secs % 3600) // 60
+    secs_rem = secs % 60
+    if hours > 0:
+        return f'{hours}h {mins:02d}m'
+    return f'{mins}m {secs_rem:02d}s'
+
+def fmt_number(n):
+    return f'{n:,}'
+
+# --- JSON output ---
+if show_json:
+    output = {
+        'session': {
+            'iterations': iteration_count,
+            'duration_seconds': total_duration,
+            'phase': phase
+        },
+        'tokens': {
+            'input': total_input,
+            'output': total_output,
+            'total': total_tokens,
+            'cost_usd': round(total_cost, 2)
+        },
+        'quality': {
+            'gates_passed': gates_passed,
+            'gates_total': gates_total,
+            'reviews_total': reviews_total,
+            'reviews_approved': reviews_approved,
+            'reviews_revision': reviews_revision,
+            'gate_failures': gate_failures
+        },
+        'efficiency': {
+            'avg_tokens_per_iteration': round(total_tokens / iteration_count) if iteration_count > 0 else 0,
+            'avg_cost_per_iteration': round(total_cost / iteration_count, 2) if iteration_count > 0 else 0,
+            'avg_duration_per_iteration': round(total_duration / iteration_count, 1) if iteration_count > 0 else 0
+        },
+        'budget': {
+            'used': round(budget_used, 2),
+            'limit': budget_limit,
+            'percent': round((budget_used / budget_limit) * 100, 1) if budget_limit > 0 else 0
+        }
+    }
+    if show_efficiency:
+        output['iterations'] = []
+        for i, it in enumerate(iterations, 1):
+            output['iterations'].append({
+                'number': i,
+                'input_tokens': it.get('input_tokens', 0),
+                'output_tokens': it.get('output_tokens', 0),
+                'cost_usd': round(it.get('cost_usd', 0), 2),
+                'duration_seconds': it.get('duration_seconds', 0)
+            })
+    print(json.dumps(output, indent=2))
+    sys.exit(0)
+
+# --- Text output ---
+print('Loki Mode Session Statistics')
+print('============================')
+print()
+
+# Session
+print('Session')
+print(f'  Iterations completed: {iteration_count}')
+print(f'  Duration: {fmt_duration(total_duration)}')
+print(f'  Current phase: {phase}')
+print()
+
+# Token Usage
+print('Token Usage')
+if iterations:
+    print(f'  Input tokens:  {fmt_number(total_input)}')
+    print(f'  Output tokens: {fmt_number(total_output)}')
+    print(f'  Total tokens:  {fmt_number(total_tokens)}')
+    print(f'  Estimated cost: \${total_cost:.2f}')
+else:
+    print('  N/A (no iteration metrics found)')
+print()
+
+# Quality Gates
+print('Quality Gates')
+if gates_total > 0:
+    pct = round((gates_passed / gates_total) * 100) if gates_total > 0 else 0
+    print(f'  Gates passed: {gates_passed}/{gates_total} ({pct}%)')
+else:
+    print('  Gates passed: N/A')
+if reviews_total > 0:
+    parts = []
+    if reviews_approved > 0:
+        parts.append(f'{reviews_approved} approved')
+    if reviews_revision > 0:
+        parts.append(f'{reviews_revision} revision requested')
+    detail = ', '.join(parts) if parts else 'N/A'
+    print(f'  Code reviews: {reviews_total} ({detail})')
+if gate_failures:
+    failure_parts = [f'{k} ({v})' for k, v in gate_failures.items() if v > 0]
+    if failure_parts:
+        print(f'  Gate failures: {', '.join(failure_parts)}')
+print()
+
+# Efficiency
+print('Efficiency')
+if iteration_count > 0 and iterations:
+    avg_tokens = round(total_tokens / iteration_count)
+    avg_cost = total_cost / iteration_count
+    avg_dur = total_duration / iteration_count
+    print(f'  Avg tokens/iteration: {fmt_number(avg_tokens)}')
+    print(f'  Avg cost/iteration: \${avg_cost:.2f}')
+    print(f'  Avg duration/iteration: {fmt_duration(avg_dur)}')
+else:
+    print('  N/A (no iteration metrics found)')
+print()
+
+# Budget
+print('Budget')
+if budget_limit > 0:
+    pct = round((budget_used / budget_limit) * 100, 1)
+    print(f'  Used: \${budget_used:.2f} / \${budget_limit:.2f} ({pct}%)')
+elif budget_used > 0:
+    print(f'  Used: \${budget_used:.2f} (no limit set)')
+else:
+    print('  N/A')
+
+# Per-iteration breakdown
+if show_efficiency and iterations:
+    print()
+    print('Per-Iteration Breakdown')
+    for i, it in enumerate(iterations, 1):
+        inp = fmt_number(it.get('input_tokens', 0))
+        out = fmt_number(it.get('output_tokens', 0))
+        cost = it.get('cost_usd', 0)
+        dur = fmt_duration(it.get('duration_seconds', 0))
+        print(f'  #{i:<3} input: {inp:<10} output: {out:<10} cost: \${cost:.2f}  time: {dur}')
+" "$loki_dir" "$eff_flag" "$json_flag"
 }
 
 # Provider management
@@ -8052,6 +8340,9 @@ main() {
             ;;
         status)
             cmd_status "$@"
+            ;;
+        stats)
+            cmd_stats "$@"
             ;;
         dashboard)
             cmd_dashboard "$@"
