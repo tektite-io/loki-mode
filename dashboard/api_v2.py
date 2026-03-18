@@ -333,7 +333,7 @@ async def get_run_timeline(
     """Get the timeline of events for a run."""
     timeline = await runs_mod.get_run_timeline(db, run_id)
     if timeline is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+        return {"run_id": run_id, "phases": [], "current_phase": None, "events": []}
     return timeline
 
 

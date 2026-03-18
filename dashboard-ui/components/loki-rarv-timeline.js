@@ -165,7 +165,13 @@ export class LokiRarvTimeline extends LokiElement {
       this._timeline = data;
       this._error = null;
     } catch (err) {
-      this._error = `Failed to load timeline: ${err.message}`;
+      // 404 means run not found -- not a real error, just no data yet
+      if (err.message && (err.message.includes('404') || err.message.includes('Not Found'))) {
+        this._timeline = null;
+        this._error = null;
+      } else {
+        this._error = `Failed to load timeline: ${err.message}`;
+      }
     } finally {
       this._loading = false;
     }
@@ -305,6 +311,36 @@ export class LokiRarvTimeline extends LokiElement {
     `;
   }
 
+  _renderPlaceholderTimeline() {
+    const segments = PHASE_ORDER.map(phase => {
+      const cfg = PHASE_CONFIG[phase];
+      return `<div class="phase-segment"
+                   style="width: 25%; background: ${cfg.color}; opacity: 0.3;"
+                   title="${cfg.label}: awaiting data">
+                ${cfg.label}
+              </div>`;
+    }).join('');
+
+    const legendItems = PHASE_ORDER.map(phase => {
+      const cfg = PHASE_CONFIG[phase];
+      return `<div class="legend-item">
+                <span class="legend-dot" style="background: ${cfg.color}; opacity: 0.4;"></span>
+                <span class="legend-label">${cfg.label}</span>
+                <span class="legend-duration">--</span>
+              </div>`;
+    }).join('');
+
+    return `
+      <div class="empty-state" style="padding: 0; text-align: left;">
+        <div class="timeline-bar" style="opacity: 0.5;">${segments}</div>
+        <div class="legend">${legendItems}</div>
+        <div style="text-align: center; margin-top: 12px; font-size: 12px; color: var(--loki-text-muted, #939084);">
+          RARV phases will populate as the session progresses
+        </div>
+      </div>
+    `;
+  }
+
   _escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -328,9 +364,9 @@ export class LokiRarvTimeline extends LokiElement {
     if (this._loading && !timeline) {
       content = '<div class="loading">Loading timeline...</div>';
     } else if (runId == null) {
-      content = '<div class="empty-state">No run selected. Set the run-id attribute to view a timeline.</div>';
+      content = this._renderPlaceholderTimeline();
     } else if (phases.length === 0) {
-      content = '<div class="empty-state">No RARV phases recorded for this run yet.</div>';
+      content = this._renderPlaceholderTimeline();
     } else {
       const barSegments = phaseWidths.map(pw => {
         const cfg = PHASE_CONFIG[pw.phase] || { color: 'var(--loki-text-muted)', label: pw.phase };

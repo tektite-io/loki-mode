@@ -200,10 +200,12 @@ export class LokiOverview extends LokiElement {
   _renderAppRunnerCard() {
     const s = this._appRunnerStatus;
     if (!s || s.status === 'not_initialized') {
+      const isRunning = this._data.status === 'running' || this._data.status === 'autonomous';
+      const label = isRunning ? 'Waiting...' : 'Not started';
       return `
         <div class="overview-card">
           <div class="card-label">App Runner</div>
-          <div class="card-value small-text">--</div>
+          <div class="card-value small-text">${label}</div>
         </div>
       `;
     }
@@ -232,10 +234,12 @@ export class LokiOverview extends LokiElement {
   _renderPlaywrightCard() {
     const r = this._playwrightResults;
     if (!r || r === 'null' || !r.verified_at) {
+      const isRunning = this._data.status === 'running' || this._data.status === 'autonomous';
+      const label = isRunning ? 'Pending' : 'Not run';
       return `
         <div class="overview-card">
           <div class="card-label">Verification</div>
-          <div class="card-value small-text">--</div>
+          <div class="card-value small-text">${label}</div>
         </div>
       `;
     }
@@ -260,10 +264,12 @@ export class LokiOverview extends LokiElement {
   _renderChecklistCard() {
     const s = this._checklistSummary;
     if (!s || !s.total) {
+      const isRunning = this._data.status === 'running' || this._data.status === 'autonomous';
+      const label = isRunning ? 'Analyzing PRD...' : 'No checklist';
       return `
         <div class="overview-card">
           <div class="card-label">PRD Progress</div>
-          <div class="card-value small-text">--</div>
+          <div class="card-value small-text">${label}</div>
         </div>
       `;
     }
@@ -284,12 +290,14 @@ export class LokiOverview extends LokiElement {
   _renderCouncilGateCard() {
     const g = this._gateStatus;
     if (!g || !g.status) {
+      const isRunning = this._data.status === 'running' || this._data.status === 'autonomous';
+      const label = isRunning ? 'Pending review' : 'Not evaluated';
       return `
         <div class="overview-card">
           <div class="card-label">Council Gate</div>
           <div class="card-value small-text">
-            <span class="status-dot offline"></span>
-            N/A
+            <span class="status-dot ${isRunning ? 'paused' : 'offline'}"></span>
+            ${label}
           </div>
         </div>
       `;
@@ -324,8 +332,10 @@ export class LokiOverview extends LokiElement {
     const phase = this._escapeHtml(this._data.phase || '--');
     const iteration = this._escapeHtml(this._data.iteration != null ? String(this._data.iteration) : '0');
     const provider = this._escapeHtml((this._data.provider || 'CLAUDE').toUpperCase());
-    const agents = this._escapeHtml(String(this._data.running_agents || 0));
-    const tasks = this._escapeHtml(this._data.pending_tasks != null ? `${this._data.pending_tasks} pending` : '--');
+    const isSessionActive = this._data.status === 'running' || this._data.status === 'autonomous';
+    const agentCount = this._data.running_agents || 0;
+    const agents = isSessionActive && agentCount === 0 ? 'Sequential' : this._escapeHtml(String(agentCount));
+    const tasks = this._escapeHtml(this._data.pending_tasks != null ? `${this._data.pending_tasks} pending` : (isSessionActive ? 'Inline' : '--'));
     const uptime = this._escapeHtml(this._formatUptime(this._data.uptime_seconds));
     const complexity = this._escapeHtml((this._data.complexity || 'STANDARD').toUpperCase());
 

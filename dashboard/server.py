@@ -4174,16 +4174,32 @@ async def remove_checklist_waiver(item_id: str):
 # Council Hard Gate Endpoint (Phase 4)
 # =============================================================================
 
+_DEFAULT_QUALITY_GATES = [
+    {"name": "Static Analysis", "description": "CodeQL, ESLint, type checking", "status": "pending"},
+    {"name": "Parallel Code Review", "description": "3-reviewer blind review system", "status": "pending"},
+    {"name": "Anti-Sycophancy Check", "description": "Devil's advocate on unanimous approval", "status": "pending"},
+    {"name": "Severity Assessment", "description": "Critical/High/Medium = BLOCK", "status": "pending"},
+    {"name": "Unit Test Coverage", "description": "Target >80% coverage, 100% pass", "status": "pending"},
+    {"name": "Integration Tests", "description": "End-to-end verification", "status": "pending"},
+    {"name": "Security Scan", "description": "Dependency audit, OWASP checks", "status": "pending"},
+    {"name": "Build Verification", "description": "Clean build with no warnings", "status": "pending"},
+    {"name": "Council Vote", "description": "Completion council consensus", "status": "pending"},
+]
+
+
 @app.get("/api/council/gate")
 async def get_council_gate():
     """Get council hard gate status."""
     gate_file = _get_loki_dir() / "council" / "gate-block.json"
     if not gate_file.exists():
-        return {"blocked": False}
+        return {"blocked": False, "gates": _DEFAULT_QUALITY_GATES}
     try:
-        return json.loads(gate_file.read_text())
+        data = json.loads(gate_file.read_text())
+        if "gates" not in data:
+            data["gates"] = _DEFAULT_QUALITY_GATES
+        return data
     except (json.JSONDecodeError, IOError):
-        return {"blocked": False, "error": "Failed to read gate file"}
+        return {"blocked": False, "gates": _DEFAULT_QUALITY_GATES, "error": "Failed to read gate file"}
 
 
 # =============================================================================
