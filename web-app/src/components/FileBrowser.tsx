@@ -95,19 +95,37 @@ export function FileBrowser({ files, loading }: FileBrowserProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
 
-  const handleSelectFile = useCallback(async (path: string) => {
+  const loadFileContent = useCallback(async (path: string) => {
+    // Clear stale content immediately so a re-click on the same file
+    // never shows the previous (possibly outdated) preview.
+    setFileContent(null);
     setSelectedPath(path);
     setContentLoading(true);
+    setContentError(null);
     try {
       const result = await api.getFileContent(path);
       setFileContent(result.content);
-    } catch {
-      setFileContent('Error loading file content');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      const isNetwork = err instanceof TypeError || message === 'Request timeout';
+      const is404 = message.includes('404') || message.includes('not found') || message.includes('Not found');
+      const label = isNetwork
+        ? 'Network error - server may be unreachable'
+        : is404
+          ? 'File not found - it may have been deleted or renamed'
+          : message;
+      setContentError(label);
+      setFileContent(null);
     } finally {
       setContentLoading(false);
     }
   }, []);
+
+  const handleSelectFile = useCallback((path: string) => {
+    loadFileContent(path);
+  }, [loadFileContent]);
 
   return (
     <div className="glass p-6 flex flex-col" style={{ minHeight: '300px' }}>
@@ -159,6 +177,18 @@ export function FileBrowser({ files, loading }: FileBrowserProps) {
                 <div className="flex-1 overflow-y-auto terminal-scroll">
                   {contentLoading ? (
                     <div className="text-slate text-xs">Loading...</div>
+                  ) : contentError ? (
+                    <div className="flex flex-col items-center justify-center gap-2 py-6">
+                      <p className="text-danger text-xs font-medium">Failed to load file</p>
+                      <p className="text-slate text-[10px] text-center max-w-[200px] break-words">{contentError}</p>
+                      <button
+                        type="button"
+                        onClick={() => selectedPath && loadFileContent(selectedPath)}
+                        className="mt-1 px-3 py-1 text-[10px] font-semibold rounded-lg border border-primary/20 text-primary hover:bg-primary/5 transition-colors"
+                      >
+                        Retry
+                      </button>
+                    </div>
                   ) : (
                     <pre className="text-xs font-mono text-charcoal whitespace-pre-wrap break-words leading-relaxed">
                       {fileContent}

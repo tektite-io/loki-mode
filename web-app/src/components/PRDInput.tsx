@@ -29,33 +29,23 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
   };
   const [showTemplates, setShowTemplates] = useState(false);
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
+  const [templateLoadError, setTemplateLoadError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [quickMode, setQuickMode] = useState(false);
   const [planResult, setPlanResult] = useState<PlanResult | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [showPlanModal, setShowPlanModal] = useState(false);
 
-  // Load templates from backend
+  // Load templates from backend (no hardcoded fallback -- show warning on failure)
   useEffect(() => {
     api.getTemplates()
-      .then(setTemplates)
+      .then((list) => {
+        setTemplates(list);
+        setTemplateLoadError(false);
+      })
       .catch(() => {
-        // Fallback to hardcoded list if backend templates endpoint fails
-        setTemplates([
-          { name: 'SaaS Starter', filename: 'saas-starter.md' },
-          { name: 'CLI Tool', filename: 'cli-tool.md' },
-          { name: 'REST API (Auth)', filename: 'rest-api-auth.md' },
-          { name: 'Full Stack Demo', filename: 'full-stack-demo.md' },
-          { name: 'Discord Bot', filename: 'discord-bot.md' },
-          { name: 'Chrome Extension', filename: 'chrome-extension.md' },
-          { name: 'Blog Platform', filename: 'blog-platform.md' },
-          { name: 'E-Commerce', filename: 'e-commerce.md' },
-          { name: 'Mobile App', filename: 'mobile-app.md' },
-          { name: 'AI Chatbot', filename: 'ai-chatbot.md' },
-          { name: 'API Only', filename: 'api-only.md' },
-          { name: 'Simple Todo', filename: 'simple-todo-app.md' },
-          { name: 'Static Landing', filename: 'static-landing-page.md' },
-        ]);
+        setTemplates([]);
+        setTemplateLoadError(true);
       });
   }, []);
 
@@ -168,6 +158,14 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
             {showTemplates && (
               <div className="absolute right-0 top-full mt-1 w-56 glass-subtle rounded-xl overflow-hidden z-20 shadow-glass">
                 <div className="py-1 max-h-64 overflow-y-auto terminal-scroll">
+                  {templateLoadError && (
+                    <div className="px-3 py-2 text-xs text-warning border-b border-warning/10">
+                      Could not load templates from server. Check that the backend is running.
+                    </div>
+                  )}
+                  {!templateLoadError && templates.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-slate">Loading...</div>
+                  )}
                   {templates.map((t) => (
                     <button
                       key={t.filename}

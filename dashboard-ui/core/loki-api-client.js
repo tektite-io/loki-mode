@@ -477,8 +477,19 @@ export class LokiApiClient extends EventTarget {
       clearTimeout(timeout);
 
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: response.statusText }));
-        throw new Error(error.detail || `HTTP ${response.status}`);
+        // Safe parsing: read as text first, then try JSON
+        const rawBody = await response.text().catch(() => '');
+        let detail = response.statusText || `HTTP ${response.status}`;
+        if (rawBody) {
+          try {
+            const parsed = JSON.parse(rawBody);
+            detail = parsed.detail || parsed.error || parsed.message || detail;
+          } catch {
+            // Response is not JSON (HTML error page, plain text, etc.)
+            detail = rawBody.length > 200 ? rawBody.slice(0, 200) + '...' : rawBody;
+          }
+        }
+        throw new Error(detail);
       }
 
       if (response.status === 204) {

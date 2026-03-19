@@ -5,6 +5,16 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.37.2] - 2026-03-19
+
+### Fixed
+- Purple Lab: model tier display now uses actual RARV iteration mapping instead of heuristic model name matching (#140)
+- Purple Lab: file content errors show specific error messages with retry button instead of generic text (#121)
+- Purple Lab: removed stale hardcoded template fallback list, shows user warning when templates fail to load (#119)
+- Purple Lab: plan output parsing tries JSON first, falls back to tighter regex with ANSI stripping (#117)
+- Dashboard: API client error handler safely parses non-JSON error responses (HTML, plain text) (#109)
+- Dashboard: overview component uses AbortController to cancel stale requests on unmount/re-render (#108)
+
 ## [6.37.1] - 2026-03-19
 
 ### Fixed

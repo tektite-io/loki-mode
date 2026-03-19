@@ -291,13 +291,38 @@ export class LokiCostDashboard extends LokiElement {
     `;
   }
 
+  /**
+   * Map iteration number to RARV tier (matches autonomy/run.sh get_rarv_tier).
+   * 0=planning(opus), 1=development(sonnet), 2=development(sonnet), 3=fast(haiku)
+   */
+  _getRARVTier(iteration) {
+    if (iteration == null) return null;
+    const step = iteration % 4;
+    switch (step) {
+      case 0: return 'opus';
+      case 1: return 'sonnet';
+      case 2: return 'sonnet';
+      case 3: return 'haiku';
+      default: return 'sonnet';
+    }
+  }
+
   _getPricingColorClass(key, model) {
-    // Map model keys to CSS color classes
-    if (key === 'opus' || key.includes('opus')) return 'opus';
-    if (key === 'sonnet' || key.includes('sonnet')) return 'sonnet';
-    if (key === 'haiku' || key.includes('haiku')) return 'haiku';
-    if (model.provider === 'codex') return 'codex';
-    if (model.provider === 'gemini') return 'gemini';
+    // Use explicit tier from API if available (actual RARV mapping)
+    if (model.tier === 'planning') return 'opus';
+    if (model.tier === 'development') return 'sonnet';
+    if (model.tier === 'fast') return 'haiku';
+    // Use iteration-based RARV mapping if available
+    if (model.iteration != null) {
+      return this._getRARVTier(model.iteration) || '';
+    }
+    // Fallback: match model name patterns
+    const lower = (key || '').toLowerCase();
+    if (lower.includes('opus')) return 'opus';
+    if (lower.includes('sonnet')) return 'sonnet';
+    if (lower.includes('haiku')) return 'haiku';
+    if (model.provider === 'codex' || lower.includes('gpt') || lower.includes('codex')) return 'codex';
+    if (model.provider === 'gemini' || lower.includes('gemini')) return 'gemini';
     return '';
   }
 

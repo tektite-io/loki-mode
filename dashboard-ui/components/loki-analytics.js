@@ -11,16 +11,38 @@
 import { LokiElement } from '../core/loki-theme.js';
 import { getApiClient } from '../core/loki-api-client.js';
 
-/** Map model name fragments to provider */
-const MODEL_TO_PROVIDER = {
-  opus: 'claude', sonnet: 'claude', haiku: 'claude', claude: 'claude',
-  'gpt': 'codex', codex: 'codex',
-  gemini: 'gemini',
-};
+/** Map model name fragments to provider -- ordered longest-first to avoid false prefix matches */
+const MODEL_TO_PROVIDER = [
+  ['claude-opus', 'claude'], ['claude-sonnet', 'claude'], ['claude-haiku', 'claude'],
+  ['opus', 'claude'], ['sonnet', 'claude'], ['haiku', 'claude'], ['claude', 'claude'],
+  ['gpt-4', 'codex'], ['gpt-5', 'codex'], ['gpt', 'codex'], ['codex', 'codex'], ['o1', 'codex'], ['o3', 'codex'],
+  ['gemini', 'gemini'],
+];
 
-function classifyProvider(modelName) {
+/**
+ * Map RARV iteration to tier (matches autonomy/run.sh get_rarv_tier).
+ * Returns { tier: 'planning'|'development'|'fast', model: 'opus'|'sonnet'|'haiku' }
+ */
+function getRARVTier(iteration) {
+  if (iteration == null) return null;
+  const step = iteration % 4;
+  switch (step) {
+    case 0: return { tier: 'planning', model: 'opus', provider: 'claude' };
+    case 1: return { tier: 'development', model: 'sonnet', provider: 'claude' };
+    case 2: return { tier: 'development', model: 'sonnet', provider: 'claude' };
+    case 3: return { tier: 'fast', model: 'haiku', provider: 'claude' };
+    default: return { tier: 'development', model: 'sonnet', provider: 'claude' };
+  }
+}
+
+function classifyProvider(modelName, iteration) {
+  // Use RARV tier mapping when iteration data is available
+  if (iteration != null) {
+    const rarv = getRARVTier(iteration);
+    if (rarv) return rarv.provider;
+  }
   const lower = (modelName || '').toLowerCase();
-  for (const [key, provider] of Object.entries(MODEL_TO_PROVIDER)) {
+  for (const [key, provider] of MODEL_TO_PROVIDER) {
     if (lower.includes(key)) return provider;
   }
   return 'unknown';

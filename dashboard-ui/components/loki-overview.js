@@ -60,6 +60,11 @@ export class LokiOverview extends LokiElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopPolling();
+    // Abort any in-flight API requests to prevent memory leaks
+    if (this._loadAbortController) {
+      this._loadAbortController.abort();
+      this._loadAbortController = null;
+    }
     if (this._api) {
       if (this._statusUpdateHandler) this._api.removeEventListener(ApiEvents.STATUS_UPDATE, this._statusUpdateHandler);
       if (this._connectedHandler) this._api.removeEventListener(ApiEvents.CONNECTED, this._connectedHandler);
@@ -93,6 +98,13 @@ export class LokiOverview extends LokiElement {
   }
 
   async _loadStatus() {
+    // Abort any in-flight requests from a previous _loadStatus call
+    if (this._loadAbortController) {
+      this._loadAbortController.abort();
+    }
+    this._loadAbortController = new AbortController();
+    const { signal } = this._loadAbortController;
+
     try {
       const [status, checklistSummary, appRunnerStatus, playwrightResults, gateStatus] = await Promise.allSettled([
         this._api.getStatus(),
@@ -101,6 +113,9 @@ export class LokiOverview extends LokiElement {
         this._api.getPlaywrightResults(),
         this._api.getCouncilGate(),
       ]);
+      // If aborted while awaiting, don't update state
+      if (signal.aborted) return;
+
       if (status.status === 'fulfilled') {
         this._updateFromStatus(status.value);
       } else {
@@ -121,6 +136,7 @@ export class LokiOverview extends LokiElement {
       }
       this.render();
     } catch (error) {
+      if (signal.aborted) return;
       this._data.connected = false;
       this._data.status = 'offline';
       this.render();

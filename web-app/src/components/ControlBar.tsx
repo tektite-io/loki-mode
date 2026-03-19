@@ -17,15 +17,31 @@ function formatUptime(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
-function getModelTier(phase: string): string {
-  const lower = phase.toLowerCase();
-  if (lower.includes('plan') || lower.includes('architect') || lower.includes('design')) return 'Opus';
-  if (lower.includes('test') || lower.includes('unit') || lower.includes('monitor')) return 'Haiku';
+/**
+ * Derive model tier from iteration number and complexity using the actual
+ * RARV mapping from run.sh:get_rarv_tier() instead of guessing from phase keywords.
+ *
+ *   simple:   Opus iter 1,        Haiku last 1,  Sonnet rest
+ *   standard: Opus iters 1-2,     Haiku last 2,  Sonnet rest
+ *   complex:  Opus iters 1-3,     Haiku last 3,  Sonnet rest
+ */
+function getModelTier(iteration: number, complexity: string): string {
+  if (!iteration || iteration <= 0) return '--';
+
+  const defaults: Record<string, { opus: number; haiku: number; total: number }> = {
+    simple:   { opus: 1, haiku: 1, total: 3 },
+    standard: { opus: 2, haiku: 2, total: 5 },
+    complex:  { opus: 3, haiku: 3, total: 8 },
+  };
+  const cfg = defaults[complexity] || defaults.standard;
+
+  if (iteration <= cfg.opus) return 'Opus';
+  if (iteration > cfg.total - cfg.haiku) return 'Haiku';
   return 'Sonnet';
 }
 
 export function ControlBar({ status, prdSummary, onStop, onPause, onResume, isPaused }: ControlBarProps) {
-  const tier = status ? getModelTier(status.phase || '') : '--';
+  const tier = status ? getModelTier(status.iteration ?? 0, status.complexity || 'standard') : '--';
   const paused = isPaused ?? status?.paused ?? false;
 
   return (

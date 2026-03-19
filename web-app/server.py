@@ -534,10 +534,21 @@ async def get_file_content(path: str = "") -> JSONResponse:
     try:
         size = resolved.stat().st_size
         if size > 1_048_576:
-            return JSONResponse(content={"content": f"[File too large: {size} bytes]"})
+            return JSONResponse(
+                status_code=413,
+                content={"error": f"File too large ({size:,} bytes, limit 1MB)"},
+            )
         content = resolved.read_text(errors="replace")
-    except (OSError, UnicodeDecodeError) as e:
-        return JSONResponse(content={"content": f"[Cannot read file: {e}]"})
+    except OSError as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Cannot read file: {e}"},
+        )
+    except UnicodeDecodeError as e:
+        return JSONResponse(
+            status_code=422,
+            content={"error": f"Binary or unreadable file: {e}"},
+        )
 
     return JSONResponse(content={"content": content})
 
@@ -716,33 +727,82 @@ async def plan_session(req: PlanRequest) -> JSONResponse:
         except OSError:
             pass
 
-    # Parse output for structured fields
+    # Try to parse structured JSON from output first (loki plan may emit JSON blocks)
+    import json as _json
+    import logging as _logging
+    import re as _re
+
+    _log = _logging.getLogger("purple-lab.plan")
+
     complexity = "standard"
     cost_estimate = "unknown"
     iterations = 5
     phases: list[str] = []
+    parsed = False
 
-    for line in output.splitlines():
-        lower = line.lower()
-        if "complexity" in lower:
-            for val in ("simple", "standard", "complex", "expert"):
-                if val in lower:
-                    complexity = val
-                    break
-        if "cost" in lower and ("$" in line or "usd" in lower):
-            import re
-            m = re.search(r"\$[\d.,]+", line)
-            if m:
-                cost_estimate = m.group(0)
-        if "iteration" in lower:
-            import re
-            m = re.search(r"(\d+)", line)
-            if m:
-                iterations = int(m.group(1))
-        # Detect phase lines
-        for phase in ("planning", "implementation", "testing", "review", "deployment"):
-            if phase in lower and phase not in phases:
-                phases.append(phase)
+    # Look for any JSON object containing plan-related keys (supports nested braces)
+    json_match = _re.search(r'\{[^{}]*"complexity"[^{}]*\}', output, _re.DOTALL)
+    if not json_match:
+        json_match = _re.search(r'\{[^{}]*"iterations"[^{}]*\}', output, _re.DOTALL)
+    if json_match:
+        try:
+            data = _json.loads(json_match.group(0))
+            if isinstance(data.get("complexity"), dict):
+                complexity = data["complexity"].get("tier", "standard")
+            elif isinstance(data.get("complexity"), str):
+                complexity = data["complexity"]
+            if isinstance(data.get("cost"), dict):
+                total = data["cost"].get("total_usd") or data["cost"].get("total", 0)
+                try:
+                    cost_estimate = f"${float(total):.2f}"
+                except (ValueError, TypeError):
+                    _log.warning("Could not parse cost value: %r", total)
+            elif isinstance(data.get("cost_estimate"), str):
+                cost_estimate = data["cost_estimate"]
+            if isinstance(data.get("iterations"), dict):
+                iterations = data["iterations"].get("estimated", 5)
+            elif isinstance(data.get("iterations"), (int, float)):
+                iterations = int(data["iterations"])
+            if isinstance(data.get("execution_plan"), list):
+                phases = [p.get("focus", "") for p in data["execution_plan"] if isinstance(p, dict) and p.get("focus")]
+            elif isinstance(data.get("phases"), list):
+                phases = [p for p in data["phases"] if isinstance(p, str)]
+            parsed = True
+        except (_json.JSONDecodeError, TypeError, KeyError) as exc:
+            _log.warning("JSON plan block found but failed to parse: %s", exc)
+
+    # Fallback: line-by-line text parsing with tighter patterns
+    if not parsed:
+        _log.info("No JSON plan block found, falling back to text parsing")
+        for line in output.splitlines():
+            stripped = _re.sub(r'\x1b\[[0-9;]*m', '', line)  # strip ANSI codes
+            lower = stripped.lower().strip()
+            if not lower:
+                continue
+            # Complexity detection: match "complexity: standard" or "Complexity Tier: complex" etc.
+            if _re.search(r'complexity\s*(?:tier)?\s*[:=]', lower):
+                for val in ("simple", "standard", "complex", "expert"):
+                    if _re.search(rf'\b{val}\b', lower):
+                        complexity = val
+                        break
+            # Cost parsing: look for dollar amounts in cost/estimate lines
+            if ("cost" in lower or "estimate" in lower) and "$" in stripped:
+                m = _re.search(r"\$[\d,]+\.?\d*", stripped)
+                if m:
+                    cost_estimate = m.group(0)
+            # Iteration count
+            if _re.search(r'iterations?\s*[:=]\s*\d+', lower):
+                m = _re.search(r'iterations?\s*[:=]\s*(\d+)', lower)
+                if m:
+                    iterations = int(m.group(1))
+            # Phase/step lines
+            if _re.match(r'^\s*(phase|step)\s+\d', lower):
+                for phase_name in ("planning", "implementation", "testing", "review", "deployment"):
+                    if _re.search(rf'\b{phase_name}\b', lower) and phase_name not in phases:
+                        phases.append(phase_name)
+
+    if not parsed and not phases:
+        _log.info("Plan parse produced no phases from output (%d chars)", len(output))
 
     return JSONResponse(content={
         "complexity": complexity,
