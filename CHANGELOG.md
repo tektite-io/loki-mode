@@ -1871,7 +1871,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub: 12 good-first-issues (#14-#25) for community onboarding
 
 ### Fixed
-- Shell: BSD sed ` ` uppercase conversion fails on macOS (use awk instead)
+- Shell: BSD sed `` uppercase conversion fails on macOS (use awk instead)
 - Shell: BSD sed `\+` regex fails on macOS (use `sed -E` extended regex)
 - Shell: `dogfood-stats.sh` grep -c produces "0
 0" on no matches (use `|| true`)
