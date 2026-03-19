@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Ensure project root is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dashboard.models import Base, Project
+from dashboard.models import Base, Project, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +94,10 @@ async def seed_project(db_session_factory):
     """Seed a project into the DB for run tests."""
     async with db_session_factory() as session:
         async with session.begin():
-            proj = Project(name="Test Project", status="active")
+            tenant = Tenant(name="Test Tenant", slug="test-tenant")
+            session.add(tenant)
+            await session.flush()
+            proj = Project(name="Test Project", status="active", tenant_id=tenant.id)
             session.add(proj)
             await session.flush()
             await session.refresh(proj)

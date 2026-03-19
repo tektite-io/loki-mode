@@ -317,35 +317,37 @@ class TestTenantProjectRelationship:
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility: projects without tenant
+# Tenant-required: projects must have tenant_id (v6.37.8+)
 # ---------------------------------------------------------------------------
 
 
-class TestBackwardCompatibility:
+class TestTenantRequired:
     @pytest.mark.asyncio
-    async def test_project_without_tenant(self, db):
-        """Projects can exist without a tenant (tenant_id=None)."""
-        project = Project(name="Standalone Project")
+    async def test_project_requires_tenant(self, db):
+        """Projects require a tenant_id as of v6.37.8 (NOT NULL constraint)."""
+        tenant = await create_tenant(db, "Required Tenant")
+        project = Project(name="Tenanted Project", tenant_id=tenant.id)
         db.add(project)
         await db.flush()
         await db.refresh(project)
 
-        assert project.tenant_id is None
+        assert project.tenant_id == tenant.id
         assert project.id is not None
 
     @pytest.mark.asyncio
     async def test_mixed_projects(self, db):
-        """Tenanted and non-tenanted projects can coexist."""
-        tenant = await create_tenant(db, "Partial Adoption")
-        tenanted = Project(name="Tenanted", tenant_id=tenant.id)
-        standalone = Project(name="Standalone")
-        db.add_all([tenanted, standalone])
+        """Multiple tenants have isolated project scopes."""
+        tenant_a = await create_tenant(db, "Tenant A")
+        tenant_b = await create_tenant(db, "Tenant B")
+        proj_a = Project(name="Project A", tenant_id=tenant_a.id)
+        proj_b = Project(name="Project B", tenant_id=tenant_b.id)
+        db.add_all([proj_a, proj_b])
         await db.flush()
 
-        # Only the tenanted project shows up in tenant scope
-        projects = await get_tenant_projects(db, tenant.id)
+        # Only tenant_a's project shows up in tenant_a scope
+        projects = await get_tenant_projects(db, tenant_a.id)
         assert len(projects) == 1
-        assert projects[0].name == "Tenanted"
+        assert projects[0].name == "Project A"
 
 
 # ---------------------------------------------------------------------------

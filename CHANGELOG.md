@@ -5,6 +5,12 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.38.1] - 2026-03-19
+
+### Fixed
+- CI failure: test_api_v2.py seed_project fixture and test_tenants.py backward-compat tests missing tenant_id (NOT NULL constraint added in v6.37.8)
+- Removed stale backward-compatibility tests that tested tenant_id=None (behavior removed in v6.37.8); replaced with tests that verify tenant isolation
+
 ## [6.38.0] - 2026-03-19
 
 ### Fixed
