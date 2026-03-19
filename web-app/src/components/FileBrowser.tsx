@@ -38,7 +38,7 @@ function TreeNode({
   onSelectFile: (path: string) => void;
   selectedPath: string | null;
 }) {
-  const [expanded, setExpanded] = useState(depth === 0);
+  const [expanded, setExpanded] = useState(false);
   const isDir = node.type === 'directory';
   const isSelected = node.path === selectedPath;
 
@@ -74,7 +74,7 @@ function TreeNode({
           </span>
         )}
       </button>
-      {isDir && expanded && node.children && (
+      {isDir && expanded && node.children && node.children.length > 0 && (
         <div>
           {node.children.map((child) => (
             <TreeNode

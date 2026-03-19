@@ -162,6 +162,7 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     prd_path: Optional[str] = None
+    tenant_id: int = Field(..., gt=0, description="Tenant ID (required, must be positive)")
 
     @field_validator("name")
     @classmethod
@@ -778,6 +779,7 @@ async def create_project(
         name=project.name,
         description=project.description,
         prd_path=project.prd_path,
+        tenant_id=project.tenant_id,
     )
     db.add(db_project)
     await db.flush()
@@ -2852,7 +2854,7 @@ def _calculate_model_cost(model: str, input_tokens: int, output_tokens: int) -> 
     pricing = pricing_table.get(model.lower(), pricing_table.get("sonnet", {}))
     input_cost = (input_tokens / 1_000_000) * pricing.get("input", 3.00)
     output_cost = (output_tokens / 1_000_000) * pricing.get("output", 15.00)
-    return input_cost + output_cost
+    return round(input_cost + output_cost, 4)
 
 
 @app.get("/api/cost")
@@ -2946,7 +2948,11 @@ async def get_cost():
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,
         "estimated_cost_usd": round(estimated_cost, 4),
-        "by_phase": by_phase,
+        "by_phase": {k: {
+            "input_tokens": v["input_tokens"],
+            "output_tokens": v["output_tokens"],
+            "cost_usd": round(v["cost_usd"], 4),
+        } for k, v in by_phase.items()},
         "by_model": {k: {
             "input_tokens": v["input_tokens"],
             "output_tokens": v["output_tokens"],

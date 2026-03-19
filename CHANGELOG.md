@@ -5,6 +5,13 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.37.8] - 2026-03-19
+
+### Fixed
+- Web App: file browser TreeNode starts collapsed by default, lazy-rendering children only when expanded to prevent browser freeze on large trees (#120)
+- Dashboard: tenant_id is now required in ProjectCreate schema, preventing orphaned projects without a tenant (#112)
+- Dashboard: cost calculation uses round() to 4 decimal places throughout, fixing float precision loss for large amounts (#111)
+
 ## [6.37.7] - 2026-03-19
 
 ### Fixed
