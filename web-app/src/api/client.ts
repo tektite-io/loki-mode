@@ -127,6 +127,8 @@ export const api = {
   getFiles: () => fetchJSON<import('../types/api').FileNode[]>('/session/files'),
   getFileContent: (path: string) =>
     fetchJSON<{ content: string }>(`/session/files/content?path=${encodeURIComponent(path)}`),
+  getSessionFileContent: (sessionId: string, path: string) =>
+    fetchJSON<{ content: string }>(`/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(path)}`),
 
   // Templates
   getTemplates: () => fetchJSON<{ name: string; filename: string }[]>('/templates'),

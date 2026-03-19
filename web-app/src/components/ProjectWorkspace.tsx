@@ -131,7 +131,10 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     setFileLoading(true);
     setShowPreview(false);
     try {
-      const result = await api.getFileContent(path);
+      // Use session-scoped endpoint for past sessions, active session endpoint for current
+      const result = session.id
+        ? await api.getSessionFileContent(session.id, path)
+        : await api.getFileContent(path);
       setFileContent(result.content);
       // Auto-show preview for HTML files
       if (isPreviewable(name)) {

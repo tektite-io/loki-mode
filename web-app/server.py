@@ -1102,6 +1102,44 @@ async def get_session_detail(session_id: str) -> JSONResponse:
     })
 
 
+@app.get("/api/sessions/{session_id}/file")
+async def get_session_file(session_id: str, path: str = "") -> JSONResponse:
+    """Get file content from a past session with path traversal protection."""
+    import re
+    if not re.match(r"^[a-zA-Z0-9._-]+$", session_id) or not path:
+        return JSONResponse(status_code=400, content={"error": "Invalid session ID or path"})
+
+    search_dirs = [
+        Path.home() / "purple-lab-projects",
+        Path.home() / ".loki-sessions",
+        Path.home() / ".loki" / "sessions",
+    ]
+    target: Optional[Path] = None
+    for base_dir in search_dirs:
+        candidate = base_dir / session_id
+        if candidate.is_dir():
+            target = candidate
+            break
+
+    if target is None:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    base = target.resolve()
+    resolved = _safe_resolve(base, path)
+    if resolved is None or not resolved.is_file():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+
+    try:
+        size = resolved.stat().st_size
+        if size > 1_048_576:
+            return JSONResponse(content={"content": f"[File too large: {size:,} bytes]"})
+        content = resolved.read_text(errors="replace")
+    except (OSError, UnicodeDecodeError) as e:
+        return JSONResponse(content={"content": f"[Cannot read file: {e}]"})
+
+    return JSONResponse(content={"content": content})
+
+
 @app.post("/api/session/onboard")
 async def onboard_session(req: OnboardRequest) -> JSONResponse:
     """Run loki onboard on a path and return CLAUDE.md content."""
