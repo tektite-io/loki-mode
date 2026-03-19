@@ -5,6 +5,27 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.37.4] - 2026-03-19
+
+### Security
+- OIDC JWT: reject tokens when PyJWT is not installed unless explicitly opted in via LOKI_OIDC_SKIP_SIGNATURE_VERIFY (#86)
+- Dashboard: TaskCreate.title and ProjectCreate.name strip/reject control characters (#110)
+- Dashboard: TaskMove validates status transitions via state machine, rejects invalid transitions with 422 (#95)
+- Dashboard: subtask creation detects circular parent references, rejects with 422 (#96)
+
+### Fixed
+- Dashboard: WebSocket rate limiter uses per-connection uuid4 key when client IP is unavailable (#90)
+- Dashboard: rate limiter evicts by last-access time instead of creation time for proper LRU behavior (#99, #100)
+- Dashboard: episode listing uses heapq.nlargest to avoid sorting all files before paginating (#93)
+- Dashboard: project listing uses batch task count query instead of N+1 selectinload, adds limit/offset pagination (#103)
+- Dashboard: registry sync wrapped with asyncio.wait_for 30s timeout (#105)
+- Dashboard: concurrent .loki/ JSON reads retry once on JSONDecodeError with 100ms backoff (#88)
+- Dashboard: log file reading uses errors='replace' for non-UTF-8 content (#91)
+- Dashboard: missing index.html returns 503 JSON error instead of 200 HTML (#92)
+- Shell: diff_content written with printf instead of echo to prevent variable expansion (#78)
+- CLI: council report handles corrupted state.json with friendly error message (#76)
+- CLI: migrate start validates prerequisite phase artifacts exist before running (#81)
+
 ## [6.37.3] - 2026-03-19
 
 ### Fixed

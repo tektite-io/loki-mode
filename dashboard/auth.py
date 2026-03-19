@@ -59,17 +59,29 @@ _SCOPE_HIERARCHY = {
 if OIDC_ENABLED:
     import logging as _logging
     _logger = _logging.getLogger("loki.auth")
+    _pyjwt_available = False
+    try:
+        import jwt as _pyjwt_check  # noqa: F401
+        from jwt import PyJWKClient as _PyJWKClient_check  # noqa: F401
+        _pyjwt_available = True
+    except ImportError:
+        _pyjwt_available = False
+
     if OIDC_SKIP_SIGNATURE_VERIFY:
         _logger.critical(
             "OIDC/SSO signature verification DISABLED (LOKI_OIDC_SKIP_SIGNATURE_VERIFY=true). "
             "This is INSECURE and allows forged JWTs. Only use for local testing. "
             "For production, install PyJWT + cryptography and remove this env var."
         )
+    elif _pyjwt_available:
+        _logger.info(
+            "OIDC/SSO enabled with PyJWT cryptographic signature verification (RS256/RS384/RS512)."
+        )
     else:
-        _logger.warning(
-            "OIDC/SSO enabled (EXPERIMENTAL). Claims-based validation only -- "
-            "JWT signatures are NOT cryptographically verified. Install PyJWT + "
-            "cryptography for production signature verification."
+        _logger.critical(
+            "OIDC/SSO enabled but PyJWT is NOT installed. Tokens will be REJECTED "
+            "unless LOKI_OIDC_SKIP_SIGNATURE_VERIFY=true is set. "
+            "Install PyJWT + cryptography: pip install PyJWT cryptography"
         )
 
 # OIDC JWKS cache (issuer URL -> (keys_dict, fetch_timestamp))
@@ -526,14 +538,18 @@ def validate_oidc_token(token_str: str) -> Optional[dict]:
             "issuer": decoded.get("iss"),
         }
     except ImportError:
-        # PyJWT not installed -- fall through to claims-only path with loud warning
-        _warning_msg = (
-            "WARNING: OIDC JWT signatures are NOT cryptographically verified. "
-            "Install PyJWT with 'pip install PyJWT cryptography' for production use."
+        # PyJWT not installed -- only allow claims-only path if explicitly opted in
+        if not OIDC_SKIP_SIGNATURE_VERIFY:
+            _auth_logger.error(
+                "OIDC token rejected: PyJWT not installed and "
+                "LOKI_OIDC_SKIP_SIGNATURE_VERIFY is not set. "
+                "Install PyJWT: pip install PyJWT cryptography"
+            )
+            return None
+        _auth_logger.warning(
+            "PyJWT not installed -- using claims-only validation "
+            "(LOKI_OIDC_SKIP_SIGNATURE_VERIFY=true). This is INSECURE."
         )
-        _auth_logger.warning(_warning_msg)
-        # Also print to stderr so operators notice even without log config
-        print(_warning_msg, file=sys.stderr)
     except Exception as exc:
         _auth_logger.error("PyJWT signature verification failed: %s", exc)
         return None

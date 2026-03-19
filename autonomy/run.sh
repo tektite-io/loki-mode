@@ -5502,10 +5502,11 @@ run_code_review() {
     log_info "Selecting 3 specialist reviewers from pool..."
 
     # Write diff/files to temp files for python to read (avoid env var size limits)
+    # Use printf to prevent shell variable expansion in diff content (#78)
     local diff_file="$review_dir/$review_id/diff.txt"
     local files_file="$review_dir/$review_id/files.txt"
-    echo "$diff_content" > "$diff_file"
-    echo "$changed_files" > "$files_file"
+    printf '%s\n' "$diff_content" > "$diff_file"
+    printf '%s\n' "$changed_files" > "$files_file"
 
     # Select specialists via keyword scoring (python3 reads files, not env vars)
     # Loads from agents/types.json when available, falls back to hardcoded pool (v6.7.0)
@@ -5881,11 +5882,11 @@ run_adversarial_testing() {
     local changed_files
     changed_files=$(git -C "${TARGET_DIR:-.}" diff --name-only HEAD~1 2>/dev/null || git -C "${TARGET_DIR:-.}" diff --name-only --cached 2>/dev/null || echo "")
 
-    # Write analysis files
+    # Write analysis files -- use printf to prevent shell variable expansion (#78)
     local diff_file="$adversarial_dir/$test_id/diff.txt"
     local files_file="$adversarial_dir/$test_id/files.txt"
-    echo "$diff_content" > "$diff_file"
-    echo "$changed_files" > "$files_file"
+    printf '%s\n' "$diff_content" > "$diff_file"
+    printf '%s\n' "$changed_files" > "$files_file"
 
     # Build adversarial prompt -- use heredoc with quoted delimiter to prevent
     # shell variable expansion in diff content (fixes #78)

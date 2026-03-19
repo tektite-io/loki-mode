@@ -30,7 +30,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -75,6 +75,27 @@ def _safe_int_env(name: str, default: int) -> int:
         return default
 
 
+def _safe_json_read(path: _Path, default: Any = None) -> Any:
+    """Read a JSON file with retry on partial/corrupt data from concurrent writes."""
+    for attempt in range(2):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            return json.loads(text)
+        except json.JSONDecodeError:
+            if attempt == 0:
+                time.sleep(0.1)
+                continue
+            return default
+        except (OSError, IOError):
+            return default
+    return default
+
+
+def _safe_read_text(path: _Path) -> str:
+    """Read a text file with UTF-8 encoding, replacing non-UTF-8 bytes."""
+    return open(path, encoding="utf-8", errors="replace").read()
+
+
 # ---------------------------------------------------------------------------
 # Simple in-memory rate limiter for control endpoints
 # ---------------------------------------------------------------------------
@@ -98,12 +119,12 @@ class _RateLimiter:
         for k in empty_keys:
             del self._calls[k]
 
-        # Evict oldest keys if max_keys exceeded
+        # Evict least-recently-accessed keys if max_keys exceeded
         if len(self._calls) > self._max_keys:
-            # Sort by oldest timestamp, remove oldest keys
+            # Sort by last-access time (most recent timestamp), evict least recent
             sorted_keys = sorted(
                 self._calls.items(),
-                key=lambda x: min(x[1]) if x[1] else 0
+                key=lambda x: max(x[1]) if x[1] else 0
             )
             keys_to_remove = len(self._calls) - self._max_keys
             for k, _ in sorted_keys[:keys_to_remove]:
@@ -123,11 +144,29 @@ logger = logging.getLogger(__name__)
 
 
 # Pydantic schemas for API
+def _sanitize_text_field(value: str) -> str:
+    """Strip/reject control characters from text fields."""
+    import unicodedata
+    # Remove control characters (except common whitespace like space)
+    cleaned = "".join(
+        ch for ch in value if unicodedata.category(ch)[0] != "C" or ch in (" ",)
+    )
+    cleaned = cleaned.strip()
+    if not cleaned:
+        raise ValueError("Field must not be empty after removing control characters")
+    return cleaned
+
+
 class ProjectCreate(BaseModel):
     """Schema for creating a project."""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     prd_path: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return _sanitize_text_field(v)
 
 
 class ProjectUpdate(BaseModel):
@@ -164,6 +203,11 @@ class TaskCreate(BaseModel):
     position: int = 0
     parent_task_id: Optional[int] = None
     estimated_duration: Optional[int] = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        return _sanitize_text_field(v)
 
 
 class TaskUpdate(BaseModel):
@@ -315,7 +359,7 @@ async def _push_loki_state_loop() -> None:
                 if mtime != last_mtime:
                     last_mtime = mtime
                     try:
-                        raw = json.loads(state_file.read_text())
+                        raw = _safe_json_read(state_file, {})
                         # Transform to StatusResponse-compatible format
                         agents_list = raw.get("agents", [])
                         running_agents = len(agents_list) if isinstance(agents_list, list) else 0
@@ -515,10 +559,10 @@ async def get_status() -> StatusResponse:
     pending_tasks = 0
     running_agents = 0
 
-    # Read dashboard state
+    # Read dashboard state (with retry for concurrent writes)
     if state_file.exists():
         try:
-            state = json.loads(state_file.read_text())
+            state = _safe_json_read(state_file, {})
             phase = state.get("phase", "")
             iteration = state.get("iteration", 0)
             complexity = state.get("complexity", "standard")
@@ -561,7 +605,7 @@ async def get_status() -> StatusResponse:
     # Also check session.json for skill-invoked sessions
     if not running and session_file.exists():
         try:
-            sd = json.loads(session_file.read_text())
+            sd = _safe_json_read(session_file, {})
             if sd.get("status") == "running":
                 running = True
         except (json.JSONDecodeError, KeyError):
@@ -673,21 +717,41 @@ async def get_status() -> StatusResponse:
 @app.get("/api/projects", response_model=list[ProjectResponse])
 async def list_projects(
     status: Optional[str] = Query(None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProjectResponse]:
-    """List all projects."""
-    query = select(Project).options(selectinload(Project.tasks))
+    """List projects with pagination. Does not eager-load tasks for efficiency."""
+    from sqlalchemy import func as sa_func
+
+    query = select(Project)
     if status:
         query = query.where(Project.status == status)
-    query = query.order_by(Project.created_at.desc())
+    query = query.order_by(Project.created_at.desc()).offset(offset).limit(limit)
 
     result = await db.execute(query)
     projects = result.scalars().all()
 
+    # Batch-fetch task counts instead of N+1 eager loading
+    project_ids = [p.id for p in projects]
     response = []
+    if project_ids:
+        count_query = (
+            select(
+                Task.project_id,
+                sa_func.count().label("total"),
+                sa_func.count().filter(Task.status == TaskStatus.DONE).label("done"),
+            )
+            .where(Task.project_id.in_(project_ids))
+            .group_by(Task.project_id)
+        )
+        count_result = await db.execute(count_query)
+        counts = {row.project_id: (row.total, row.done) for row in count_result}
+    else:
+        counts = {}
+
     for project in projects:
-        task_count = len(project.tasks)
-        completed_count = len([t for t in project.tasks if t.status == TaskStatus.DONE])
+        total, done = counts.get(project.id, (0, 0))
         response.append(
             ProjectResponse(
                 id=project.id,
@@ -697,8 +761,8 @@ async def list_projects(
                 status=project.status,
                 created_at=project.created_at,
                 updated_at=project.updated_at,
-                task_count=task_count,
-                completed_task_count=completed_count,
+                task_count=total,
+                completed_task_count=done,
             )
         )
     return response
@@ -1066,11 +1130,28 @@ async def create_task(
                 Task.project_id == task.project_id
             )
         )
-        if not result.scalar_one_or_none():
+        parent = result.scalar_one_or_none()
+        if not parent:
             raise HTTPException(
                 status_code=400,
                 detail="Parent task not found or belongs to different project"
             )
+
+        # Detect circular reference: walk parent chain
+        visited = set()
+        current_parent_id = task.parent_task_id
+        while current_parent_id is not None:
+            if current_parent_id in visited:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Circular reference detected in parent task chain"
+                )
+            visited.add(current_parent_id)
+            parent_result = await db.execute(
+                select(Task.parent_task_id).where(Task.id == current_parent_id)
+            )
+            row = parent_result.scalar_one_or_none()
+            current_parent_id = row if row else None
 
     db_task = Task(
         project_id=task.project_id,
@@ -1192,6 +1273,15 @@ async def delete_task(
     })
 
 
+# Valid status transitions for task state machine
+_TASK_STATE_MACHINE: dict[TaskStatus, set[TaskStatus]] = {
+    TaskStatus.BACKLOG: {TaskStatus.PENDING},
+    TaskStatus.PENDING: {TaskStatus.IN_PROGRESS},
+    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE},
+    TaskStatus.REVIEW: {TaskStatus.DONE, TaskStatus.IN_PROGRESS},
+}
+
+
 @app.post("/api/tasks/{task_id}/move", response_model=TaskResponse, dependencies=[Depends(auth.require_scope("control"))])
 async def move_task(
     task_id: int,
@@ -1208,6 +1298,18 @@ async def move_task(
         raise HTTPException(status_code=404, detail="Task not found")
 
     old_status = task.status
+
+    # Validate status transition
+    if move.status != old_status:
+        allowed = _TASK_STATE_MACHINE.get(old_status, set())
+        if move.status not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid status transition: {old_status.value} -> {move.status.value}. "
+                       f"Allowed transitions from {old_status.value}: "
+                       f"{', '.join(s.value for s in allowed) if allowed else 'none'}",
+            )
+
     task.status = move.status
     task.position = move.position
 
@@ -1252,8 +1354,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     # proxy access logs -- configure log sanitization for /ws in production.
     # FastAPI Depends() is not supported on @app.websocket() routes.
 
-    # Rate limit WebSocket connections by IP
-    client_ip = websocket.client.host if websocket.client else "unknown"
+    # Rate limit WebSocket connections by IP (use unique key when client info unavailable)
+    import uuid as _uuid
+    client_ip = websocket.client.host if websocket.client else f"ws-{_uuid.uuid4().hex}"
     if not _read_limiter.check(f"ws_{client_ip}"):
         await websocket.close(code=1008)  # Policy Violation
         return
@@ -1447,7 +1550,13 @@ async def sync_registry():
     if not _read_limiter.check("registry_sync"):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    result = registry.sync_registry_with_discovery()
+    try:
+        result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, registry.sync_registry_with_discovery),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Registry sync timed out after 30 seconds")
     return {
         "added": result["added"],
         "updated": result["updated"],
@@ -1815,11 +1924,14 @@ async def list_episodes(limit: int = Query(default=50, ge=1, le=1000)):
         except Exception:
             pass
 
-    # Fallback to JSON files
+    # Fallback to JSON files -- use heapq to avoid sorting all files
+    import heapq
     ep_dir = _get_loki_dir() / "memory" / "episodic"
     episodes = []
     if ep_dir.exists():
-        files = sorted(ep_dir.glob("*.json"), reverse=True)[:limit]
+        all_files = ep_dir.glob("*.json")
+        # nlargest by filename (timestamps sort lexicographically) avoids full sort
+        files = heapq.nlargest(limit, all_files, key=lambda f: f.name)
         for f in files:
             try:
                 episodes.append(json.loads(f.read_text()))
@@ -3525,7 +3637,7 @@ async def get_logs(lines: int = 100, token: Optional[dict] = Depends(auth.get_cu
                 file_mtime = datetime.fromtimestamp(log_file.stat().st_mtime, tz=timezone.utc).strftime(
                     "%Y-%m-%dT%H:%M:%S"
                 )
-                content = log_file.read_text()
+                content = _safe_read_text(log_file)
                 for raw_line in content.strip().split("\n")[-lines:]:
                     timestamp = ""
                     level = "info"
@@ -4310,7 +4422,7 @@ async def get_app_runner_logs(lines: int = Query(default=100, ge=1, le=1000)):
     if not log_file.exists():
         return {"lines": []}
     try:
-        all_lines = log_file.read_text().splitlines()
+        all_lines = _safe_read_text(log_file).splitlines()
         return {"lines": all_lines[-lines:]}
     except OSError:
         return {"lines": []}
@@ -4573,25 +4685,16 @@ async def serve_index():
         if os.path.isfile(index_path):
             return FileResponse(index_path, media_type="text/html")
 
-    # Return helpful error message
-    return HTMLResponse(
-        content="""
-        <html>
-        <head><title>Loki Dashboard</title></head>
-        <body style="font-family: system-ui; padding: 40px; max-width: 600px; margin: 0 auto;">
-            <h1>Dashboard Frontend Not Found</h1>
-            <p>The dashboard API is running, but the frontend files were not found.</p>
-            <p>To fix this, run:</p>
-            <pre style="background: #f5f5f5; padding: 15px; border-radius: 5px;">cd dashboard-ui && npm run build</pre>
-            <p><strong>API Endpoints:</strong></p>
-            <ul>
-                <li><a href="/health">/health</a> - Health check</li>
-                <li><a href="/docs">/docs</a> - API documentation</li>
-            </ul>
-        </body>
-        </html>
-        """,
-        status_code=200
+    # Return 503 when frontend files are not found
+    return JSONResponse(
+        content={
+            "error": "dashboard_frontend_not_found",
+            "detail": "The dashboard API is running, but the frontend files were not found. "
+                      "Run: cd dashboard-ui && npm run build",
+            "api_docs": "/docs",
+            "health": "/health",
+        },
+        status_code=503,
     )
 
 
