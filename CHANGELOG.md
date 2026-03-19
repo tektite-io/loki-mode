@@ -5,6 +5,16 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.37.6] - 2026-03-19
+
+### Fixed
+- CLI: cmd_explain --json validates jq is available before processing (#71)
+- CLI: cmd_stop with session ID prints success/failure feedback (#63)
+- CLI: loki watch rejects decimal and octal interval/debounce values (#61)
+- CLI: web --port validates port availability before binding (#73)
+- CLI: cmd_remote checks ~/.ssh directory exists before launching (#79)
+- Orchestrator: completion-council warns on invalid COUNCIL_CHECK_INTERVAL instead of silently overriding (#83)
+
 ## [6.37.5] - 2026-03-19
 
 ### Fixed

@@ -42,8 +42,9 @@ COUNCIL_ENABLED=${LOKI_COUNCIL_ENABLED:-true}
 COUNCIL_SIZE=${LOKI_COUNCIL_SIZE:-3}
 COUNCIL_THRESHOLD=${LOKI_COUNCIL_THRESHOLD:-2}
 COUNCIL_CHECK_INTERVAL=${LOKI_COUNCIL_CHECK_INTERVAL:-5}
-# Guard against zero/negative interval (division by zero in modulo)
-if [ "$COUNCIL_CHECK_INTERVAL" -le 0 ] 2>/dev/null; then
+# Guard against invalid interval (must be positive integer)
+if ! [[ "$COUNCIL_CHECK_INTERVAL" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Warning: invalid COUNCIL_CHECK_INTERVAL '$COUNCIL_CHECK_INTERVAL', using default 5" >&2
     COUNCIL_CHECK_INTERVAL=5
 fi
 COUNCIL_MIN_ITERATIONS=${LOKI_COUNCIL_MIN_ITERATIONS:-3}

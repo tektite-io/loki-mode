@@ -1144,8 +1144,9 @@ cmd_stop() {
     if [ -n "$target_session" ]; then
         if is_session_running "$target_session"; then
             _stop_session_by_id "$target_session"
+            echo "Stopped session: $target_session"
         else
-            echo -e "${YELLOW}Session '$target_session' is not running.${NC}"
+            echo "No active session found"
         fi
         return 0
     fi
@@ -3035,6 +3036,10 @@ cmd_web_start() {
         echo -e "${RED}Error: Port must be between 1 and 65535, got $port${NC}"
         exit 1
     fi
+    if lsof -Pi :"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo -e "${RED}Error: Port $port is already in use${NC}"
+        exit 1
+    fi
 
     # Validate --prd file if provided
     if [ -n "$prd_file" ]; then
@@ -4449,12 +4454,12 @@ cmd_watch() {
         esac
     done
 
-    # Validate numeric arguments
-    if ! [[ "$poll_interval" =~ ^[0-9]+$ ]] || [ "$poll_interval" -lt 1 ]; then
+    # Validate numeric arguments (no leading zeros, no decimals, positive integers only)
+    if ! [[ "$poll_interval" =~ ^[1-9][0-9]*$ ]]; then
         echo -e "${RED}Invalid --interval: $poll_interval (expected positive integer)${NC}"
         return 1
     fi
-    if ! [[ "$debounce" =~ ^[0-9]+$ ]] || [ "$debounce" -lt 0 ]; then
+    if ! [[ "$debounce" =~ ^[1-9][0-9]*$ ]] && [ "$debounce" != "0" ]; then
         echo -e "${RED}Invalid --debounce: $debounce (expected non-negative integer)${NC}"
         return 1
     fi
@@ -13980,6 +13985,13 @@ cmd_remote() {
     # Emit event
     emit_event session cli remote_start "prd=${prd_abs:-none}"
 
+    # Check SSH directory exists (needed for remote connections)
+    if [ ! -d "$HOME/.ssh" ]; then
+        echo -e "${RED}Error: ~/.ssh directory not found${NC}"
+        echo "Create it with: mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+        return 1
+    fi
+
     # Always use bypassPermissions so Loki Mode can operate autonomously
     rc_flags+=("--permission-mode" "bypassPermissions")
 
@@ -15757,7 +15769,7 @@ cmd_explain() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --json) output_json=true; shift ;;
+            --json) output_json=true; require_jq || return 1; shift ;;
             --brief) output_brief=true; shift ;;
             --save) output_save=true; shift ;;
             --help|-h)
