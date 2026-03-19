@@ -1,3 +1,10 @@
+## [6.35.1] - 2026-03-19
+
+### Fixed
+- Python CI test failure: moved `pytest_plugins` from `tests/docker/conftest.py` to top-level `conftest.py` to comply with pytest requirements for non-top-level conftest files
+- Added `pytest.ini` to exclude Docker integration tests from default test run (they require a live server and are meant for Docker CI only)
+- All 483 Python unit tests now pass across Python 3.10, 3.11, 3.12, 3.13
+
 ## [6.35.0] - 2026-03-18
 
 ### Added - Purple Lab CLI Feature Integration Complete

@@ -1,4 +1,5 @@
 import pytest
 
-# Configure pytest-asyncio
-pytest_plugins = ["pytest_asyncio"]
+# pytest_plugins must be defined at the top-level conftest.py (rootdir/conftest.py)
+# It has been moved there to comply with pytest requirements
+
