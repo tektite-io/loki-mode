@@ -551,6 +551,10 @@ cmd_start() {
                 ;;
             --provider)
                 if [[ -n "${2:-}" ]]; then
+                    if [[ "$2" == --* ]]; then
+                        echo -e "${RED}Missing value for --provider flag${NC}"
+                        exit 1
+                    fi
                     provider="$2"
                     args+=("--provider" "$provider")
                     shift 2
@@ -10269,10 +10273,25 @@ cmd_worktree() {
                 return 1
             fi
 
+            # Validate JSON is parseable and contains required fields
+            if ! python3 -c "
+import json, sys
+try:
+    data = json.load(open('$signal_file'))
+    assert data.get('branch'), 'missing branch'
+    assert data.get('worktree'), 'missing worktree'
+except Exception as e:
+    print(str(e), file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null; then
+                echo -e "${RED}Invalid or corrupted merge signal file${NC}"
+                exit 1
+            fi
+
             local branch
-            branch=$(python3 -c "import json; print(json.load(open('$signal_file'))['branch'])" 2>/dev/null)
+            branch=$(python3 -c "import json; print(json.load(open('$signal_file'))['branch'])")
             local worktree_path
-            worktree_path=$(python3 -c "import json; print(json.load(open('$signal_file'))['worktree'])" 2>/dev/null)
+            worktree_path=$(python3 -c "import json; print(json.load(open('$signal_file'))['worktree'])")
 
             if git merge --no-ff "$branch" -m "merge($name): auto-merge from parallel worktree"; then
                 echo -e "${GREEN}Merge successful${NC}"

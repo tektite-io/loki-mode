@@ -9194,8 +9194,9 @@ check_human_intervention() {
                 log_warn "PAUSE file created by budget limit - NOT auto-clearing in perpetual mode"
                 log_warn "Budget limit reached. Remove .loki/signals/BUDGET_EXCEEDED and .loki/PAUSE to continue."
                 notify_intervention_needed "Budget limit reached - execution paused" 2>/dev/null || true
+                local pause_result
                 handle_pause
-                local pause_result=$?
+                pause_result=$?
                 rm -f "$loki_dir/PAUSE"
                 if [ "$pause_result" -eq 1 ]; then
                     return 2
@@ -9211,8 +9212,9 @@ check_human_intervention() {
         fi
         log_warn "PAUSE file detected - pausing execution"
         notify_intervention_needed "Execution paused via PAUSE file"
+        local pause_result
         handle_pause
-        local pause_result=$?
+        pause_result=$?
         rm -f "$loki_dir/PAUSE"
         if [ "$pause_result" -eq 1 ]; then
             # STOP was requested during pause
@@ -9228,8 +9230,9 @@ check_human_intervention() {
             rm -f "$loki_dir/PAUSE_AT_CHECKPOINT"
             notify_intervention_needed "Execution paused at checkpoint"
             touch "$loki_dir/PAUSE"
+            local pause_result
             handle_pause
-            local pause_result=$?
+            pause_result=$?
             rm -f "$loki_dir/PAUSE"
             if [ "$pause_result" -eq 1 ]; then
                 return 2
