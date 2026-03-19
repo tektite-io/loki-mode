@@ -5887,14 +5887,20 @@ run_adversarial_testing() {
     echo "$diff_content" > "$diff_file"
     echo "$changed_files" > "$files_file"
 
-    # Build adversarial prompt
-    local adversarial_prompt="You are an ADVERSARIAL TESTER. Your goal is to BREAK the implementation.
+    # Build adversarial prompt -- use heredoc with quoted delimiter to prevent
+    # shell variable expansion in diff content (fixes #78)
+    local files_content changed_content
+    files_content=$(cat "$files_file")
+    changed_content=$(head -500 "$diff_file")
+    local adversarial_prompt
+    read -r -d '' adversarial_prompt <<'ADVERSARIAL_EOF' || true
+You are an ADVERSARIAL TESTER. Your goal is to BREAK the implementation.
 
 CHANGED FILES:
-$(cat "$files_file")
+__FILES_PLACEHOLDER__
 
 DIFF:
-$(head -500 "$diff_file")
+__DIFF_PLACEHOLDER__
 
 YOUR MISSION:
 1. Find edge cases that will cause crashes or incorrect behavior
@@ -5913,7 +5919,11 @@ ATTACK_VECTORS:
 SUGGESTED_TESTS:
 - Test description that would catch this issue
 
-OVERALL_RISK: HIGH or MEDIUM or LOW"
+OVERALL_RISK: HIGH or MEDIUM or LOW
+ADVERSARIAL_EOF
+    # Substitute placeholders with actual content (safe from shell expansion)
+    adversarial_prompt="${adversarial_prompt/__FILES_PLACEHOLDER__/$files_content}"
+    adversarial_prompt="${adversarial_prompt/__DIFF_PLACEHOLDER__/$changed_content}"
 
     local result_file="$adversarial_dir/$test_id/result.txt"
 

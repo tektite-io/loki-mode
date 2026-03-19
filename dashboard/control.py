@@ -266,7 +266,8 @@ def get_status() -> StatusResponse:
                         running = True
                 else:
                     running = True
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, OSError, KeyError):
+            # Partial JSON from concurrent write -- treat as unavailable
             pass
 
     # Determine state
@@ -304,7 +305,8 @@ def get_status() -> StatusResponse:
                 pending_tasks = len(pending)
             elif isinstance(pending, dict):
                 pending_tasks = len(pending.get("tasks", []))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, OSError, KeyError):
+            # Partial JSON from concurrent write -- treat as unavailable
             pass
 
     # Read provider from state
@@ -318,7 +320,8 @@ def get_status() -> StatusResponse:
         try:
             orch = json.loads(orch_file.read_text())
             current_task = orch.get("currentTask", "")
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, OSError, KeyError):
+            # Partial JSON from concurrent write -- treat as unavailable
             pass
 
     return StatusResponse(
@@ -458,7 +461,7 @@ async def stop_session():
 
             # Atomic write with file locking to prevent race conditions
             atomic_write_json(session_file, session_data, use_lock=True)
-        except (json.JSONDecodeError, KeyError, RuntimeError):
+        except (json.JSONDecodeError, OSError, KeyError, RuntimeError):
             pass
 
     # Emit stop event

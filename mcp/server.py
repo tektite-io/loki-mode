@@ -143,11 +143,31 @@ def validate_path(path: str, allowed_dirs: List[str] = None) -> str:
 
     project_root = get_project_root()
 
-    # Resolve to absolute path, following symlinks
+    # Build absolute path without resolving symlinks first
     if os.path.isabs(path):
-        resolved_path = os.path.realpath(path)
+        abs_path = path
     else:
-        resolved_path = os.path.realpath(os.path.join(project_root, path))
+        abs_path = os.path.join(project_root, path)
+
+    # Walk each component to detect symlink chains escaping allowed dirs
+    # This prevents symlinks that hop through directories outside the project
+    parts = os.path.normpath(abs_path).split(os.sep)
+    current = os.sep if abs_path.startswith(os.sep) else ''
+    for part in parts:
+        if not part:
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            link_target = os.path.realpath(current)
+            # Each symlink target must resolve within the project root
+            if not link_target.startswith(project_root + os.sep) and link_target != project_root:
+                raise PathTraversalError(
+                    f"Access denied: Symlink '{current}' escapes project root "
+                    f"(target: '{link_target}')"
+                )
+
+    # Resolve to absolute path, following all symlinks for final check
+    resolved_path = os.path.realpath(abs_path)
 
     # Check if path is within any of the allowed directories
     for allowed_dir in allowed_dirs:
@@ -1022,11 +1042,11 @@ async def loki_start_project(prd_content: str = "", prd_path: str = "") -> str:
     try:
         content = prd_content
         if not content and prd_path:
-            # Resolve relative paths against project root, absolute paths used as-is
-            if os.path.isabs(prd_path):
-                resolved = os.path.realpath(prd_path)
-            else:
-                resolved = os.path.realpath(os.path.join(get_project_root(), prd_path))
+            # Resolve symlinks and validate path is within project root
+            try:
+                resolved = validate_path(prd_path, allowed_dirs=['.'])
+            except PathTraversalError as e:
+                return json.dumps({"error": str(e)})
             if os.path.exists(resolved) and os.path.isfile(resolved):
                 with open(resolved, 'r', encoding='utf-8') as f:
                     content = f.read()

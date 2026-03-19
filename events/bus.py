@@ -139,9 +139,10 @@ class EventBus:
         """Save event ID as processed."""
         self._processed_ids.add(event_id)
 
-        # Prune to last 1000
+        # Prune to last 1000 (always, regardless of disk write outcome)
         if len(self._processed_ids) > 1000:
-            self._processed_ids = set(list(self._processed_ids)[-1000:])
+            pruned = list(self._processed_ids)[-1000:]
+            self._processed_ids = set(pruned)
 
         try:
             with open(self.processed_file, 'w') as f:
@@ -151,6 +152,7 @@ class EventBus:
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         except IOError:
+            # Disk write failed -- set is already pruned in memory above
             pass
 
     def emit(self, event: LokiEvent) -> str:
@@ -337,6 +339,24 @@ class EventBus:
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    def close(self) -> None:
+        """Clean up all threading resources."""
+        self.stop_background_processing()
+        self._subscribers.clear()
+
+    def __del__(self) -> None:
+        """Ensure threads are cleaned up on garbage collection."""
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> 'EventBus':
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def get_event_history(
         self,

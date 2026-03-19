@@ -66,6 +66,15 @@ class MemoryStorage:
         self._root_path = Path(base_path)
         self._namespace = namespace
 
+        # Validate namespace to prevent path traversal
+        if namespace and namespace != DEFAULT_NAMESPACE:
+            import re
+            if not re.match(r'^[a-zA-Z0-9_-]+$', namespace):
+                raise ValueError(
+                    f"Invalid namespace '{namespace}': "
+                    "only alphanumeric characters, hyphens, and underscores are allowed"
+                )
+
         # Calculate effective base path (with namespace if specified)
         if namespace and namespace != DEFAULT_NAMESPACE:
             self.base_path = self._root_path / namespace
@@ -97,7 +106,17 @@ class MemoryStorage:
 
         Returns:
             New MemoryStorage instance for the specified namespace
+
+        Raises:
+            ValueError: If namespace contains path traversal characters
         """
+        import re
+        if namespace and namespace != DEFAULT_NAMESPACE:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', namespace):
+                raise ValueError(
+                    f"Invalid namespace '{namespace}': "
+                    "only alphanumeric characters, hyphens, and underscores are allowed"
+                )
         return MemoryStorage(
             base_path=str(self._root_path),
             namespace=namespace,
@@ -122,13 +141,21 @@ class MemoryStorage:
         self._cleanup_stale_locks()
 
     def _cleanup_stale_locks(self) -> None:
-        """Remove stale .lock files older than 5 minutes (safe with concurrent processes)."""
+        """Remove stale .lock files older than 5 minutes (safe with concurrent processes).
+
+        Uses file age in seconds (monotonic comparison) instead of wall-clock
+        datetime comparison, which breaks when the system clock jumps.
+        """
         try:
-            stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+            import time
+            now_mono = time.monotonic()
+            now_real = time.time()
+            stale_seconds = 300  # 5 minutes
             for lock_file in self.base_path.rglob("*.lock"):
                 try:
-                    mtime = datetime.fromtimestamp(lock_file.stat().st_mtime, tz=timezone.utc)
-                    if mtime < stale_cutoff:
+                    file_mtime = lock_file.stat().st_mtime
+                    age_seconds = now_real - file_mtime
+                    if age_seconds > stale_seconds:
                         lock_file.unlink()
                 except OSError:
                     pass

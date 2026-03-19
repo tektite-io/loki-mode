@@ -35,8 +35,15 @@ export default function App() {
   const [wsAgents, setWsAgents] = useState<Agent[] | null>(null);
   const [wsLogs, setWsLogs] = useState<LogEntry[] | null>(null);
 
-  // Called by WebSocket hook when a state_update message arrives
+  // Called by WebSocket hook when a state_update message arrives.
+  // A null update means the WebSocket disconnected -- clear stale data.
   const handleStateUpdate = useCallback((update: StateUpdate) => {
+    if (!update) {
+      setWsStatus(null);
+      setWsAgents(null);
+      setWsLogs(null);
+      return;
+    }
     setWsStatus(update.status);
     setWsAgents(update.agents);
     setWsLogs(update.logs);

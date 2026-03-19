@@ -20,6 +20,10 @@ Describe what this PR does and why.
 - [ ] Version bumped in all required files (if this is a release -- see CLAUDE.md Release Workflow)
 - [ ] Code follows existing patterns and style conventions
 
+## CLA Acknowledgment
+
+- [ ] I have read and agree to the [Contributor License Agreement](CLA.md)
+
 ## Related Issues
 
 Closes #

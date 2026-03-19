@@ -19,7 +19,10 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -367,6 +370,7 @@ def evaluate_thresholds(metrics: dict) -> List[Action]:
 
         metric_value = metrics.get(metric_name)
         if metric_value is None:
+            logger.warning("Threshold metric '%s' not found in metrics; skipping evaluation", metric_name)
             continue
 
         triggered = False

@@ -5,6 +5,34 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.37.0] - 2026-03-19
+
+### Changed
+- Added Contributor License Agreement (CLA.md) requirement for all external contributions
+- Added CLA Assistant GitHub Action workflow (.github/workflows/cla.yml) for automated CLA checking on PRs
+- Updated PR template with CLA acknowledgment checkbox
+- Tracked pending CLA signatures for 2 external contributors (@ziadsawalha PR #11, @jpreyesm03 commit 6b677c3)
+
+### Security
+- Dashboard: OIDC JWT authentication, PID race condition fix, WebSocket broadcast hardening (#144)
+
+### Fixed
+- CLI: `loki export json` and `loki export timeline` now check for jq upfront with a helpful install message instead of silently failing (#138)
+- Events: `EventBus` now cleans up background threads on destruction via `__del__`, `close()`, and context manager support (#133)
+- Events: processed event ID set is now pruned before disk write, preventing unbounded growth when disk writes fail (#132)
+- Purple Lab: session detail regex now accepts project names with dots (e.g., `project-1.0`) (#136)
+- Memory: `evaluate_thresholds()` now logs a warning when a threshold metric is missing instead of silently skipping it (#128)
+- Purple Lab: API URLs no longer hardcoded to localhost -- derived from `window.location.origin` for remote deployments (#114)
+- Purple Lab: WebSocket disconnect now clears stale state, forcing fallback to HTTP polling (#113)
+- MCP: `validate_path()` now checks intermediate symlink targets in chain to prevent escapes through multi-hop symlinks (#131)
+- MCP: `loki_start_project` PRD path now validated with `validate_path()` to prevent path traversal (#131)
+- Memory: namespace validation uses allowlist (alphanumeric, hyphen, underscore) in `MemoryStorage`, `with_namespace()`, and `NamespaceManager` to block path traversal (#127)
+- Memory: `_cleanup_stale_locks()` uses elapsed-time comparison instead of wall-clock datetime, preventing breakage on clock skew (#126)
+- Dashboard: `broadcast()` iterates over `list(active_connections)` to prevent modification during iteration (#101)
+- Dashboard: JSON reads from `.loki/` catch `OSError` alongside `JSONDecodeError` for concurrent write resilience (#88)
+- Orchestrator: adversarial prompt heredoc uses quoted delimiter to prevent shell variable expansion in diff content (#78)
+- CLI: `loki web --port` validates port is numeric and within 1-65535 range before binding (#73)
+
 ## [6.36.6] - 2026-03-19
 
 ### Fixed

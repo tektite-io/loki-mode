@@ -1,5 +1,10 @@
-const API_BASE = 'http://127.0.0.1:57375/api';
-export const WS_URL = 'ws://127.0.0.1:57375/ws';
+// Derive API base from current page origin so remote deployments work
+const API_BASE = import.meta.env.VITE_API_BASE
+  || `${window.location.origin}/api`;
+
+// Derive WebSocket URL from current page origin (ws:// or wss://)
+export const WS_URL = import.meta.env.VITE_WS_URL
+  || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

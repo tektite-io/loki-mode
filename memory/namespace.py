@@ -458,9 +458,21 @@ class NamespaceManager:
 
         Returns:
             Path to the namespace's storage directory
+
+        Raises:
+            ValueError: If namespace contains path traversal characters
         """
         if namespace == DEFAULT_NAMESPACE:
             return self.base_path
+        # Block path traversal -- only allow alphanumeric, hyphen, underscore
+        if not re.match(r'^[a-zA-Z0-9_-]+$', namespace):
+            raise ValueError(
+                f"Invalid namespace '{namespace}': "
+                "only alphanumeric characters, hyphens, and underscores are allowed"
+            )
+        resolved = (self.base_path / namespace).resolve()
+        if not str(resolved).startswith(str(self.base_path.resolve())):
+            raise ValueError(f"Namespace '{namespace}' resolves outside base path")
         return self.base_path / namespace
 
     def ensure_namespace_exists(self, namespace: str) -> Path:

@@ -966,7 +966,7 @@ async def get_session_detail(session_id: str) -> JSONResponse:
     """Get details of a past session for read-only viewing."""
     import re
     # Validate session_id format (prevent path traversal)
-    if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
+    if not re.match(r"^[a-zA-Z0-9._-]+$", session_id):
         return JSONResponse(status_code=400, content={"error": "Invalid session ID"})
 
     search_dirs = [

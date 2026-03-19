@@ -23,7 +23,13 @@ export function useWebSocket(onStateUpdate?: (update: StateUpdate) => void) {
     wsRef.current = ws;
 
     ws.on('connected', () => setConnected(true));
-    ws.on('disconnected', () => setConnected(false));
+    ws.on('disconnected', () => {
+      setConnected(false);
+      // Clear stale WS data so the UI falls back to HTTP polling
+      if (onStateUpdateRef.current) {
+        onStateUpdateRef.current(null as unknown as StateUpdate);
+      }
+    });
     ws.on('state_update', (data: unknown) => {
       if (onStateUpdateRef.current && data && typeof data === 'object') {
         onStateUpdateRef.current(data as StateUpdate);
