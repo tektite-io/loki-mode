@@ -16,6 +16,7 @@ import { MemoryViewer } from './components/MemoryViewer';
 import { ReportPanel } from './components/ReportPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { SessionHistory } from './components/SessionHistory';
+import { ProjectWorkspace } from './components/ProjectWorkspace';
 import type { StatusResponse, Agent, LogEntry, FileNode } from './types/api';
 import type { SessionDetail } from './api/client';
 
@@ -159,6 +160,20 @@ export default function App() {
     ? currentPrd.replace(/^#+\s*/gm, '').split('\n').find(l => l.trim().length > 0) || null
     : null;
 
+  // Full-screen project workspace when viewing a session
+  if (viewingSession) {
+    return (
+      <div className="h-screen bg-background flex flex-col">
+        <Header status={status} wsConnected={connected} onProviderChange={handleProviderChange} selectedProvider={selectedProvider} />
+        <div className="flex-1 min-h-0">
+          <ErrorBoundary name="ProjectWorkspace">
+            <ProjectWorkspace session={viewingSession} onClose={() => setViewingSession(null)} />
+          </ErrorBoundary>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background relative">
       {/* Background pattern */}
@@ -192,9 +207,25 @@ export default function App() {
               />
             </div>
 
-            {/* Post-build: report and metrics */}
+            {/* Post-build: view project, report, metrics */}
             {wasRunning && !isRunning && (
               <div className="w-full max-w-3xl mt-4 flex flex-col gap-4">
+                {/* Primary CTA: view what was built */}
+                <button
+                  onClick={async () => {
+                    // Load most recent session
+                    try {
+                      const sessions = await api.getSessionsHistory();
+                      if (sessions.length > 0) {
+                        const detail = await api.getSessionDetail(sessions[0].id);
+                        setViewingSession(detail);
+                      }
+                    } catch { /* ignore */ }
+                  }}
+                  className="w-full px-6 py-4 rounded-2xl text-base font-bold bg-accent-product text-white hover:bg-accent-product/90 transition-all shadow-lg shadow-accent-product/20"
+                >
+                  View Project -- Browse Files and Preview
+                </button>
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => setShowReport(!showReport)}
@@ -211,66 +242,6 @@ export default function App() {
                 </div>
                 <ReportPanel visible={showReport} />
                 <MetricsPanel visible={showMetrics} />
-              </div>
-            )}
-
-            {/* Past session viewer */}
-            {viewingSession && (
-              <div className="w-full max-w-3xl mt-4">
-                <div className="glass p-4 rounded-2xl">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-charcoal uppercase tracking-wider">
-                      Session: {viewingSession.id}
-                    </h3>
-                    <button
-                      onClick={() => setViewingSession(null)}
-                      className="text-xs text-slate hover:text-charcoal transition-colors px-2 py-1 rounded-lg hover:bg-white/30"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="text-[10px] font-mono text-slate mb-3">{viewingSession.path}</div>
-
-                  {/* PRD preview */}
-                  {viewingSession.prd && (
-                    <div className="mb-3">
-                      <div className="text-[10px] text-slate uppercase tracking-wider font-semibold mb-1">PRD</div>
-                      <div className="bg-charcoal/[0.03] rounded-lg p-3 font-mono text-xs text-charcoal/80 max-h-32 overflow-y-auto terminal-scroll whitespace-pre-wrap">
-                        {viewingSession.prd.slice(0, 500)}{viewingSession.prd.length > 500 ? '...' : ''}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* File tree */}
-                  {viewingSession.files.length > 0 && (
-                    <div className="mb-3">
-                      <div className="text-[10px] text-slate uppercase tracking-wider font-semibold mb-1">
-                        Files ({viewingSession.files.length})
-                      </div>
-                      <div className="bg-charcoal/[0.03] rounded-lg p-3 font-mono text-xs max-h-40 overflow-y-auto terminal-scroll">
-                        {viewingSession.files.map((f: FileNode, i: number) => (
-                          <div key={i} className="text-charcoal/70">
-                            {f.type === 'directory' ? `${f.name}/` : f.name}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Logs */}
-                  {viewingSession.logs.length > 0 && (
-                    <div>
-                      <div className="text-[10px] text-slate uppercase tracking-wider font-semibold mb-1">
-                        Logs ({viewingSession.logs.length} lines)
-                      </div>
-                      <div className="bg-charcoal/[0.03] rounded-lg p-3 font-mono text-[10px] max-h-40 overflow-y-auto terminal-scroll">
-                        {viewingSession.logs.map((line: string, i: number) => (
-                          <div key={i} className="text-charcoal/70">{line}</div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
               </div>
             )}
 
