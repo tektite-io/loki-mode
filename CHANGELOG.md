@@ -5,6 +5,22 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.45.0] - 2026-03-20
+
+### Added
+- Smart preview detection: auto-detect project type (web-app, API, static-site, library, Go, Rust, containerized) for Preview tab
+- Secrets management: full CRUD UI with add/delete/show-hide, ENV_VAR validation, injected into builds
+- Non-blocking AI Chat: polling pattern with task_id, 5-min timeout guard
+- Provider-aware cost tracking: claude/codex/gemini pricing rates
+- Action progress indicators: spinner with elapsed timer for Review/Test/Explain
+- 32 Playwright E2E tests covering all API endpoints, UI navigation, IDE workspace, accessibility
+- Preview-info API endpoint: GET /api/sessions/{id}/preview-info returns project type and dev command
+
+### Fixed
+- loki web stop now kills only Purple Lab sessions (tracked PIDs), leaves external sessions alone
+- loki web stop also stops Loki Dashboard on port 57374
+- Orphan process cleanup: kills entire process tree with SIGKILL escalation
+
 ## [6.44.1] - 2026-03-20
 
 ### Fixed
