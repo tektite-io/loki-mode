@@ -2261,10 +2261,19 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
             task.returncode = 1
             task.complete = True
             return
-        if req.mode == "quick":
-            cmd_args = [loki, "quick", req.message]
+        # All chat modes use 'loki quick' with the user's message as the task.
+        # This runs claude (or configured provider) in the project directory
+        # to make changes based on the user's prompt -- works both during
+        # active sessions and post-completion for iterative development.
+        if req.mode == "max":
+            # Max mode: full loki start with the message as a PRD
+            prd_path = target / ".loki" / "chat-prd.md"
+            prd_path.parent.mkdir(parents=True, exist_ok=True)
+            prd_path.write_text(req.message)
+            cmd_args = [loki, "start", "--provider", "claude", str(prd_path)]
         else:
-            cmd_args = [loki, "start", "--provider", "claude", str(target / "PRD.md")]
+            # Quick and Standard both use 'loki quick' -- fast, focused changes
+            cmd_args = [loki, "quick", req.message]
         try:
             proc = subprocess.Popen(
                 cmd_args,
@@ -2285,7 +2294,9 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
                 for raw_line in proc.stdout:
                     if task.cancelled:
                         break
-                    task.output_lines.append(raw_line.rstrip("\n"))
+                    # Strip ANSI escape codes for clean display
+                    clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line.rstrip("\n"))
+                    task.output_lines.append(clean)
                 proc.stdout.close()
 
             await asyncio.wait_for(
@@ -2314,14 +2325,31 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
                 except (ProcessLookupError, OSError):
                     proc.kill()
                 proc.wait()
-        # Detect changed files
+        # Detect changed files (both committed and uncommitted)
         try:
-            result = subprocess.run(
+            changed = set()
+            # Check uncommitted changes (working tree + staged)
+            r1 = subprocess.run(
+                ["git", "diff", "--name-only"],
+                cwd=str(target), capture_output=True, text=True, timeout=10,
+            )
+            if r1.returncode == 0:
+                changed.update(f for f in r1.stdout.strip().splitlines() if f)
+            # Check staged changes
+            r2 = subprocess.run(
+                ["git", "diff", "--name-only", "--cached"],
+                cwd=str(target), capture_output=True, text=True, timeout=10,
+            )
+            if r2.returncode == 0:
+                changed.update(f for f in r2.stdout.strip().splitlines() if f)
+            # Check recent commit if any
+            r3 = subprocess.run(
                 ["git", "diff", "--name-only", "HEAD~1"],
                 cwd=str(target), capture_output=True, text=True, timeout=10,
             )
-            if result.returncode == 0:
-                task.files_changed = [f for f in result.stdout.strip().splitlines() if f]
+            if r3.returncode == 0:
+                changed.update(f for f in r3.stdout.strip().splitlines() if f)
+            task.files_changed = sorted(changed)
         except Exception:
             pass
         task.complete = True

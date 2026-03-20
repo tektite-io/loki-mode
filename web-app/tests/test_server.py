@@ -255,6 +255,20 @@ class TestFileWatcher:
 # ============================================================================
 
 
+try:
+    import jose  # noqa: F401
+    _HAS_JOSE = True
+except ImportError:
+    _HAS_JOSE = False
+
+try:
+    import sqlalchemy  # noqa: F401
+    _HAS_SQLALCHEMY = True
+except ImportError:
+    _HAS_SQLALCHEMY = False
+
+
+@pytest.mark.skipif(not _HAS_JOSE, reason="python-jose not installed")
 class TestAuth:
     """Tests for the auth module."""
 
@@ -315,6 +329,7 @@ class TestAuth:
 # ============================================================================
 
 
+@pytest.mark.skipif(not _HAS_SQLALCHEMY, reason="sqlalchemy not installed")
 class TestModels:
     """Tests for SQLAlchemy model definitions."""
 

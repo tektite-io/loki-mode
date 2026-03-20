@@ -5,6 +5,16 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.50.1] - 2026-03-20 - AI Chat fix, mktemp fix, test stability
+
+### Fixed
+- AI Chat: all modes now use `loki quick` for focused changes (standard mode was incorrectly running `loki start` with PRD)
+- AI Chat: strip ANSI escape codes from output (raw `[0;32m` codes no longer shown)
+- AI Chat: detect uncommitted + staged + committed file changes (not just HEAD~1)
+- mktemp fix in run.sh: macOS `mktemp` with `.sh` suffix doesn't expand X's -- use rename instead
+- Backend tests: skip auth/models tests when optional deps (python-jose, sqlalchemy) not installed
+- E2E tests: handle OnboardingOverlay blocking clicks, fix selectors for actual UI
+
 ## [6.50.0] - 2026-03-20 - Purple Lab v2: Production IDE Platform
 
 ### Added

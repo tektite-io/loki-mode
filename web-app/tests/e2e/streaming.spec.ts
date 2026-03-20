@@ -15,6 +15,11 @@ test.describe('Streaming Chat Panel', () => {
     }
   });
 
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('Chat panel renders with mode selector (quick/standard/max)', async ({ page }) => {
     test.skip(!sessionId, 'No sessions available');
     await page.goto(`/project/${sessionId}`);
@@ -38,7 +43,7 @@ test.describe('Streaming Chat Panel', () => {
     const input = page.locator('input[placeholder*="Ask AI"]');
     await expect(input).toBeVisible({ timeout: 5000 });
     // Send button (with Send icon or aria-label)
-    const sendBtn = page.locator('button[aria-label="Send"]');
+    const sendBtn = page.locator('button[aria-label="Send message"]');
     await expect(sendBtn).toBeAttached();
   });
 
@@ -49,7 +54,7 @@ test.describe('Streaming Chat Panel', () => {
     await expect(chatTab).toBeVisible({ timeout: 10000 });
     await chatTab.click();
     // Empty state text
-    await expect(page.locator('text=Send a message to iterate')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=No messages yet')).toBeVisible({ timeout: 5000 });
   });
 
   test('Messages render with monospace font for system messages', async ({ page }) => {

@@ -206,6 +206,11 @@ test.describe('Chat API', () => {
 // ============================================================================
 
 test.describe('UI Navigation', () => {
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('Home page loads with sidebar and hero text', async ({ page }) => {
     await page.goto('/');
     // Sidebar should be visible
@@ -347,6 +352,11 @@ test.describe('IDE Workspace', () => {
 // ============================================================================
 
 test.describe('Home Page', () => {
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('PRD input area is present and functional', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('text=Product Requirements')).toBeVisible({ timeout: 10000 });

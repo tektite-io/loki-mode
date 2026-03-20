@@ -177,7 +177,9 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Solution: Copy ourselves to /tmp and run from there. The original can be safely edited.
 #===============================================================================
 if [[ -z "${LOKI_RUNNING_FROM_TEMP:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    TEMP_SCRIPT=$(mktemp /tmp/loki-run-XXXXXX.sh)
+    TEMP_SCRIPT=$(mktemp /tmp/loki-run-XXXXXX)
+    mv "$TEMP_SCRIPT" "${TEMP_SCRIPT}.sh"
+    TEMP_SCRIPT="${TEMP_SCRIPT}.sh"
     cp "${BASH_SOURCE[0]}" "$TEMP_SCRIPT"
     chmod 700 "$TEMP_SCRIPT"
     export LOKI_RUNNING_FROM_TEMP=1
