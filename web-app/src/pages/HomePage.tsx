@@ -33,6 +33,24 @@ export default function HomePage() {
   const [selectedProvider, setSelectedProvider] = useState(
     () => sessionStorage.getItem('pl_provider') || 'claude'
   );
+  const [templatePrd, setTemplatePrd] = useState<string | undefined>(undefined);
+
+  // Check for template prefill from TemplatesPage navigation
+  useEffect(() => {
+    const templateFile = sessionStorage.getItem('pl_template');
+    if (templateFile) {
+      sessionStorage.removeItem('pl_template');
+      api.getTemplateContent(templateFile)
+        .then(({ content }) => {
+          if (content) {
+            setTemplatePrd(content);
+          }
+        })
+        .catch(() => {
+          // Template load failed -- ignore, user can still type manually
+        });
+    }
+  }, []);
 
   // Primary state -- populated by WebSocket state_update pushes
   const [wsStatus, setWsStatus] = useState<StatusResponse | null>(null);
@@ -169,6 +187,7 @@ export default function HomePage() {
                 error={startError}
                 provider={selectedProvider}
                 onProviderChange={handleProviderChange}
+                initialPrd={templatePrd}
               />
             </div>
 

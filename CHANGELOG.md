@@ -5,6 +5,19 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.43.0] - 2026-03-20
+
+### Added
+- Context menu on file tree (right-click for Open, Preview, Run Tests, View Docs, Delete)
+- Template prefill: selecting a template on the Templates page now pre-populates the PRD input on Home
+- AI chat panel: added Max mode alongside Quick and Standard
+- Preview URL bar with history (back/forward navigation) in Project Workspace
+
+### Changed
+- ProjectWorkspace preview panel now tracks navigation history with back/forward controls and editable URL bar
+- PRDInput accepts initialPrd prop to support template injection from TemplatesPage
+
+
 ## [6.42.0] - 2026-03-20
 
 ### Added

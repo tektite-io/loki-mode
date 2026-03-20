@@ -5,6 +5,7 @@ import { Button } from './ui/Button';
 
 interface AIChatPanelProps {
   sessionId: string;
+  defaultMode?: 'quick' | 'standard' | 'max';
 }
 
 interface ChatMessage {
@@ -14,10 +15,10 @@ interface ChatMessage {
   filesChanged?: string[];
 }
 
-export function AIChatPanel({ sessionId }: AIChatPanelProps) {
+export function AIChatPanel({ sessionId, defaultMode }: AIChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [mode, setMode] = useState<'quick' | 'standard'>('quick');
+  const [mode, setMode] = useState<'quick' | 'standard' | 'max'>(defaultMode || 'quick');
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,22 +112,17 @@ export function AIChatPanel({ sessionId }: AIChatPanelProps) {
       <div className="border-t border-border p-2 flex-shrink-0">
         {/* Mode toggle */}
         <div className="flex items-center gap-1 mb-2">
-          <button
-            onClick={() => setMode('quick')}
-            className={`text-[10px] font-semibold px-2 py-0.5 rounded-btn transition-colors ${
-              mode === 'quick' ? 'bg-primary text-white' : 'text-muted hover:text-ink'
-            }`}
-          >
-            Quick
-          </button>
-          <button
-            onClick={() => setMode('standard')}
-            className={`text-[10px] font-semibold px-2 py-0.5 rounded-btn transition-colors ${
-              mode === 'standard' ? 'bg-primary text-white' : 'text-muted hover:text-ink'
-            }`}
-          >
-            Standard
-          </button>
+          {(['quick', 'standard', 'max'] as const).map(m => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded-btn transition-colors capitalize ${
+                mode === m ? 'bg-primary text-white' : 'text-muted hover:text-ink'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
         </div>
         {/* Input + send */}
         <div className="flex items-center gap-2">

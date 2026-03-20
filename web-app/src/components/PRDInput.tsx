@@ -9,6 +9,7 @@ interface PRDInputProps {
   error?: string | null;
   provider?: string;
   onProviderChange?: (provider: string) => void;
+  initialPrd?: string;
 }
 
 interface TemplateItem {
@@ -16,7 +17,7 @@ interface TemplateItem {
   filename: string;
 }
 
-export function PRDInput({ onSubmit, running, error, provider: providerProp, onProviderChange }: PRDInputProps) {
+export function PRDInput({ onSubmit, running, error, provider: providerProp, onProviderChange, initialPrd }: PRDInputProps) {
   const [prd, setPrd] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [localProvider, setLocalProvider] = useState('claude');
@@ -49,8 +50,17 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
       });
   }, []);
 
+  // Apply initialPrd prop when provided (e.g. from template selection on TemplatesPage)
+  useEffect(() => {
+    if (initialPrd) {
+      setPrd(initialPrd);
+    }
+  }, [initialPrd]);
+
   // On mount: restore draft from localStorage, then check for PRD prefill from CLI
   useEffect(() => {
+    // Skip draft restore if initialPrd was provided
+    if (initialPrd) return;
     const draft = localStorage.getItem('loki-prd-draft');
     if (draft) {
       setPrd(draft);
@@ -64,7 +74,7 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
       .catch(() => {
         // No prefill available -- ignore
       });
-  }, []);
+  }, [initialPrd]);
 
   // Auto-save PRD draft to localStorage on change
   useEffect(() => {
@@ -239,30 +249,17 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
           {prd.length.toLocaleString()} chars
         </span>
 
-        {/* Estimate button */}
+        {/* Submit button -- triggers plan-before-build flow by default */}
         <button
           onClick={handleEstimate}
-          disabled={!prd.trim() || running || planLoading}
-          className={`px-4 py-2.5 rounded-card text-sm font-semibold border transition-all ${
-            !prd.trim() || running || planLoading
-              ? 'border-border text-muted/40 cursor-not-allowed'
-              : 'border-primary/30 text-primary hover:bg-primary/5'
-          }`}
-        >
-          {planLoading ? 'Analyzing...' : 'Estimate'}
-        </button>
-
-        {/* Submit button */}
-        <button
-          onClick={handleSubmit}
-          disabled={!prd.trim() || running || submitting}
+          disabled={!prd.trim() || running || submitting || planLoading}
           className={`px-6 py-2.5 rounded-card text-sm font-semibold transition-all ${
-            !prd.trim() || running || submitting
+            !prd.trim() || running || submitting || planLoading
               ? 'bg-primary/10 text-muted cursor-not-allowed'
               : 'bg-primary text-white hover:bg-primary/90 shadow-button'
           }`}
         >
-          {submitting ? 'Starting...' : running ? 'Building...' : 'Start Build'}
+          {planLoading ? 'Analyzing...' : submitting ? 'Starting...' : running ? 'Building...' : 'Start Build'}
         </button>
       </div>
     </div>

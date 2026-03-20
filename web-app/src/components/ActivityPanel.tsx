@@ -11,6 +11,7 @@ interface ActivityPanelProps {
   checklist: ChecklistSummary | null;
   sessionId: string;
   subscribe?: (type: string, callback: (data: unknown) => void) => () => void;
+  buildMode?: 'quick' | 'standard' | 'max';
 }
 
 type TabId = 'build' | 'agents' | 'quality' | 'chat';
@@ -107,6 +108,7 @@ export function ActivityPanel({
   checklist,
   sessionId,
   subscribe,
+  buildMode,
 }: ActivityPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('build');
 
@@ -146,7 +148,7 @@ export function ActivityPanel({
         )}
         {activeTab === 'agents' && <AgentsTab agents={agents} />}
         {activeTab === 'quality' && <QualityTab checklist={checklist} />}
-        {activeTab === 'chat' && <AIChatPanel sessionId={sessionId} />}
+        {activeTab === 'chat' && <AIChatPanel sessionId={sessionId} defaultMode={buildMode} />}
       </div>
     </div>
   );

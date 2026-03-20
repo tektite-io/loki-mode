@@ -7,9 +7,11 @@ import {
   X, FilePlus, FolderPlus,
   ArrowLeft as PreviewBack, ArrowRight as PreviewForward,
   RotateCw, ExternalLink,
+  Eye, TestTube2, BookOpen, Trash2,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { IconButton } from './ui/IconButton';
+import { ContextMenu } from './ui/ContextMenu';
 import { ActivityPanel } from './ActivityPanel';
 import type { FileNode } from '../types/api';
 import type { SessionDetail } from '../api/client';
@@ -93,11 +95,12 @@ function formatSize(bytes: number): string {
 }
 
 function FileTree({
-  nodes, selectedPath, onSelect, onDelete, depth = 0,
+  nodes, selectedPath, onSelect, onDelete, onContextMenu, depth = 0,
 }: {
   nodes: FileNode[]; selectedPath: string | null;
   onSelect: (path: string, name: string) => void;
   onDelete?: (path: string, name: string) => void;
+  onContextMenu?: (e: React.MouseEvent, path: string, name: string, type: string) => void;
   depth?: number;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -119,6 +122,10 @@ function FileTree({
               aria-label={node.name}
               aria-selected={isSelected}
               {...(isDir ? { 'aria-expanded': isOpen } : {})}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onContextMenu?.(e, node.path, node.name, node.type);
+              }}
               onClick={() => {
                 if (isDir) {
                   setExpanded(prev => {
@@ -168,7 +175,7 @@ function FileTree({
               )}
             </button>
             {isDir && isOpen && node.children && (
-              <FileTree nodes={node.children} selectedPath={selectedPath} onSelect={onSelect} onDelete={onDelete} depth={depth + 1} />
+              <FileTree nodes={node.children} selectedPath={selectedPath} onSelect={onSelect} onDelete={onDelete} onContextMenu={onContextMenu} depth={depth + 1} />
             )}
           </div>
         );
@@ -210,9 +217,25 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   const quickOpenRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLIFrameElement>(null);
   const [previewKey, setPreviewKey] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    name: string;
+    type: 'file' | 'directory';
+  } | null>(null);
+  const [buildMode, setBuildMode] = useState<'quick' | 'standard' | 'max'>('standard');
+  const [actionOutput, setActionOutput] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const canPreview = hasHtmlFile(sessionData.files);
   const previewUrl = `/api/sessions/${encodeURIComponent(sessionData.id)}/preview/index.html`;
+
+  // Preview history state
+  const [previewHistory, setPreviewHistory] = useState<string[]>([previewUrl]);
+  const [previewHistoryIndex, setPreviewHistoryIndex] = useState(0);
+  const currentPreviewUrl = previewHistory[previewHistoryIndex] || previewUrl;
+  const [previewInputUrl, setPreviewInputUrl] = useState(currentPreviewUrl);
 
   const refreshSession = useCallback(async () => {
     try {
@@ -223,15 +246,113 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     }
   }, [sessionData.id]);
 
+  const handleContextMenu = useCallback((e: React.MouseEvent, path: string, name: string, type: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, path, name, type: type as 'file' | 'directory' });
+  }, []);
+
+  const handlePreviewBack = useCallback(() => {
+    if (previewHistoryIndex > 0) {
+      setPreviewHistoryIndex(i => i - 1);
+      setPreviewKey(k => k + 1);
+    }
+  }, [previewHistoryIndex]);
+
+  const handlePreviewForward = useCallback(() => {
+    if (previewHistoryIndex < previewHistory.length - 1) {
+      setPreviewHistoryIndex(i => i + 1);
+      setPreviewKey(k => k + 1);
+    }
+  }, [previewHistoryIndex, previewHistory.length]);
+
+  const navigatePreview = useCallback((url: string) => {
+    setPreviewHistory(prev => [...prev.slice(0, previewHistoryIndex + 1), url]);
+    setPreviewHistoryIndex(i => i + 1);
+    setPreviewKey(k => k + 1);
+  }, [previewHistoryIndex]);
+
+  // Sync previewInputUrl when navigating history
+  useEffect(() => {
+    setPreviewInputUrl(currentPreviewUrl);
+  }, [currentPreviewUrl]);
+
+  const handleReview = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      const result = await api.reviewProject(sessionData.id);
+      setActionOutput(result.output);
+    } catch (e) {
+      setActionOutput(`Error: ${e instanceof Error ? e.message : 'Unknown'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [sessionData.id]);
+
+  const handleTest = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      const result = await api.testProject(sessionData.id);
+      setActionOutput(result.output);
+    } catch (e) {
+      setActionOutput(`Error: ${e instanceof Error ? e.message : 'Unknown'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [sessionData.id]);
+
+  const handleExplain = useCallback(async () => {
+    setActionLoading(true);
+    try {
+      const result = await api.explainProject(sessionData.id);
+      setActionOutput(result.output);
+    } catch (e) {
+      setActionOutput(`Error: ${e instanceof Error ? e.message : 'Unknown'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  }, [sessionData.id]);
+
+  const handleDeleteFile = useCallback(async (path: string, name: string) => {
+    const confirmed = window.confirm(`Delete "${name}"?`);
+    if (!confirmed) return;
+    try {
+      await api.deleteSessionFile(sessionData.id, path);
+      if (selectedFile === path) {
+        setSelectedFile(null);
+        setSelectedFileName('');
+        setFileContent(null);
+        setEditorContent(null);
+        setIsModified(false);
+      }
+      await refreshSession();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      window.alert(`Delete failed: ${msg}`);
+    }
+  }, [sessionData.id, selectedFile, refreshSession]);
+
+  const getContextMenuItems = useCallback((menu: NonNullable<typeof contextMenu>) => {
+    if (menu.type === 'file') {
+      return [
+        { label: 'Review', icon: Eye, onClick: () => { handleReview(); } },
+        { label: 'Generate Tests', icon: TestTube2, onClick: () => { handleTest(); } },
+        { label: 'Explain', icon: BookOpen, onClick: () => { handleExplain(); } },
+        { label: 'Delete', icon: Trash2, onClick: () => { handleDeleteFile(menu.path, menu.name); }, variant: 'danger' as const },
+      ];
+    }
+    return [
+      { label: 'Review Project', icon: Eye, onClick: () => { handleReview(); } },
+      { label: 'Run Tests', icon: TestTube2, onClick: () => { handleTest(); } },
+    ];
+  }, [handleReview, handleTest, handleExplain, handleDeleteFile]);
+
   const handleFileSelect = useCallback(async (path: string, name: string) => {
-    // Save current tab state before switching
     if (isModified && selectedFile && editorContent !== null) {
       setOpenTabs(prev => prev.map(t =>
         t.path === selectedFile ? { ...t, content: editorContent, modified: true } : t
       ));
     }
 
-    // Check if already open in a tab
     const existingTab = openTabs.find(t => t.path === path);
     if (existingTab) {
       setSelectedFile(path);
@@ -252,7 +373,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
         : await api.getFileContent(path);
       setFileContent(result.content);
       setEditorContent(result.content);
-      // Add to open tabs
       setOpenTabs(prev => [...prev, { path, name, content: result.content, modified: false }]);
     } catch {
       setFileContent('[Error loading file]');
@@ -269,11 +389,9 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
       await api.saveSessionFile(sessionData.id, selectedFile, editorContent);
       setFileContent(editorContent);
       setIsModified(false);
-      // Update tab state
       setOpenTabs(prev => prev.map(t =>
         t.path === selectedFile ? { ...t, content: editorContent, modified: false } : t
       ));
-      // Refresh preview if an HTML/CSS/JS file was saved
       const ext = selectedFile.split('.').pop()?.toLowerCase() || '';
       if (['html', 'css', 'js', 'jsx', 'ts', 'tsx'].includes(ext)) {
         setPreviewKey(k => k + 1);
@@ -311,7 +429,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     }
   }, [openTabs, selectedFile]);
 
-  // Cmd/Ctrl+S to save, Cmd/Ctrl+P to quick open
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -331,7 +448,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [isModified, selectedFile, handleSave, showQuickOpen]);
 
-  // Focus quick open input when shown
   useEffect(() => {
     if (showQuickOpen && quickOpenRef.current) quickOpenRef.current.focus();
   }, [showQuickOpen]);
@@ -341,7 +457,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     ? allFiles.filter(f => f.path.toLowerCase().includes(quickOpenQuery.toLowerCase()))
     : allFiles;
 
-  // Auto-select index.html on mount
   useEffect(() => {
     const indexFile = sessionData.files.find(f => f.name === 'index.html' && f.type === 'file');
     if (indexFile) {
@@ -386,31 +501,11 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     }
   }, [sessionData.id, refreshSession]);
 
-  const handleDeleteFile = useCallback(async (path: string, name: string) => {
-    const confirmed = window.confirm(`Delete "${name}"?`);
-    if (!confirmed) return;
-    try {
-      await api.deleteSessionFile(sessionData.id, path);
-      // If the deleted file was selected, clear the editor
-      if (selectedFile === path) {
-        setSelectedFile(null);
-        setSelectedFileName('');
-        setFileContent(null);
-        setEditorContent(null);
-        setIsModified(false);
-      }
-      await refreshSession();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      window.alert(`Delete failed: ${msg}`);
-    }
-  }, [sessionData.id, selectedFile, refreshSession]);
-
   const fileSize = selectedFile ? findFileSize(sessionData.files, selectedFile) : undefined;
   const fileExt = selectedFileName.split('.').pop()?.toUpperCase() || '';
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Header */}
       <div className="bg-card px-3 py-2 flex items-center gap-3 flex-shrink-0 border-b border-border">
         <button onClick={() => {
@@ -431,6 +526,29 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
           sessionData.status === 'completed' || sessionData.status === 'completion_promise_fulfilled'
             ? 'bg-success/10 text-success' : 'bg-muted/10 text-muted'
         }`}>{sessionData.status}</span>
+
+        {/* Mode selector */}
+        <div className="flex rounded-btn border border-border overflow-hidden">
+          {(['quick', 'standard', 'max'] as const).map(m => (
+            <button
+              key={m}
+              onClick={() => setBuildMode(m)}
+              className={`px-3 py-1 text-xs font-medium transition-colors capitalize ${
+                buildMode === m
+                  ? 'bg-primary text-white'
+                  : 'text-secondary hover:bg-hover'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        {/* Action buttons */}
+        <IconButton icon={Eye} label="Review project" size="sm" onClick={handleReview} disabled={actionLoading} />
+        <IconButton icon={TestTube2} label="Run tests" size="sm" onClick={handleTest} disabled={actionLoading} />
+        <IconButton icon={BookOpen} label="Explain project" size="sm" onClick={handleExplain} disabled={actionLoading} />
+
         {canPreview && (
           <button onClick={() => setShowPreview(!showPreview)}
             className={`text-xs font-medium px-3 py-1.5 rounded-btn border transition-colors ${
@@ -475,6 +593,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                         selectedPath={selectedFile}
                         onSelect={handleFileSelect}
                         onDelete={handleDeleteFile}
+                        onContextMenu={handleContextMenu}
                       />
                     ) : (
                       <div className="p-4 text-xs text-muted">No files</div>
@@ -584,21 +703,24 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                     <div className="h-full flex flex-col border-l border-border">
                       {/* Preview toolbar */}
                       <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 bg-hover">
-                        <IconButton icon={PreviewBack} label="Back" size="sm" onClick={() => {}} />
-                        <IconButton icon={PreviewForward} label="Forward" size="sm" onClick={() => {}} />
+                        <IconButton icon={PreviewBack} label="Back" size="sm" onClick={handlePreviewBack} disabled={previewHistoryIndex <= 0} />
+                        <IconButton icon={PreviewForward} label="Forward" size="sm" onClick={handlePreviewForward} disabled={previewHistoryIndex >= previewHistory.length - 1} />
                         <IconButton icon={RotateCw} label="Refresh" size="sm" onClick={() => setPreviewKey(k => k + 1)} />
                         <input
-                          value={previewUrl}
-                          readOnly
+                          value={previewInputUrl}
+                          onChange={e => setPreviewInputUrl(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') navigatePreview(previewInputUrl);
+                          }}
                           className="flex-1 px-3 py-1 text-xs font-mono bg-card border border-border rounded-btn"
                         />
-                        <IconButton icon={ExternalLink} label="Open in new tab" size="sm" onClick={() => window.open(previewUrl, '_blank')} />
+                        <IconButton icon={ExternalLink} label="Open in new tab" size="sm" onClick={() => window.open(currentPreviewUrl, '_blank')} />
                       </div>
                       <div className="flex-1 bg-white">
                         <iframe
                           key={previewKey}
                           ref={previewRef}
-                          src={previewUrl}
+                          src={currentPreviewUrl}
                           title="Project Preview"
                           className="w-full h-full border-0"
                           sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
@@ -620,10 +742,32 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
               agents={null}
               checklist={null}
               sessionId={session.id}
+              buildMode={buildMode}
             />
           </Panel>
         </PanelGroup>
       </div>
+
+      {/* Action output overlay */}
+      {actionOutput && (
+        <div className="absolute inset-x-0 bottom-0 z-20 bg-card border-t border-border p-4 max-h-64 overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-ink">Action Output</span>
+            <IconButton icon={X} label="Close" size="sm" onClick={() => setActionOutput(null)} />
+          </div>
+          <pre className="text-xs font-mono text-ink/80 whitespace-pre-wrap">{actionOutput}</pre>
+        </div>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={getContextMenuItems(contextMenu)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
 
       {/* Quick Open modal (Cmd+P) */}
       {showQuickOpen && (
