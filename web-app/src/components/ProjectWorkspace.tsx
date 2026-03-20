@@ -778,6 +778,31 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
             ? 'bg-success/10 text-success' : 'bg-muted/10 text-muted'
         }`}>{sessionData.status}</span>
 
+        {/* Start Build button when not building */}
+        {!isBuilding && (
+          <Button
+            variant="primary"
+            size="sm"
+            icon={Play}
+            onClick={async () => {
+              try {
+                const prd = sessionData.prd || '';
+                if (!prd.trim()) {
+                  window.alert('No PRD found for this project. Go to Home to start a new build.');
+                  return;
+                }
+                await api.startSession({ prd, provider: selectedProvider, projectDir: sessionData.path });
+                setIsBuilding(true);
+              } catch (e) {
+                window.alert(`Failed to start: ${e instanceof Error ? e.message : 'Unknown error'}`);
+              }
+            }}
+            title="Start build for this project"
+          >
+            Build
+          </Button>
+        )}
+
         {/* Stop/Pause/Resume controls */}
         {isBuilding && (
           <div className="flex items-center gap-1 border-l border-border pl-3 ml-1">

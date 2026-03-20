@@ -356,7 +356,7 @@ def _build_file_tree(root: Path, max_depth: int = 4, _depth: int = 0) -> list[di
 
     for item in items:
         # Skip hidden dirs and common noise
-        if item.name.startswith(".") and item.name not in (".loki",):
+        if item.name.startswith("."):
             continue
         if item.name in ("node_modules", "__pycache__", ".git", "venv", ".venv"):
             continue
@@ -1197,6 +1197,14 @@ def _infer_session_status(entry: Path) -> str:
                 st = json.load(f)
             phase = st.get("phase", "")
             if phase and phase != "idle":
+                # Verify the session is actually still running by checking
+                # if session.json was modified recently (within last 5 min)
+                try:
+                    mtime = state_file.stat().st_mtime
+                    if time.time() - mtime > 300:  # 5 minutes stale
+                        return "completed"  # Process died, mark as completed
+                except OSError:
+                    pass
                 return phase
         except (json.JSONDecodeError, OSError):
             pass
@@ -1211,7 +1219,16 @@ def _infer_session_status(entry: Path) -> str:
                 if st.get("completed") or st.get("status") == "completed":
                     return "completed"
                 if st.get("status"):
-                    return st["status"]
+                    status_val = st["status"]
+                    # If status indicates active work, verify freshness
+                    if status_val in ("running", "in_progress", "planning"):
+                        try:
+                            mtime = sf.stat().st_mtime
+                            if time.time() - mtime > 300:  # 5 minutes stale
+                                return "completed"
+                        except OSError:
+                            pass
+                    return status_val
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -1921,6 +1938,13 @@ async def get_preview_info(session_id: str) -> JSONResponse:
                 info["preview_url"] = f"/api/sessions/{session_id}/preview/{doc_file}"
                 info["description"] = "Project -- showing README"
                 break
+
+    # Verify the entry file actually exists on disk before returning a preview URL
+    if info["entry_file"]:
+        entry_path = target / info["entry_file"]
+        if not entry_path.exists():
+            info["preview_url"] = None
+            info["entry_file"] = None
 
     return JSONResponse(content=info)
 

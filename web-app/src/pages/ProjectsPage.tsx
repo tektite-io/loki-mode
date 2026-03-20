@@ -11,11 +11,38 @@ import type { SessionHistoryItem } from '../api/client';
 type FilterTab = 'all' | 'running' | 'completed' | 'failed';
 
 function statusToBadge(status: string): 'completed' | 'running' | 'failed' | 'started' | 'empty' {
-  if (status === 'completed') return 'completed';
-  if (status === 'running') return 'running';
-  if (status === 'failed') return 'failed';
-  if (status === 'started') return 'started';
+  const normalized = normalizeStatus(status);
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'running') return 'running';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'started') return 'started';
   return 'empty';
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  completed: 'Completed',
+  complete: 'Completed',
+  done: 'Completed',
+  completion_promise_fulfilled: 'Completed',
+  running: 'Running',
+  in_progress: 'Running',
+  planning: 'Planning',
+  started: 'Started',
+  error: 'Failed',
+  failed: 'Failed',
+  empty: 'Empty',
+};
+
+function normalizeStatus(s: string): string {
+  const map: Record<string, string> = {
+    completion_promise_fulfilled: 'completed',
+    complete: 'completed',
+    done: 'completed',
+    in_progress: 'running',
+    planning: 'running',
+    error: 'failed',
+  };
+  return map[s] || s;
 }
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
@@ -128,7 +155,7 @@ function ProjectCard({
     <Card hover onClick={onClick}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs text-[#6B6960]">{dateStr}</span>
-        <Badge status={statusToBadge(session.status)}>{session.status}</Badge>
+        <Badge status={statusToBadge(session.status)}>{STATUS_LABELS[session.status] || session.status}</Badge>
       </div>
       <h3 className="text-sm font-medium text-[#36342E] line-clamp-2 mb-2">
         {session.prd_snippet || 'Untitled project'}
