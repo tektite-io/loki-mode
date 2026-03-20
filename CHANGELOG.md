@@ -5,6 +5,17 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.44.0] - 2026-03-20
+
+### Added
+- Workspace tab system in Project Workspace: Code, Preview, Config, Secrets, PRD tabs for structured navigation
+- Build controls: Stop, Pause, Resume buttons with real-time session status polling
+- Full process tree cleanup on `loki web stop`: SIGTERM then SIGKILL for all loki-run child processes
+
+### Changed
+- File tree visibility improvements: larger chevrons, more readable file size labels, higher contrast delete button
+- Orphan process cleanup now kills entire process trees (catches claude/codex/gemini child processes that survive parent death)
+
 ## [6.43.0] - 2026-03-20
 
 ### Added
