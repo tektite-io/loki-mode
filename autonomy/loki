@@ -3233,6 +3233,16 @@ cmd_web_stop() {
         fi
         rm -f "$pids_file" 2>/dev/null || true
     fi
+
+    # Also stop the Loki Dashboard if it was started by a Purple Lab session
+    local dash_pid
+    dash_pid=$(lsof -ti:57374 -sTCP:LISTEN 2>/dev/null | head -1 || true)
+    if [ -n "$dash_pid" ]; then
+        kill "$dash_pid" 2>/dev/null || true
+        sleep 1
+        kill -0 "$dash_pid" 2>/dev/null && kill -9 "$dash_pid" 2>/dev/null || true
+        echo "Loki Dashboard stopped (port 57374)"
+    fi
 }
 
 cmd_web_status() {
