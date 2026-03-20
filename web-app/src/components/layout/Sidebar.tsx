@@ -70,15 +70,16 @@ export function Sidebar({ wsConnected, version }: SidebarProps) {
       <div className="flex items-center justify-between px-4 h-14 border-b border-[#ECEAE3]">
         {!collapsed && (
           <div className="flex flex-col">
-            <span className="font-heading text-base leading-tight text-[#36342E]">
+            <span className="font-heading text-lg font-bold leading-tight text-[#36342E]">
               Purple Lab
             </span>
-            <span className="text-[10px] text-[#6B6960]">Powered by Loki</span>
+            <span className="text-xs text-[#6B6960]">Powered by Loki</span>
           </div>
         )}
         <button
           type="button"
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={() => setCollapsed(!collapsed)}
           className="inline-flex items-center justify-center w-7 h-7 rounded-[3px] text-[#939084] hover:bg-[#F8F4F0] transition-colors"
         >
@@ -142,7 +143,7 @@ export function Sidebar({ wsConnected, version }: SidebarProps) {
 
         {/* Version */}
         {!collapsed && version && (
-          <span className="text-[10px] text-[#6B6960]">v{version}</span>
+          <span className="text-xs text-[#6B6960]">v{version}</span>
         )}
 
         {/* Docs link */}

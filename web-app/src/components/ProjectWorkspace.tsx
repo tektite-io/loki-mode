@@ -8,9 +8,12 @@ import {
   ArrowLeft as PreviewBack, ArrowRight as PreviewForward,
   RotateCw, ExternalLink,
   Eye, TestTube2, BookOpen, Trash2,
+  Square, Pause, Play,
+  Code2, Eye as PreviewIcon, Settings2, KeyRound, FileText as PrdIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { IconButton } from './ui/IconButton';
+import { Button } from './ui/Button';
 import { ContextMenu } from './ui/ContextMenu';
 import { ActivityPanel } from './ActivityPanel';
 import type { FileNode } from '../types/api';
@@ -144,7 +147,7 @@ function FileTree({
             >
               {isDir ? (
                 <span className="w-3 flex items-center justify-center flex-shrink-0 text-muted">
-                  {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </span>
               ) : (
                 <span className="w-3 flex-shrink-0" />
@@ -154,7 +157,7 @@ function FileTree({
               </span>
               <span className="truncate">{node.name}{isDir ? '/' : ''}</span>
               {!isDir && node.size != null && node.size > 0 && (
-                <span className="text-[10px] text-muted/40 ml-auto flex-shrink-0">{formatSize(node.size)}</span>
+                <span className="text-xs text-muted ml-auto flex-shrink-0">{formatSize(node.size)}</span>
               )}
               {!isDir && onDelete && (
                 <span
@@ -167,7 +170,7 @@ function FileTree({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') { e.stopPropagation(); onDelete(node.path, node.name); }
                   }}
-                  className="text-muted/30 hover:text-danger ml-1 flex-shrink-0 opacity-0 group-hover/file:opacity-100 transition-opacity cursor-pointer"
+                  className="text-muted hover:text-danger ml-1 flex-shrink-0 opacity-0 group-hover/file:opacity-100 transition-opacity cursor-pointer"
                   title="Delete file"
                 >
                   <X size={12} />
@@ -200,13 +203,15 @@ function flattenFiles(nodes: FileNode[], prefix = ''): { path: string; name: str
   return result;
 }
 
+type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd';
+
 export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string>('');
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>('code');
   const [isModified, setIsModified] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [sessionData, setSessionData] = useState<SessionDetail>(session);
@@ -227,6 +232,44 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   const [buildMode, setBuildMode] = useState<'quick' | 'standard' | 'max'>('standard');
   const [actionOutput, setActionOutput] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [isBuilding, setIsBuilding] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+
+  const handleStop = useCallback(async () => {
+    try {
+      await api.stopSession();
+      setIsBuilding(false);
+      setIsPaused(false);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handlePause = useCallback(async () => {
+    try {
+      await api.pauseSession();
+      setIsPaused(true);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleResume = useCallback(async () => {
+    try {
+      await api.resumeSession();
+      setIsPaused(false);
+    } catch { /* ignore */ }
+  }, []);
+
+  // Poll session status for build controls
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const status = await api.getStatus();
+        setIsBuilding(status.running);
+        setIsPaused(status.paused);
+      } catch { /* ignore */ }
+    };
+    check();
+    const interval = setInterval(check, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const canPreview = hasHtmlFile(sessionData.files);
   const previewUrl = `/api/sessions/${encodeURIComponent(sessionData.id)}/preview/index.html`;
@@ -461,7 +504,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     const indexFile = sessionData.files.find(f => f.name === 'index.html' && f.type === 'file');
     if (indexFile) {
       handleFileSelect(indexFile.path, indexFile.name);
-      setShowPreview(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -520,68 +562,59 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
         </button>
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-bold text-ink truncate">{sessionData.id}</h2>
-          <p className="text-[10px] font-mono text-muted-accessible truncate">{sessionData.path}</p>
+          <p className="text-xs font-mono text-muted-accessible truncate">{sessionData.path}</p>
         </div>
-        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
           sessionData.status === 'completed' || sessionData.status === 'completion_promise_fulfilled'
             ? 'bg-success/10 text-success' : 'bg-muted/10 text-muted'
         }`}>{sessionData.status}</span>
 
-        {/* Mode selector */}
-        <div className="flex rounded-btn border border-border overflow-hidden">
-          {(['quick', 'standard', 'max'] as const).map(m => (
-            <button
-              key={m}
-              onClick={() => setBuildMode(m)}
-              className={`px-3 py-1 text-xs font-medium transition-colors capitalize ${
-                buildMode === m
-                  ? 'bg-primary text-white'
-                  : 'text-secondary hover:bg-hover'
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        {/* Stop/Pause/Resume controls */}
+        {isBuilding && (
+          <div className="flex items-center gap-1 border-l border-border pl-3 ml-1">
+            {isPaused ? (
+              <Button variant="ghost" size="sm" icon={Play} onClick={handleResume} title="Resume build">
+                Resume
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" icon={Pause} onClick={handlePause} title="Pause build">
+                Pause
+              </Button>
+            )}
+            <Button variant="danger" size="sm" icon={Square} onClick={handleStop} title="Stop build">
+              Stop
+            </Button>
+          </div>
+        )}
 
         {/* Action buttons */}
         <IconButton icon={Eye} label="Review project" size="sm" onClick={handleReview} disabled={actionLoading} />
         <IconButton icon={TestTube2} label="Run tests" size="sm" onClick={handleTest} disabled={actionLoading} />
         <IconButton icon={BookOpen} label="Explain project" size="sm" onClick={handleExplain} disabled={actionLoading} />
-
-        {canPreview && (
-          <button onClick={() => setShowPreview(!showPreview)}
-            className={`text-xs font-medium px-3 py-1.5 rounded-btn border transition-colors ${
-              showPreview ? 'border-primary/40 bg-primary/10 text-primary'
-                : 'border-border text-muted hover:text-ink hover:bg-hover'
-            }`}>
-            {showPreview ? 'Hide Preview' : 'Preview'}
-          </button>
-        )}
       </div>
 
       {/* Workspace: vertical split - top: editor, bottom: activity panel */}
       <div className="flex-1 min-h-0">
         <PanelGroup orientation="vertical">
           <Panel defaultSize={70} minSize={40}>
-            {/* Horizontal split: file tree | editor | preview */}
+            {/* Horizontal split: file tree | tabbed content */}
             <PanelGroup orientation="horizontal" className="h-full">
               {/* Sidebar: file tree */}
               <Panel defaultSize={20} minSize={15}>
                 <div className="h-full flex flex-col border-r border-border bg-card">
                   <div className="px-3 py-2 border-b border-border flex items-center gap-2">
-                    <span className="text-[10px] text-muted-accessible uppercase tracking-wider font-semibold flex-1">Files</span>
+                    <span className="text-xs text-muted-accessible uppercase tracking-wider font-semibold flex-1">Files</span>
                     <button
                       onClick={handleCreateFile}
                       title="New File"
-                      className="flex items-center gap-1 text-[10px] text-muted-accessible hover:text-primary px-1.5 py-0.5 rounded border border-border hover:border-primary/30 transition-colors"
+                      className="flex items-center gap-1 text-xs text-muted-accessible hover:text-primary px-2.5 py-1 rounded border border-border hover:border-primary/30 transition-colors"
                     >
                       <FilePlus size={12} /> New
                     </button>
                     <button
                       onClick={handleCreateFolder}
                       title="New Folder"
-                      className="flex items-center gap-1 text-[10px] text-muted-accessible hover:text-primary px-1.5 py-0.5 rounded border border-border hover:border-primary/30 transition-colors"
+                      className="flex items-center gap-1 text-xs text-muted-accessible hover:text-primary px-2.5 py-1 rounded border border-border hover:border-primary/30 transition-colors"
                     >
                       <FolderPlus size={12} /> New
                     </button>
@@ -604,132 +637,259 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
 
               <PanelResizeHandle className="w-1 bg-border hover:bg-primary/30 transition-colors cursor-col-resize" />
 
-              {/* Editor */}
-              <Panel defaultSize={showPreview ? 50 : 80} minSize={25}>
+              {/* Main content area with workspace tabs */}
+              <Panel defaultSize={80} minSize={40}>
                 <div className="h-full flex flex-col min-w-0">
-                  {/* Tab bar */}
-                  {openTabs.length > 0 && (
-                    <div className="flex items-center border-b border-border bg-hover overflow-x-auto flex-shrink-0">
-                      {openTabs.map(tab => (
-                        <button
-                          key={tab.path}
-                          onClick={() => handleFileSelect(tab.path, tab.name)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono border-r border-border whitespace-nowrap transition-colors ${
-                            tab.path === selectedFile
-                              ? 'bg-card text-ink'
-                              : 'text-muted hover:text-ink hover:bg-card'
-                          }`}
-                        >
-                          <span className="w-4 flex items-center justify-center">
-                            {getFileIcon(tab.name, 'file')}
-                          </span>
-                          {tab.name}
-                          {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
-                          <span
-                            role="button"
-                            tabIndex={-1}
-                            onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.path); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleCloseTab(tab.path); } }}
-                            className="text-muted/30 hover:text-danger ml-1 cursor-pointer"
-                          >
-                            <X size={12} />
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {/* Workspace tabs */}
+                  <div className="flex items-center border-b border-border bg-hover px-1 flex-shrink-0" role="tablist">
+                    {([
+                      { id: 'code' as const, label: 'Code', icon: Code2 },
+                      { id: 'preview' as const, label: 'Preview', icon: PreviewIcon },
+                      { id: 'config' as const, label: 'Config', icon: Settings2 },
+                      { id: 'secrets' as const, label: 'Secrets', icon: KeyRound },
+                      { id: 'prd' as const, label: 'PRD', icon: PrdIcon },
+                    ]).map(tab => (
+                      <button
+                        key={tab.id}
+                        role="tab"
+                        aria-selected={activeWorkspaceTab === tab.id}
+                        onClick={() => setActiveWorkspaceTab(tab.id)}
+                        className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                          activeWorkspaceTab === tab.id
+                            ? 'border-primary text-primary'
+                            : 'border-transparent text-muted hover:text-ink hover:border-border'
+                        }`}
+                      >
+                        <tab.icon size={14} />
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
 
-                  {selectedFile ? (
-                    <>
-                      <div className="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-shrink-0 bg-hover">
-                        <span className="text-xs font-mono text-ink/60 truncate">{selectedFile}</span>
-                        {isSaving && (
-                          <span className="text-[10px] text-primary animate-pulse flex-shrink-0">Saving...</span>
+                  {/* Tab content */}
+                  <div className="flex-1 min-h-0" role="tabpanel">
+                    {activeWorkspaceTab === 'code' && (
+                      <div className="h-full flex flex-col min-w-0">
+                        {/* File tab bar */}
+                        {openTabs.length > 0 && (
+                          <div className="flex items-center border-b border-border bg-hover overflow-x-auto flex-shrink-0">
+                            {openTabs.map(tab => (
+                              <button
+                                key={tab.path}
+                                onClick={() => handleFileSelect(tab.path, tab.name)}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono border-r border-border whitespace-nowrap transition-colors ${
+                                  tab.path === selectedFile
+                                    ? 'bg-card text-ink'
+                                    : 'text-muted hover:text-ink hover:bg-card'
+                                }`}
+                              >
+                                <span className="w-4 flex items-center justify-center">
+                                  {getFileIcon(tab.name, 'file')}
+                                </span>
+                                {tab.name}
+                                {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
+                                <span
+                                  role="button"
+                                  tabIndex={-1}
+                                  title="Close tab"
+                                  onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.path); }}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleCloseTab(tab.path); } }}
+                                  className="text-muted hover:text-danger ml-1 cursor-pointer"
+                                >
+                                  <X size={12} />
+                                </span>
+                              </button>
+                            ))}
+                          </div>
                         )}
-                        <span className="ml-auto text-[10px] text-muted/50 font-mono">
-                          {fileSize != null ? formatSize(fileSize) : ''}
-                        </span>
-                        <span className="text-[10px] text-muted/40 font-mono uppercase">{fileExt}</span>
-                        {isModified && (
-                          <button
-                            onClick={handleSave}
-                            className="text-[10px] font-medium px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-                          >
-                            Save
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex-1 min-h-0">
-                        {fileLoading ? (
-                          <div className="text-muted text-xs animate-pulse p-4">Loading...</div>
+
+                        {selectedFile ? (
+                          <>
+                            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-shrink-0 bg-hover">
+                              <span className="text-xs font-mono text-secondary truncate">{selectedFile}</span>
+                              {isSaving && (
+                                <span className="text-xs text-primary animate-pulse flex-shrink-0">Saving...</span>
+                              )}
+                              <span className="ml-auto text-xs text-muted/50 font-mono">
+                                {fileSize != null ? formatSize(fileSize) : ''}
+                              </span>
+                              <span className="text-xs text-muted font-mono uppercase">{fileExt}</span>
+                              {isModified && (
+                                <button
+                                  onClick={handleSave}
+                                  className="text-xs font-medium px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                                >
+                                  Save
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex-1 min-h-0">
+                              {fileLoading ? (
+                                <div className="text-muted text-xs animate-pulse p-4">Loading...</div>
+                              ) : (
+                                <Editor
+                                  value={editorContent ?? ''}
+                                  language={getMonacoLanguage(selectedFileName)}
+                                  theme="vs"
+                                  onChange={handleEditorChange}
+                                  onMount={handleEditorMount}
+                                  options={{
+                                    minimap: { enabled: false },
+                                    fontSize: 13,
+                                    lineNumbers: 'on',
+                                    wordWrap: 'on',
+                                    scrollBeyondLastLine: false,
+                                    automaticLayout: true,
+                                    padding: { top: 8 },
+                                    renderLineHighlight: 'line',
+                                    smoothScrolling: true,
+                                    cursorBlinking: 'smooth',
+                                    folding: true,
+                                    bracketPairColorization: { enabled: true },
+                                  }}
+                                />
+                              )}
+                            </div>
+                          </>
                         ) : (
-                          <Editor
-                            value={editorContent ?? ''}
-                            language={getMonacoLanguage(selectedFileName)}
-                            theme="vs"
-                            onChange={handleEditorChange}
-                            onMount={handleEditorMount}
-                            options={{
-                              minimap: { enabled: false },
-                              fontSize: 13,
-                              lineNumbers: 'on',
-                              wordWrap: 'on',
-                              scrollBeyondLastLine: false,
-                              automaticLayout: true,
-                              padding: { top: 8 },
-                              renderLineHighlight: 'line',
-                              smoothScrolling: true,
-                              cursorBlinking: 'smooth',
-                              folding: true,
-                              bracketPairColorization: { enabled: true },
-                            }}
-                          />
+                          <div className="flex-1 flex items-center justify-center text-muted text-sm">
+                            Select a file to view its contents
+                          </div>
                         )}
                       </div>
-                    </>
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center text-muted text-sm">
-                      Select a file to view its contents
-                    </div>
-                  )}
+                    )}
+
+                    {activeWorkspaceTab === 'preview' && (
+                      <div className="h-full flex flex-col">
+                        {/* Preview toolbar with back/forward/refresh/URL */}
+                        <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 bg-hover">
+                          <IconButton icon={PreviewBack} label="Back" size="sm" onClick={handlePreviewBack} disabled={previewHistoryIndex <= 0} />
+                          <IconButton icon={PreviewForward} label="Forward" size="sm" onClick={handlePreviewForward} disabled={previewHistoryIndex >= previewHistory.length - 1} />
+                          <IconButton icon={RotateCw} label="Refresh" size="sm" onClick={() => setPreviewKey(k => k + 1)} />
+                          <input
+                            value={previewInputUrl}
+                            onChange={e => setPreviewInputUrl(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') navigatePreview(previewInputUrl); }}
+                            className="flex-1 px-3 py-1 text-xs font-mono bg-card border border-border rounded-btn"
+                          />
+                          <IconButton icon={ExternalLink} label="Open in new tab" size="sm" onClick={() => window.open(currentPreviewUrl, '_blank')} />
+                        </div>
+                        {canPreview ? (
+                          <div className="flex-1 bg-white">
+                            <iframe
+                              key={previewKey}
+                              ref={previewRef}
+                              src={currentPreviewUrl}
+                              title="Project Preview"
+                              className="w-full h-full border-0"
+                              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex items-center justify-center text-muted text-sm">
+                            No HTML files found for preview
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {activeWorkspaceTab === 'config' && (
+                      <div className="h-full flex flex-col">
+                        <div className="p-6 overflow-y-auto">
+                          <h3 className="text-h3 font-heading text-ink mb-4">Project Configuration</h3>
+                          <div className="space-y-4">
+                            <div className="card p-4">
+                              <label className="block text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-2">Provider</label>
+                              <div className="flex gap-2">
+                                {['claude', 'codex', 'gemini'].map(p => (
+                                  <button
+                                    key={p}
+                                    className="px-4 py-2 rounded-btn text-sm font-medium border transition-colors capitalize border-border text-secondary hover:bg-hover"
+                                  >
+                                    {p}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="card p-4">
+                              <label className="block text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-2">Build Mode</label>
+                              <div className="flex gap-2">
+                                {(['quick', 'standard', 'max'] as const).map(m => (
+                                  <button
+                                    key={m}
+                                    onClick={() => setBuildMode(m)}
+                                    className={`px-4 py-2 rounded-btn text-sm font-medium border transition-colors capitalize ${
+                                      buildMode === m
+                                        ? 'border-primary bg-primary/10 text-primary'
+                                        : 'border-border text-secondary hover:bg-hover'
+                                    }`}
+                                  >
+                                    {m}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="card p-4">
+                              <label className="block text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-2">Project Path</label>
+                              <input
+                                value={sessionData.path}
+                                readOnly
+                                className="w-full px-3 py-2 text-sm font-mono bg-hover border border-border rounded-btn text-ink"
+                              />
+                            </div>
+                            <div className="card p-4">
+                              <label className="block text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-2">Session ID</label>
+                              <input
+                                value={sessionData.id}
+                                readOnly
+                                className="w-full px-3 py-2 text-sm font-mono bg-hover border border-border rounded-btn text-ink"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeWorkspaceTab === 'secrets' && (
+                      <div className="h-full flex flex-col">
+                        <div className="p-6 overflow-y-auto">
+                          <h3 className="text-h3 font-heading text-ink mb-2">Environment Secrets</h3>
+                          <p className="text-sm text-muted mb-6">
+                            Secrets are stored locally and injected as environment variables during builds.
+                            They are never committed to the project repository.
+                          </p>
+                          <div className="card p-4">
+                            <div className="text-sm text-muted-accessible text-center py-8">
+                              Secret management coming soon.
+                              <br />
+                              <span className="text-xs mt-2 block">
+                                For now, set environment variables before running <code className="font-mono bg-hover px-1.5 py-0.5 rounded text-primary">loki start</code>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeWorkspaceTab === 'prd' && (
+                      <div className="h-full flex flex-col">
+                        <div className="p-6 overflow-y-auto">
+                          <h3 className="text-h3 font-heading text-ink mb-4">Product Requirements</h3>
+                          {sessionData.prd ? (
+                            <pre className="text-sm font-mono text-ink whitespace-pre-wrap bg-hover border border-border rounded-card p-4 leading-relaxed">
+                              {sessionData.prd}
+                            </pre>
+                          ) : (
+                            <div className="text-sm text-muted text-center py-8">
+                              No PRD found for this project.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Panel>
-
-              {/* Live preview (collapsible) */}
-              {showPreview && (
-                <>
-                  <PanelResizeHandle className="w-1 bg-border hover:bg-primary/30 transition-colors cursor-col-resize" />
-                  <Panel defaultSize={30} minSize={20} collapsible>
-                    <div className="h-full flex flex-col border-l border-border">
-                      {/* Preview toolbar */}
-                      <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 bg-hover">
-                        <IconButton icon={PreviewBack} label="Back" size="sm" onClick={handlePreviewBack} disabled={previewHistoryIndex <= 0} />
-                        <IconButton icon={PreviewForward} label="Forward" size="sm" onClick={handlePreviewForward} disabled={previewHistoryIndex >= previewHistory.length - 1} />
-                        <IconButton icon={RotateCw} label="Refresh" size="sm" onClick={() => setPreviewKey(k => k + 1)} />
-                        <input
-                          value={previewInputUrl}
-                          onChange={e => setPreviewInputUrl(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') navigatePreview(previewInputUrl);
-                          }}
-                          className="flex-1 px-3 py-1 text-xs font-mono bg-card border border-border rounded-btn"
-                        />
-                        <IconButton icon={ExternalLink} label="Open in new tab" size="sm" onClick={() => window.open(currentPreviewUrl, '_blank')} />
-                      </div>
-                      <div className="flex-1 bg-white">
-                        <iframe
-                          key={previewKey}
-                          ref={previewRef}
-                          src={currentPreviewUrl}
-                          title="Project Preview"
-                          className="w-full h-full border-0"
-                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                        />
-                      </div>
-                    </div>
-                  </Panel>
-                </>
-              )}
             </PanelGroup>
           </Panel>
 
@@ -755,7 +915,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
             <span className="text-xs font-semibold text-ink">Action Output</span>
             <IconButton icon={X} label="Close" size="sm" onClick={() => setActionOutput(null)} />
           </div>
-          <pre className="text-xs font-mono text-ink/80 whitespace-pre-wrap">{actionOutput}</pre>
+          <pre className="text-xs font-mono text-ink whitespace-pre-wrap">{actionOutput}</pre>
         </div>
       )}
 
@@ -802,7 +962,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                     {getFileIcon(f.name, 'file')}
                   </span>
                   <span className="text-ink">{f.name}</span>
-                  <span className="text-muted/40 ml-auto truncate text-[10px]">{f.path}</span>
+                  <span className="text-muted ml-auto truncate text-xs">{f.path}</span>
                 </button>
               ))}
               {filteredFiles.length === 0 && (

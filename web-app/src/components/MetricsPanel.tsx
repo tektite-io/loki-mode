@@ -26,11 +26,11 @@ export function MetricsPanel({ visible }: MetricsPanelProps) {
       {metrics ? (
         <div className="grid grid-cols-2 gap-3">
           <div className="card rounded-card p-3">
-            <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Iterations</div>
+            <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Iterations</div>
             <div className="text-xl font-bold text-ink">{metrics.iterations ?? 0}</div>
           </div>
           <div className="card rounded-card p-3">
-            <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Gate Pass Rate</div>
+            <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Gate Pass Rate</div>
             <div className="text-xl font-bold text-ink">
               {typeof metrics.quality_gate_pass_rate === 'number'
                 ? `${metrics.quality_gate_pass_rate.toFixed(0)}%`
@@ -38,13 +38,13 @@ export function MetricsPanel({ visible }: MetricsPanelProps) {
             </div>
           </div>
           <div className="card rounded-card p-3">
-            <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Tokens Used</div>
+            <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Tokens Used</div>
             <div className="text-xl font-bold text-ink">
               {(metrics.tokens_used ?? 0).toLocaleString()}
             </div>
           </div>
           <div className="card rounded-card p-3">
-            <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Time Elapsed</div>
+            <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Time Elapsed</div>
             <div className="text-xl font-bold text-ink">
               {metrics.time_elapsed || 'N/A'}
             </div>

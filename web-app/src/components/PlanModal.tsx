@@ -42,19 +42,19 @@ export function PlanModal({ plan, loading, onConfirm, onCancel }: PlanModalProps
 
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="card rounded-card p-3">
-                <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Complexity</div>
+                <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Complexity</div>
                 <div className="text-base font-bold text-ink capitalize">{plan.complexity}</div>
               </div>
               <div className="card rounded-card p-3">
-                <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Est. Cost</div>
+                <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Est. Cost</div>
                 <div className="text-base font-bold text-ink">{plan.cost_estimate}</div>
               </div>
               <div className="card rounded-card p-3">
-                <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Iterations</div>
+                <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Iterations</div>
                 <div className="text-base font-bold text-ink">{plan.iterations}</div>
               </div>
               <div className="card rounded-card p-3">
-                <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider mb-1">Phases</div>
+                <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider mb-1">Phases</div>
                 <div className="text-xs text-ink capitalize">{plan.phases.join(', ')}</div>
               </div>
             </div>
@@ -64,7 +64,7 @@ export function PlanModal({ plan, loading, onConfirm, onCancel }: PlanModalProps
                 <summary className="text-xs text-muted cursor-pointer hover:text-ink transition-colors">
                   Raw output
                 </summary>
-                <pre className="mt-2 text-[10px] font-mono text-muted-accessible bg-black/5 rounded-card p-3 overflow-auto max-h-40 whitespace-pre-wrap">
+                <pre className="mt-2 text-xs font-mono text-muted-accessible bg-black/5 rounded-card p-3 overflow-auto max-h-40 whitespace-pre-wrap">
                   {plan.output_text}
                 </pre>
               </details>

@@ -214,7 +214,7 @@ export function PRDInput({ onSubmit, running, error, provider: providerProp, onP
           className="w-full bg-card rounded-card border border-border-light px-4 py-2 text-sm font-mono text-ink placeholder:text-primary/60/70 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 transition-all"
           spellCheck={false}
         />
-        <p className="text-[10px] text-muted-accessible mt-1">
+        <p className="text-xs text-muted-accessible mt-1">
           Type a path or leave blank to auto-create under ~/purple-lab-projects/
         </p>
       </div>

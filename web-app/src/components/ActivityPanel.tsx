@@ -32,11 +32,11 @@ const TABS: TabDef[] = [
 function GateIcon({ status }: { status: string }) {
   switch (status) {
     case 'pass':
-      return <Check size={12} className="text-success" />;
+      return <Check size={14} className="text-success" />;
     case 'fail':
-      return <X size={12} className="text-danger" />;
+      return <X size={14} className="text-danger" />;
     default:
-      return <Clock size={12} className="text-muted" />;
+      return <Clock size={14} className="text-muted" />;
   }
 }
 
@@ -52,17 +52,17 @@ function AgentsTab({ agents }: { agents: Agent[] | null }) {
           className="flex items-center gap-2 px-3 py-2 rounded-btn bg-hover text-xs"
         >
           <span className="font-semibold text-ink truncate">{agent.name}</span>
-          <span className="text-[10px] font-mono text-muted-accessible px-1.5 py-0.5 rounded-btn bg-card">
+          <span className="text-xs font-mono text-muted-accessible px-1.5 py-0.5 rounded-btn bg-card">
             {agent.type}
           </span>
           <span
-            className={`text-[10px] font-semibold ${
+            className={`text-xs font-semibold ${
               agent.status === 'running' ? 'text-success' : 'text-muted'
             }`}
           >
             {agent.status}
           </span>
-          <span className="ml-auto text-[10px] text-muted-accessible font-mono truncate max-w-[200px]">
+          <span className="ml-auto text-xs text-muted-accessible font-mono truncate max-w-[200px]">
             {agent.task}
           </span>
         </div>
@@ -77,7 +77,7 @@ function QualityTab({ checklist }: { checklist: ChecklistSummary | null }) {
   }
   return (
     <div className="p-2 space-y-1 overflow-y-auto terminal-scroll">
-      <div className="flex items-center gap-3 px-3 py-1 text-[10px] text-muted-accessible font-semibold uppercase">
+      <div className="flex items-center gap-3 px-3 py-2 text-xs text-muted-accessible font-semibold uppercase">
         <span>Gate</span>
         <span className="ml-auto">
           {checklist.passed}/{checklist.total} passed
@@ -91,7 +91,7 @@ function QualityTab({ checklist }: { checklist: ChecklistSummary | null }) {
           <GateIcon status={item.status} />
           <span className="text-ink">{item.label}</span>
           {item.details && (
-            <span className="ml-auto text-[10px] text-muted-accessible truncate max-w-[200px]">
+            <span className="ml-auto text-xs text-muted-accessible truncate max-w-[200px]">
               {item.details}
             </span>
           )}

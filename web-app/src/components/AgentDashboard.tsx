@@ -97,18 +97,18 @@ function AgentCard({ agent, compact }: { agent: Agent; compact?: boolean }) {
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold truncate">{agent.name || agent.id}</span>
           {agent.type && (
-            <span className="text-[10px] font-mono font-medium opacity-70">{agent.type}</span>
+            <span className="text-xs font-mono font-medium opacity-70">{agent.type}</span>
           )}
         </div>
         {agent.task && (
           <p className="text-xs opacity-70 mt-0.5 truncate">{agent.task}</p>
         )}
         {agent.status && agent.status !== 'unknown' && (
-          <span className="inline-block text-[10px] font-mono mt-1 opacity-60">{agent.status}</span>
+          <span className="inline-block text-xs font-mono mt-1 opacity-60">{agent.status}</span>
         )}
       </div>
       {agent.pid && (
-        <span className="text-[10px] font-mono text-muted-accessible flex-shrink-0">PID {agent.pid}</span>
+        <span className="text-xs font-mono text-muted-accessible flex-shrink-0">PID {agent.pid}</span>
       )}
     </div>
   );

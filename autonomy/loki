@@ -3175,9 +3175,6 @@ cmd_web_stop() {
     curl -s --max-time 3 -X POST "http://127.0.0.1:${port}/api/session/stop" >/dev/null 2>&1 || true
     sleep 1
 
-    # Kill any orphaned loki-run processes (belt-and-suspenders)
-    pkill -f "loki-run-" 2>/dev/null || true
-
     # Try PID file first
     if [ -f "$PURPLE_LAB_PID_FILE" ]; then
         local pid
@@ -3214,6 +3211,26 @@ cmd_web_stop() {
     fi
 
     rm -f "$PURPLE_LAB_PID_FILE" "${LOKI_DIR}/purple-lab/port" 2>/dev/null || true
+
+    # Kill orphaned loki-run processes and their entire process trees
+    # This catches claude/codex/gemini child processes that survive parent death
+    local orphan_pids
+    orphan_pids=$(pgrep -f "loki-run-" 2>/dev/null || true)
+    if [ -n "$orphan_pids" ]; then
+        echo "Cleaning up orphaned build processes..."
+        for opid in $orphan_pids; do
+            # Kill the entire process tree rooted at this PID
+            pkill -TERM -P "$opid" 2>/dev/null || true
+            kill -TERM "$opid" 2>/dev/null || true
+        done
+        sleep 2
+        # SIGKILL any survivors
+        for opid in $orphan_pids; do
+            pkill -9 -P "$opid" 2>/dev/null || true
+            kill -9 "$opid" 2>/dev/null || true
+        done
+        echo "Orphaned build processes cleaned up."
+    fi
 }
 
 cmd_web_status() {

@@ -75,7 +75,7 @@ function TreeNode({
           {node.name}
         </span>
         {!isDir && node.size !== undefined && (
-          <span className="ml-auto text-[10px] font-mono text-muted-accessible flex-shrink-0">
+          <span className="ml-auto text-xs font-mono text-muted-accessible flex-shrink-0">
             {formatSize(node.size)}
           </span>
         )}
@@ -196,11 +196,11 @@ export function FileBrowser({ files, loading }: FileBrowserProps) {
                   ) : contentError ? (
                     <div className="flex flex-col items-center justify-center gap-2 py-6">
                       <p className="text-danger text-xs font-medium">Failed to load file</p>
-                      <p className="text-muted-accessible text-[10px] text-center max-w-[200px] break-words">{contentError}</p>
+                      <p className="text-muted-accessible text-xs text-center max-w-[200px] break-words">{contentError}</p>
                       <button
                         type="button"
                         onClick={() => selectedPath && loadFileContent(selectedPath)}
-                        className="mt-1 px-3 py-1 text-[10px] font-semibold rounded-btn border border-primary/20 text-primary hover:bg-primary/5 transition-colors"
+                        className="mt-1 px-3 py-1 text-xs font-semibold rounded-btn border border-primary/20 text-primary hover:bg-primary/5 transition-colors"
                       >
                         Retry
                       </button>

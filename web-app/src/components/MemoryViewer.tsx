@@ -76,7 +76,7 @@ export function MemoryViewer({ memory, loading }: MemoryViewerProps) {
                 <div className={`text-2xl font-bold font-mono ${stat.color}`}>
                   {stat.count}
                 </div>
-                <div className="text-[10px] text-muted-accessible font-medium mt-1 uppercase tracking-wider">
+                <div className="text-xs text-muted-accessible font-medium mt-1 uppercase tracking-wider">
                   {stat.label}
                 </div>
               </div>

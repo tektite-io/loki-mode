@@ -38,7 +38,7 @@ export function IconButton({
     <button
       type="button"
       aria-label={label}
-      title={title}
+      title={title ?? label}
       disabled={disabled}
       onClick={onClick}
       className={[

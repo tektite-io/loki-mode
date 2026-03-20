@@ -71,7 +71,7 @@ export function Header({
             wsConnected ? 'bg-success' : 'bg-danger'
           }`}
         />
-        <span className="text-[10px] text-muted-accessible font-medium">
+        <span className="text-xs text-muted-accessible font-medium">
           {wsConnected ? 'Connected' : 'Disconnected'}
         </span>
       </div>

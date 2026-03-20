@@ -67,10 +67,10 @@ export function SessionHistory({ onLoadSession }: SessionHistoryProps) {
               className="text-left px-4 py-3 rounded-card card hover:bg-hover transition-all group cursor-pointer"
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] font-mono text-muted-accessible">{item.date}</span>
+                <span className="text-xs font-mono text-muted-accessible">{item.date}</span>
                 <div className="flex items-center gap-2">
                   {fileCount !== undefined && fileCount > 0 && (
-                    <span className="text-[10px] font-mono text-muted-accessible">
+                    <span className="text-xs font-mono text-muted-accessible">
                       {fileCount} files
                     </span>
                   )}
@@ -82,7 +82,7 @@ export function SessionHistory({ onLoadSession }: SessionHistoryProps) {
               <div className="text-xs text-ink truncate group-hover:text-primary transition-colors">
                 {item.prd_snippet || item.id}
               </div>
-              <div className="text-[10px] font-mono text-muted-accessible mt-0.5 truncate">
+              <div className="text-xs font-mono text-muted-accessible mt-0.5 truncate">
                 {item.path}
               </div>
             </button>

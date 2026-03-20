@@ -32,7 +32,7 @@ export default function ProjectPage() {
       <div className="h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="text-muted animate-pulse text-sm">Loading project...</div>
-          <div className="text-[10px] font-mono text-muted/50 mt-2">{sessionId}</div>
+          <div className="text-xs font-mono text-muted/50 mt-2">{sessionId}</div>
         </div>
       </div>
     );

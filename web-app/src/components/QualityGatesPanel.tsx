@@ -26,7 +26,7 @@ function GateItem({ item }: { item: ChecklistItem }) {
       >
         <span className={`w-2 h-2 rounded-full flex-shrink-0 ${style.dot}`} />
         <span className="text-sm font-medium flex-1 truncate">{item.label}</span>
-        <span className="text-[10px] font-mono font-semibold uppercase tracking-wider flex-shrink-0">
+        <span className="text-xs font-mono font-semibold uppercase tracking-wider flex-shrink-0">
           {style.label}
         </span>
         {item.details && (

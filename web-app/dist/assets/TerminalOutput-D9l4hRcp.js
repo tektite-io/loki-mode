@@ -1,0 +1,31 @@
+import{c as d,r as c,j as e}from"./index-DKbfn_6W.js";/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const b=[["path",{d:"M12 5v14",key:"s699le"}],["path",{d:"m19 12-7 7-7-7",key:"1idqje"}]],v=d("arrow-down",b);/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const j=[["rect",{width:"18",height:"11",x:"3",y:"11",rx:"2",ry:"2",key:"1w4ew1"}],["path",{d:"M7 11V7a5 5 0 0 1 10 0v4",key:"fwvmzm"}]],N=d("lock",j);/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const S=[["rect",{x:"14",y:"3",width:"5",height:"18",rx:"1",key:"kaeet6"}],["rect",{x:"5",y:"3",width:"5",height:"18",rx:"1",key:"1wsw3u"}]],M=d("pause",S);/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const E=[["path",{d:"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",key:"10ikf1"}]],H=d("play",E);/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const L=[["path",{d:"M16.247 7.761a6 6 0 0 1 0 8.478",key:"1fwjs5"}],["path",{d:"M19.075 4.933a10 10 0 0 1 0 14.134",key:"ehdyv1"}],["path",{d:"M4.925 19.067a10 10 0 0 1 0-14.134",key:"1q22gi"}],["path",{d:"M7.753 16.239a6 6 0 0 1 0-8.478",key:"r2q7qm"}],["circle",{cx:"12",cy:"12",r:"2",key:"1c9p78"}]],_=d("radio",L);/**
+ * @license lucide-react v0.577.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const T=[["rect",{width:"18",height:"18",x:"3",y:"3",rx:"2",key:"afitv7"}]],R=d("square",T);class z extends c.Component{constructor(r){super(r),this.state={hasError:!1,error:null}}static getDerivedStateFromError(r){return{hasError:!0,error:r}}componentDidCatch(r,m){console.error(`[${this.props.name||"Component"}] render error:`,r,m)}render(){var r;return this.state.hasError?this.props.fallback?this.props.fallback:e.jsxs("div",{className:"card p-4 rounded-card text-center",children:[e.jsx("p",{className:"text-sm text-danger font-medium",children:"Something went wrong"}),e.jsx("p",{className:"text-xs text-muted mt-1",children:((r=this.state.error)==null?void 0:r.message)||"Unknown error"}),e.jsx("button",{onClick:()=>this.setState({hasError:!1,error:null}),className:"mt-2 px-3 py-1 text-xs font-medium rounded-btn border border-primary/20 text-primary hover:bg-primary/5 transition-colors",children:"Retry"})]}):this.props.children}}const C={info:"text-info",error:"text-danger",warning:"text-warning",debug:"text-muted",critical:"text-danger font-bold"};function $(n){if(!n)return"";if(n.includes("T")||n.includes("-"))try{return new Date(n).toLocaleTimeString("en-US",{hour12:!1})}catch{return n}return n}function D({logs:n,loading:r,subscribe:m}){const i=c.useRef(null),[l,f]=c.useState(!1),[g,k]=c.useState([]);c.useEffect(()=>m?m("log",o=>{const a=o;a!=null&&a.line&&k(x=>{const s=[...x,{message:a.line,timestamp:a.timestamp||""}];return s.length>500?s.slice(-500):s})}):void 0,[m]);const u=(()=>{const t=g.map(s=>{let h="info";const p=s.message.toLowerCase();return p.includes("error")||p.includes("fail")?h="error":p.includes("warn")?h="warning":p.includes("debug")&&(h="debug"),{timestamp:s.timestamp,level:h,message:s.message,source:"ws"}}),o=n||[];if(t.length===0)return o;if(o.length===0)return t;const a=new Set(t.map(s=>s.message));return[...o.filter(s=>!a.has(s.message)),...t]})();c.useEffect(()=>{!l&&i.current&&(i.current.scrollTop=i.current.scrollHeight)},[u,l]);const y=()=>{if(!i.current)return;const{scrollTop:t,scrollHeight:o,clientHeight:a}=i.current,x=o-t-a<50;f(!x)},w=()=>{var t;f(!1),(t=i.current)==null||t.scrollTo({top:i.current.scrollHeight,behavior:"smooth"})};return e.jsxs("div",{className:"card p-0 overflow-hidden flex flex-col h-full",children:[e.jsxs("div",{className:"flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0",children:[e.jsx("h3",{className:"text-sm font-semibold text-ink uppercase tracking-wider",children:"Terminal"}),e.jsxs("div",{className:"flex items-center gap-3",children:[e.jsxs("span",{className:"font-mono text-xs text-muted",children:[u.length," lines"]}),e.jsxs("button",{onClick:l?w:()=>f(!0),className:`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${l?"border-warning/40 text-warning bg-warning/5 hover:bg-warning/10":"border-primary/20 text-primary hover:bg-primary/5"}`,title:l?"Scroll locked -- click to resume auto-scroll":"Auto-scrolling -- click to lock",children:[l?e.jsx(N,{size:14}):e.jsx(_,{size:14}),l?"Locked":"Live"]}),l&&e.jsxs("button",{onClick:w,className:"flex items-center gap-1.5 text-xs text-primary hover:text-primary transition-colors font-medium",children:[e.jsx(v,{size:14}),"Jump to bottom"]})]})]}),e.jsxs("div",{ref:i,onScroll:y,className:"flex-1 overflow-y-auto terminal-scroll bg-ink/[0.03] p-4 font-mono text-xs leading-relaxed",children:[r&&!n&&g.length===0&&e.jsx("div",{className:"text-muted animate-pulse",children:"Connecting to log stream..."}),u.length===0&&!r&&e.jsxs("div",{className:"text-muted/60",children:[e.jsx("p",{children:"No log output yet."}),e.jsx("p",{className:"mt-1",children:"Start a build to see terminal output here."})]}),u.map((t,o)=>e.jsxs("div",{className:"flex gap-2 hover:bg-hover rounded px-1 -mx-1",children:[e.jsx("span",{className:"text-muted flex-shrink-0 select-none w-16 text-right",children:$(t.timestamp)}),e.jsx("span",{className:`flex-shrink-0 w-12 text-right uppercase text-xs font-semibold ${C[t.level]||"text-muted"}`,children:t.level}),e.jsx("span",{className:`flex-1 break-all ${t.level==="error"||t.level==="critical"?"text-danger":"text-ink"}`,children:t.message})]},o)),u.length>0&&e.jsx("div",{className:"terminal-cursor mt-1"})]})]})}export{z as E,H as P,R as S,D as T,M as a};

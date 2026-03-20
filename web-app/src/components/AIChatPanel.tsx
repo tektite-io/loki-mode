@@ -88,10 +88,10 @@ export function AIChatPanel({ sessionId, defaultMode }: AIChatPanelProps) {
               <p className="whitespace-pre-wrap">{msg.content}</p>
               {msg.filesChanged && msg.filesChanged.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-border">
-                  <span className="text-[10px] text-muted font-semibold uppercase">Files changed:</span>
+                  <span className="text-xs text-muted font-semibold uppercase">Files changed:</span>
                   <ul className="mt-1 space-y-0.5">
                     {msg.filesChanged.map((f, j) => (
-                      <li key={j} className="text-[10px] font-mono text-muted">{f}</li>
+                      <li key={j} className="text-xs font-mono text-muted">{f}</li>
                     ))}
                   </ul>
                 </div>
@@ -116,7 +116,7 @@ export function AIChatPanel({ sessionId, defaultMode }: AIChatPanelProps) {
             <button
               key={m}
               onClick={() => setMode(m)}
-              className={`text-[10px] font-semibold px-2 py-0.5 rounded-btn transition-colors capitalize ${
+              className={`text-xs font-semibold px-3 py-1.5 rounded-btn transition-colors capitalize ${
                 mode === m ? 'bg-primary text-white' : 'text-muted hover:text-ink'
               }`}
             >

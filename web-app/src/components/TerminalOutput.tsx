@@ -105,14 +105,14 @@ export function TerminalOutput({ logs, loading, subscribe }: TerminalOutputProps
           {/* Scroll lock toggle */}
           <button
             onClick={scrollLocked ? scrollToBottom : () => setScrollLocked(true)}
-            className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${
+            className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
               scrollLocked
                 ? 'border-warning/40 text-warning bg-warning/5 hover:bg-warning/10'
                 : 'border-primary/20 text-primary hover:bg-primary/5'
             }`}
             title={scrollLocked ? 'Scroll locked -- click to resume auto-scroll' : 'Auto-scrolling -- click to lock'}
           >
-            {scrollLocked ? <Lock size={12} /> : <Radio size={12} />}
+            {scrollLocked ? <Lock size={14} /> : <Radio size={14} />}
             {scrollLocked ? 'Locked' : 'Live'}
           </button>
           {scrollLocked && (
@@ -120,7 +120,7 @@ export function TerminalOutput({ logs, loading, subscribe }: TerminalOutputProps
               onClick={scrollToBottom}
               className="flex items-center gap-1.5 text-xs text-primary hover:text-primary transition-colors font-medium"
             >
-              <ArrowDown size={12} />
+              <ArrowDown size={14} />
               Jump to bottom
             </button>
           )}
@@ -145,11 +145,11 @@ export function TerminalOutput({ logs, loading, subscribe }: TerminalOutputProps
 
         {displayLogs.map((entry, i) => (
           <div key={i} className="flex gap-2 hover:bg-hover rounded px-1 -mx-1">
-            <span className="text-muted/40 flex-shrink-0 select-none w-16 text-right">
+            <span className="text-muted flex-shrink-0 select-none w-16 text-right">
               {formatTimestamp(entry.timestamp)}
             </span>
             <span
-              className={`flex-shrink-0 w-12 text-right uppercase text-[10px] font-semibold ${
+              className={`flex-shrink-0 w-12 text-right uppercase text-xs font-semibold ${
                 LEVEL_COLORS[entry.level] || 'text-muted'
               }`}
             >
@@ -158,7 +158,7 @@ export function TerminalOutput({ logs, loading, subscribe }: TerminalOutputProps
             <span className={`flex-1 break-all ${
               entry.level === 'error' || entry.level === 'critical'
                 ? 'text-danger'
-                : 'text-ink/80'
+                : 'text-ink'
             }`}>
               {entry.message}
             </span>

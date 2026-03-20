@@ -39,7 +39,7 @@ export function ProviderPanel({ currentProvider, isRunning, onProviderChange }: 
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[10px] font-semibold text-muted-accessible uppercase tracking-wider">Provider</div>
+      <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider">Provider</div>
       <div className="flex items-center gap-1 card rounded-card p-1">
         {['claude', 'codex', 'gemini'].map((p) => (
           <button
@@ -51,7 +51,7 @@ export function ProviderPanel({ currentProvider, isRunning, onProviderChange }: 
               provider === p
                 ? 'bg-primary text-white shadow-sm'
                 : isRunning
-                ? 'text-muted/40 cursor-not-allowed'
+                ? 'text-muted cursor-not-allowed'
                 : 'text-muted hover:text-ink hover:bg-hover cursor-pointer'
             }`}
           >
@@ -60,10 +60,10 @@ export function ProviderPanel({ currentProvider, isRunning, onProviderChange }: 
         ))}
       </div>
       {isRunning && (
-        <div className="text-[10px] text-muted-accessible">Stop build to switch provider</div>
+        <div className="text-xs text-muted-accessible">Stop build to switch provider</div>
       )}
       {error && (
-        <div className="text-[10px] text-danger">{error}</div>
+        <div className="text-xs text-danger">{error}</div>
       )}
     </div>
   );
