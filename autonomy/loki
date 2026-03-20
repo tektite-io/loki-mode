@@ -3036,10 +3036,7 @@ cmd_web_start() {
         echo -e "${RED}Error: Port must be between 1 and 65535, got $port${NC}"
         exit 1
     fi
-    if lsof -Pi :"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        echo -e "${RED}Error: Port $port is already in use${NC}"
-        exit 1
-    fi
+    # Port validation moved below (after PID file check) so we can offer to kill orphans
 
     # Validate --prd file if provided
     if [ -n "$prd_file" ]; then
@@ -3095,11 +3092,26 @@ cmd_web_start() {
         fi
     fi
 
-    # Check if port is already in use
+    # Check if port is already in use -- try to clean up orphaned processes
     if lsof -i:"$port" -sTCP:LISTEN &> /dev/null; then
-        echo -e "${RED}Error: Port $port already in use${NC}"
-        echo "Use --port to specify a different port, or stop the existing process."
-        exit 1
+        local blocking_pid
+        blocking_pid=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+        if [ -n "$blocking_pid" ]; then
+            echo -e "${YELLOW}Port $port in use by PID $blocking_pid -- stopping it...${NC}"
+            kill "$blocking_pid" 2>/dev/null
+            sleep 1
+            if kill -0 "$blocking_pid" 2>/dev/null; then
+                kill -9 "$blocking_pid" 2>/dev/null
+                sleep 1
+            fi
+            # Verify port is now free
+            if lsof -i:"$port" -sTCP:LISTEN &> /dev/null; then
+                echo -e "${RED}Error: Could not free port $port${NC}"
+                echo "Use --port to specify a different port, or manually kill the process."
+                exit 1
+            fi
+            echo -e "${GREEN}Port $port freed.${NC}"
+        fi
     fi
 
     # Start the server
@@ -3155,45 +3167,78 @@ cmd_web_start() {
 }
 
 cmd_web_stop() {
-    if [ ! -f "$PURPLE_LAB_PID_FILE" ]; then
-        echo "Purple Lab is not running."
-        return 0
+    local stopped=false
+    local port
+    port=$(cat "${LOKI_DIR}/purple-lab/port" 2>/dev/null || echo "$PURPLE_LAB_DEFAULT_PORT")
+
+    # Try PID file first
+    if [ -f "$PURPLE_LAB_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PURPLE_LAB_PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            sleep 1
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null
+            fi
+            echo -e "${GREEN}Purple Lab stopped (PID: $pid)${NC}"
+            stopped=true
+        fi
+        rm -f "$PURPLE_LAB_PID_FILE"
     fi
 
-    local pid
-    pid=$(cat "$PURPLE_LAB_PID_FILE" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null
+    # Also kill any process on the port (catches orphans without PID file)
+    local port_pid
+    port_pid=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+    if [ -n "$port_pid" ]; then
+        kill "$port_pid" 2>/dev/null
         sleep 1
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null
+        if kill -0 "$port_pid" 2>/dev/null; then
+            kill -9 "$port_pid" 2>/dev/null
         fi
-        echo -e "${GREEN}Purple Lab stopped (PID: $pid)${NC}"
-    else
-        echo "Purple Lab was not running."
+        if [ "$stopped" = false ]; then
+            echo -e "${GREEN}Purple Lab stopped (orphan PID: $port_pid on port $port)${NC}"
+        fi
+        stopped=true
     fi
-    rm -f "$PURPLE_LAB_PID_FILE"
+
+    if [ "$stopped" = false ]; then
+        echo "Purple Lab is not running."
+    fi
+
+    rm -f "$PURPLE_LAB_PID_FILE" "${LOKI_DIR}/purple-lab/port" 2>/dev/null || true
 }
 
 cmd_web_status() {
-    if [ ! -f "$PURPLE_LAB_PID_FILE" ]; then
-        echo "Purple Lab is not running."
+    local port
+    port=$(cat "${LOKI_DIR}/purple-lab/port" 2>/dev/null || echo "$PURPLE_LAB_DEFAULT_PORT")
+
+    # Check PID file
+    if [ -f "$PURPLE_LAB_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PURPLE_LAB_PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo -e "${GREEN}Purple Lab is running${NC}"
+            echo "  PID:  $pid"
+            echo "  URL:  http://${PURPLE_LAB_DEFAULT_HOST}:${port}"
+            echo "  Logs: ${LOKI_DIR}/purple-lab/logs/purple-lab.log"
+            return 0
+        fi
+        rm -f "$PURPLE_LAB_PID_FILE"
+    fi
+
+    # Fallback: check port directly (catches orphans)
+    local port_pid
+    port_pid=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+    if [ -n "$port_pid" ]; then
+        echo -e "${YELLOW}Purple Lab is running (orphan process)${NC}"
+        echo "  PID:  $port_pid"
+        echo "  Port: $port"
+        echo "  Note: No PID file found. Stop with: loki web stop"
         return 0
     fi
 
-    local pid
-    pid=$(cat "$PURPLE_LAB_PID_FILE" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        local port
-        port=$(cat "${LOKI_DIR}/purple-lab/port" 2>/dev/null || echo "$PURPLE_LAB_DEFAULT_PORT")
-        echo -e "${GREEN}Purple Lab is running${NC}"
-        echo "  PID:  $pid"
-        echo "  URL:  http://${PURPLE_LAB_DEFAULT_HOST}:${port}"
-        echo "  Logs: ${LOKI_DIR}/purple-lab/logs/purple-lab.log"
-    else
-        echo "Purple Lab is not running (stale PID file)."
-        rm -f "$PURPLE_LAB_PID_FILE"
-    fi
+    echo "Purple Lab is not running."
 }
 
 # Import GitHub issues

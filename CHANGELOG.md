@@ -5,6 +5,12 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.38.5] - 2026-03-19
+
+### Fixed
+- `loki web` start/stop/status lifecycle fully robust: start auto-kills orphaned processes blocking the port instead of erroring with "Port already in use"; stop kills processes by port when PID file is missing; status detects orphan processes via port check and shows their PID with cleanup instructions
+- All `loki web` subcommands return exit code 0 on success (was returning 1 from lsof/rm failures under set -e)
+
 ## [6.38.4] - 2026-03-19
 
 ### Fixed
