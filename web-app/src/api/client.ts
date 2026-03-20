@@ -179,9 +179,9 @@ export const api = {
 
   // File CRUD
   saveSessionFile: (sessionId: string, path: string, content: string) =>
-    fetchJSON<{ saved: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(path)}`, {
+    fetchJSON<{ saved: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/file`, {
       method: 'PUT',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ path, content }),
     }),
   createSessionFile: (sessionId: string, path: string, content: string = '') =>
     fetchJSON<{ created: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/file`, {
@@ -189,8 +189,9 @@ export const api = {
       body: JSON.stringify({ path, content }),
     }),
   deleteSessionFile: (sessionId: string, path: string) =>
-    fetchJSON<{ deleted: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(path)}`, {
+    fetchJSON<{ deleted: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/file`, {
       method: 'DELETE',
+      body: JSON.stringify({ path }),
     }),
   createSessionDirectory: (sessionId: string, path: string) =>
     fetchJSON<{ created: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/directory`, {

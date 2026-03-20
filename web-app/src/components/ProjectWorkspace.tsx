@@ -230,6 +230,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     type: 'file' | 'directory';
   } | null>(null);
   const [buildMode, setBuildMode] = useState<'quick' | 'standard' | 'max'>('standard');
+  const [selectedProvider, setSelectedProvider] = useState('claude');
   const [actionOutput, setActionOutput] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
@@ -804,7 +805,15 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                                 {['claude', 'codex', 'gemini'].map(p => (
                                   <button
                                     key={p}
-                                    className="px-4 py-2 rounded-btn text-sm font-medium border transition-colors capitalize border-border text-secondary hover:bg-hover"
+                                    onClick={() => {
+                                      setSelectedProvider(p);
+                                      api.setProvider(p).catch(() => {});
+                                    }}
+                                    className={`px-4 py-2 rounded-btn text-sm font-medium border transition-colors capitalize ${
+                                      selectedProvider === p
+                                        ? 'border-primary bg-primary/10 text-primary'
+                                        : 'border-border text-secondary hover:bg-hover'
+                                    }`}
                                   >
                                     {p}
                                   </button>

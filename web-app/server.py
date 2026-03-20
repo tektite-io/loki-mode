@@ -484,7 +484,9 @@ async def stop_session() -> JSONResponse:
 
         # Kill any orphaned loki-run processes for this project
         if session.project_dir:
-            _kill_orphan_loki_processes(session.project_dir)
+            await asyncio.get_running_loop().run_in_executor(
+                None, _kill_orphan_loki_processes, session.project_dir
+            )
 
         await _broadcast({"type": "session_end", "data": {"message": "Session stopped by user"}})
 
@@ -541,7 +543,9 @@ async def shutdown_event():
 
     # Kill any orphaned loki-run processes for this project
     if project_dir:
-        _kill_orphan_loki_processes(project_dir)
+        await asyncio.get_running_loop().run_in_executor(
+            None, _kill_orphan_loki_processes, project_dir
+        )
 
 
 @app.get("/api/session/status")

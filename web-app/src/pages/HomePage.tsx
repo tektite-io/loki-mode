@@ -117,6 +117,7 @@ export default function HomePage() {
     try {
       await api.startSession({ prd, provider, projectDir, mode });
       setCurrentPrd(prd);
+      setIsRunning(true);
     } catch (e) {
       setStartError(e instanceof Error ? e.message : 'Failed to start session');
     }
