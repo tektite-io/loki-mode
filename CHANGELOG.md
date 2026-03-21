@@ -5,6 +5,13 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.54.0] - 2026-03-21 - Dev server Start fix, AI Chat noise filter
+
+### Fixed
+- Dev server Start button now passes detected command (was calling API without command, causing "No dev command detected" error)
+- Restart button also passes the last known command
+- AI Chat filters raw Claude tool-use output ([Tool: Read], [Result], [Thinking]) for cleaner display
+
 ## [6.53.0] - 2026-03-21 - npm package fix, 58/58 E2E pass, auto-install pexpect
 
 ### Fixed
