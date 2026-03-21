@@ -26,7 +26,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: purple-lab
-          image: asklokesh/loki-mode:latest
+          image: asklokesh/purple-lab:latest
           imagePullPolicy: Always
           ports:
             - name: http

@@ -273,7 +273,7 @@ function UserSection({ collapsed }: { collapsed: boolean }) {
 
   // Authenticated user
   return (
-    <div className="relative" ref={menuRef}>
+    <div className="relative" ref={menuRef} data-testid="user-section">
       <button
         type="button"
         onClick={() => setMenuOpen(!menuOpen)}

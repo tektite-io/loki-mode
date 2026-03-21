@@ -3,5 +3,6 @@ kind: ConfigMap
 metadata:
   name: purple-lab-config
 data:
+  PURPLE_LAB_HOST: "0.0.0.0"
   PURPLE_LAB_PORT: "57375"
   LOG_LEVEL: "info"

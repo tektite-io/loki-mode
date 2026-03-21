@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
 
+// Dismiss OnboardingOverlay globally for all tests
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('pl_onboarding_complete', '1');
+  });
+});
+
 // ============================================================================
 // API Endpoint Tests
 // ============================================================================
@@ -295,6 +302,11 @@ test.describe('IDE Workspace', () => {
     }
   });
 
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('Project page loads with workspace tabs', async ({ page }) => {
     test.skip(!sessionId, 'No sessions available');
     await page.goto(`/project/${sessionId}`);
@@ -408,6 +420,11 @@ test.describe('Home Page', () => {
 // ============================================================================
 
 test.describe('Accessibility', () => {
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('Skip link exists and is focusable', async ({ page }) => {
     await page.goto('/');
     // Tab to skip link

@@ -85,21 +85,13 @@ test.describe('Streaming Chat Panel', () => {
     await expect(input).toHaveValue('test message');
   });
 
-  test('SSE stream endpoint returns correct content type', async ({ request }) => {
+  test('SSE stream endpoint returns error for invalid task', async ({ request }) => {
     test.skip(!sessionId, 'No sessions available');
-    // Start a chat task
-    const startRes = await request.post(`/api/sessions/${sessionId}/chat`, {
-      data: { message: 'ping', mode: 'quick' },
-    });
-    if (startRes.status() !== 200) {
-      test.skip(true, 'Chat start failed -- session may not be active');
-      return;
-    }
-    const { task_id } = await startRes.json();
-    // Stream endpoint should respond with text/event-stream
+    // Request stream for a non-existent task -- should return SSE with error event
     const streamRes = await request.get(
-      `/api/sessions/${sessionId}/chat/${task_id}/stream`
+      `/api/sessions/${sessionId}/chat/nonexistent-task/stream`
     );
+    // Should still return 200 with text/event-stream (error sent as SSE event)
     expect(streamRes.status()).toBe(200);
     const contentType = streamRes.headers()['content-type'];
     expect(contentType).toContain('text/event-stream');

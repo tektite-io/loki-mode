@@ -9,6 +9,7 @@ services:
     ports:
       - "57375:57375"
     environment:
+      - PURPLE_LAB_HOST=0.0.0.0
       - DATABASE_URL=postgresql+asyncpg://purplelab:purplelab@postgres:5432/purplelab
       - PURPLE_LAB_SECRET_KEY=${PURPLE_LAB_SECRET_KEY:-dev-secret-change-in-production}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
@@ -17,7 +18,7 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
     volumes:
       - project-data:/projects
-      - loki-data:/root/.loki
+      - loki-data:/home/purplelab/.loki
     depends_on:
       postgres:
         condition: service_healthy

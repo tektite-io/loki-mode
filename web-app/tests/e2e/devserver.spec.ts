@@ -15,6 +15,11 @@ test.describe('Dev Server / Preview Panel', () => {
     }
   });
 
+  test.beforeEach(async ({ page }) => {
+    // Dismiss the OnboardingOverlay so it does not block clicks
+    await page.addInitScript(() => localStorage.setItem('pl_onboarding_complete', '1'));
+  });
+
   test('Preview tab shows project type info when no server running', async ({ page }) => {
     test.skip(!sessionId, 'No sessions available');
     await page.goto(`/project/${sessionId}`);

@@ -13,7 +13,7 @@ export default defineConfig({
         {
           origin: 'http://127.0.0.1:57375',
           localStorage: [
-            { name: 'pl_onboarding_complete', value: 'true' },
+            { name: 'pl_onboarding_complete', value: '1' },
           ],
         },
       ],

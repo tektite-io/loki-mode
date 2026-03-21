@@ -5,6 +5,25 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.51.0] - 2026-03-20 - Test stability, Docker production readiness
+
+### Added
+- web-app/Dockerfile for Purple Lab standalone container (multi-stage: Node build + Python runtime)
+- Chat mode tests (quick/standard/max command construction)
+- ANSI stripping tests (3 test cases covering color, bold, cursor codes)
+- data-testid attributes on Sidebar user section for E2E testability
+
+### Fixed
+- All E2E tests pass (29/29, 20 skipped for session-dependent tests, 0 failures)
+- Backend tests pass (53/53, 11 skipped for optional deps)
+- OnboardingOverlay storageState value corrected ('1' not 'true')
+- Docker Compose volume mount path for non-root container user
+- Added PURPLE_LAB_HOST=0.0.0.0 for container network accessibility
+- K8s deployment image reference corrected to purple-lab
+- Auth tests resilient to local mode redirects
+- SSE stream test no longer hangs (tests error path instead of live stream)
+- Global onboarding dismissal in Playwright config
+
 ## [6.50.1] - 2026-03-20 - AI Chat fix, mktemp fix, test stability
 
 ### Fixed

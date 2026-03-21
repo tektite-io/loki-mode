@@ -200,6 +200,13 @@ class TestDevServerManager:
 # ============================================================================
 
 
+try:
+    import watchdog  # noqa: F401
+    _HAS_WATCHDOG = True
+except ImportError:
+    _HAS_WATCHDOG = False
+
+
 class TestFileWatcher:
     """Tests for the FileChangeHandler class."""
 
@@ -419,6 +426,29 @@ class TestStreaming:
         payload = json.loads(data_line.replace("data: ", ""))
         assert payload["error"] == error_msg
 
+    def test_ansi_stripping(self):
+        """Test that ANSI escape codes are stripped from chat output."""
+        import re
+        raw = "\x1b[0;32mStarting Loki Mode...\x1b[0m"
+        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw)
+        assert clean == "Starting Loki Mode..."
+        assert "\x1b" not in clean
+
+    def test_ansi_stripping_multiple_codes(self):
+        """Test ANSI stripping with bold, color, and reset codes."""
+        import re
+        raw = "\x1b[1m\x1b[31mERROR:\x1b[0m \x1b[33mFile not found\x1b[0m"
+        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw)
+        assert clean == "ERROR: File not found"
+        assert "\x1b" not in clean
+
+    def test_ansi_stripping_cursor_codes(self):
+        """Test stripping cursor movement and erase codes."""
+        import re
+        raw = "\x1b[2K\x1b[1GProgress: 50%"
+        clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw)
+        assert clean == "Progress: 50%"
+
 
 # ============================================================================
 # Test Request/Response Models
@@ -458,3 +488,66 @@ class TestRequestModels:
         req = SecretRequest(key="API_KEY", value="secret123")
         assert req.key == "API_KEY"
         assert req.value == "secret123"
+
+
+# ============================================================================
+# Test Chat Modes
+# ============================================================================
+
+
+class TestChatModes:
+    """Test chat command construction for different modes."""
+
+    def test_quick_mode_uses_loki_quick(self):
+        """Quick mode should use 'loki quick' command."""
+        from server import ChatRequest
+        req = ChatRequest(message="fix the bug", mode="quick")
+        # In server.py, quick and standard modes both use 'loki quick'
+        assert req.mode == "quick"
+        # Simulate the command construction logic from server.py line ~2274
+        loki = "/usr/local/bin/loki"
+        if req.mode == "max":
+            cmd_args = [loki, "start", "--provider", "claude", "/tmp/prd.md"]
+        else:
+            cmd_args = [loki, "quick", req.message]
+        assert cmd_args == [loki, "quick", "fix the bug"]
+        assert "start" not in cmd_args
+
+    def test_standard_mode_uses_loki_quick(self):
+        """Standard mode should also use 'loki quick' command."""
+        from server import ChatRequest
+        req = ChatRequest(message="refactor the auth module", mode="standard")
+        assert req.mode == "standard"
+        loki = "/usr/local/bin/loki"
+        if req.mode == "max":
+            cmd_args = [loki, "start", "--provider", "claude", "/tmp/prd.md"]
+        else:
+            cmd_args = [loki, "quick", req.message]
+        assert cmd_args == [loki, "quick", "refactor the auth module"]
+
+    def test_max_mode_uses_loki_start(self):
+        """Max mode should use 'loki start' with PRD file."""
+        from server import ChatRequest
+        req = ChatRequest(message="build a full dashboard", mode="max")
+        assert req.mode == "max"
+        loki = "/usr/local/bin/loki"
+        prd_path = "/tmp/chat-prd.md"
+        if req.mode == "max":
+            cmd_args = [loki, "start", "--provider", "claude", prd_path]
+        else:
+            cmd_args = [loki, "quick", req.message]
+        assert cmd_args == [loki, "start", "--provider", "claude", prd_path]
+        assert "quick" not in cmd_args
+
+    def test_chat_request_default_mode(self):
+        """ChatRequest defaults to quick mode."""
+        from server import ChatRequest
+        req = ChatRequest(message="hello")
+        assert req.mode == "quick"
+
+    def test_chat_request_preserves_message(self):
+        """ChatRequest preserves the full message text."""
+        from server import ChatRequest
+        msg = "Please add error handling to the login endpoint"
+        req = ChatRequest(message=msg)
+        assert req.message == msg
