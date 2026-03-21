@@ -5,6 +5,20 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.55.0] - 2026-03-21 - Auto-install deps, portless, dev server fixes
+
+### Added
+- Auto-install dependencies before starting dev server (npm install if node_modules missing, pip install if requirements.txt)
+- Portless integration for named .localhost URLs (optional, falls back gracefully)
+- Dev server searches subdirectories for package.json (nested project structures)
+
+### Fixed
+- Preview-info returns "npm run dev" instead of raw script content ("next dev" failed because next is a local dep)
+- Dev server Start button now passes the detected command to the API
+- Dev server start endpoint returns 400 with message instead of crashing with 500
+- Dev server Restart button passes last known command
+- AI Chat filters raw Claude tool-use output ([Tool: Read], [Result], etc.)
+
 ## [6.54.0] - 2026-03-21 - Dev server Start fix, AI Chat noise filter
 
 ### Fixed
