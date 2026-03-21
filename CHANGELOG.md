@@ -5,6 +5,12 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.56.0] - 2026-03-21 - Dashboard venv fixes, proxy error logging
+
+### Fixed
+- Install httpx, pexpect, and watchdog in dashboard virtual environment (missing deps caused startup failures)
+- Improved proxy error logging for better debugging
+
 ## [6.55.0] - 2026-03-21 - Auto-install deps, portless, dev server fixes
 
 ### Added
