@@ -5,6 +5,11 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.57.1] - 2026-03-21 - Remove beforeunload warning on PRD page refresh
+
+### Fixed
+- Remove beforeunload warning on PRD page refresh (content persisted to sessionStorage)
+
 ## [6.57.0] - 2026-03-21 - Preview iframe direct localhost URL (fixes Next.js/framework preview)
 
 ### Fixed
