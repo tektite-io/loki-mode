@@ -651,9 +651,14 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     setPreviewKey(k => k + 1);
   }, [previewHistoryIndex]);
 
-  // Sync previewInputUrl when navigating history
+  // Sync previewInputUrl when navigating history -- show path only, not full URL
   useEffect(() => {
-    setPreviewInputUrl(currentPreviewUrl);
+    try {
+      const url = new URL(currentPreviewUrl, window.location.origin);
+      setPreviewInputUrl(url.pathname + url.search + url.hash || '/');
+    } catch {
+      setPreviewInputUrl(currentPreviewUrl);
+    }
   }, [currentPreviewUrl]);
 
   const handleReview = useCallback(async () => {

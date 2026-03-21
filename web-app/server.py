@@ -551,6 +551,44 @@ class DevServerManager:
         if not root.is_dir():
             return None
 
+        # Docker Compose is the preferred way to run projects (isolated, no port conflicts)
+        for compose_file in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+            if (root / compose_file).exists():
+                # Check that Docker is actually available
+                try:
+                    subprocess.run(["docker", "--version"], capture_output=True, timeout=5)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    break  # Docker not installed -- fall through to other detection
+                # Parse compose file to detect exposed port
+                port = 3000  # default
+                try:
+                    import yaml
+                    with open(root / compose_file) as f:
+                        compose = yaml.safe_load(f)
+                    if compose and "services" in compose:
+                        for svc in compose["services"].values():
+                            ports = svc.get("ports", [])
+                            for p in ports:
+                                p_str = str(p)
+                                if ":" in p_str:
+                                    host_port = p_str.split(":")[0]
+                                    port = int(host_port)
+                                    break
+                            if port != 3000:
+                                break
+                except ImportError:
+                    # yaml not available -- fall back to regex parsing
+                    try:
+                        content = (root / compose_file).read_text()
+                        port_match = re.search(r'"?(\d+):(\d+)"?', content)
+                        if port_match:
+                            port = int(port_match.group(1))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                return {"command": f"docker compose -f {compose_file} up --build", "expected_port": port, "framework": "docker"}
+
         pkg_json = root / "package.json"
         if pkg_json.exists():
             try:
@@ -857,6 +895,25 @@ class DevServerManager:
         info = self.servers.pop(session_id, None)
         if not info:
             return {"stopped": False, "message": "No dev server running"}
+
+        # For Docker containers, run docker compose down
+        if info.get("framework") == "docker":
+            try:
+                project_dir = info.get("project_dir", ".")
+                # Find the compose file used in the original command
+                compose_cmd = info.get("original_command", "")
+                compose_args = ["docker", "compose", "down", "--remove-orphans"]
+                # Extract -f flag from original command if present
+                f_match = re.search(r'-f\s+(\S+)', compose_cmd)
+                if f_match:
+                    compose_args = ["docker", "compose", "-f", f_match.group(1), "down", "--remove-orphans"]
+                subprocess.run(
+                    compose_args,
+                    cwd=project_dir,
+                    capture_output=True, timeout=30,
+                )
+            except Exception:
+                pass
 
         proc = info["process"]
         if proc.poll() is None:
@@ -2063,14 +2120,26 @@ async def delete_session(session_id: str) -> JSONResponse:
     if target is None:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
 
-    # 1. Stop dev server if running
+    # 1. Stop Docker containers for this project (before stopping dev server)
+    try:
+        for compose_file in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+            if (target / compose_file).exists():
+                subprocess.run(
+                    ["docker", "compose", "-f", str(target / compose_file), "down", "--volumes", "--remove-orphans"],
+                    cwd=str(target), capture_output=True, timeout=30,
+                )
+                break
+    except Exception:
+        pass
+
+    # 2. Stop dev server if running
     if session_id in dev_server_manager.servers:
         await dev_server_manager.stop(session_id)
 
-    # 2. Stop file watcher if running
+    # 4. Stop file watcher if running
     file_watcher.stop(session_id)
 
-    # 3. Close terminal PTY if open
+    # 5. Close terminal PTY if open
     pty = _terminal_ptys.get(session_id)
     if pty:
         try:
@@ -2079,7 +2148,7 @@ async def delete_session(session_id: str) -> JSONResponse:
             pass
         _terminal_ptys.pop(session_id, None)
 
-    # 4. Delete project directory (including node_modules, .loki, everything)
+    # 6. Delete project directory (including node_modules, .loki, everything)
     import shutil
     try:
         shutil.rmtree(str(target))
@@ -2467,15 +2536,26 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
         # This runs claude (or configured provider) in the project directory
         # to make changes based on the user's prompt -- works both during
         # active sessions and post-completion for iterative development.
+        # Inject Docker Compose requirement into prompts so generated projects
+        # always include a docker-compose.yml for containerized execution.
+        docker_note = " (IMPORTANT: include a Dockerfile and docker-compose.yml so the app runs in a container via 'docker compose up')"
+        docker_instructions_file = SCRIPT_DIR / "docker-instructions.md"
+        docker_extra = ""
+        if docker_instructions_file.exists():
+            try:
+                docker_extra = "\n\n" + docker_instructions_file.read_text()
+            except OSError:
+                pass
         if req.mode == "max":
             # Max mode: full loki start with the message as a PRD
             prd_path = target / ".loki" / "chat-prd.md"
             prd_path.parent.mkdir(parents=True, exist_ok=True)
-            prd_path.write_text(req.message)
+            prd_content = req.message + "\n\n## Deployment\nMUST include Dockerfile and docker-compose.yml for containerized execution." + docker_extra
+            prd_path.write_text(prd_content)
             cmd_args = [loki, "start", "--provider", "claude", str(prd_path)]
         else:
             # Quick and Standard both use 'loki quick' -- fast, focused changes
-            cmd_args = [loki, "quick", req.message]
+            cmd_args = [loki, "quick", req.message + docker_note]
         try:
             proc = subprocess.Popen(
                 cmd_args,
@@ -2832,7 +2912,42 @@ async def get_preview_info(session_id: str) -> JSONResponse:
         if (project_root / f).exists()
     )
 
-    if is_expo:
+    # Docker Compose check -- highest priority (isolated, no port conflicts)
+    has_compose = any((project_root / f).exists() for f in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"))
+
+    if has_compose:
+        compose_file = next(f for f in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml") if (project_root / f).exists())
+        info["type"] = "docker"
+        info["dev_command"] = f"docker compose -f {compose_file} up --build"
+        info["description"] = "Containerized app -- runs via Docker Compose"
+        # Try to detect port from compose file
+        compose_port = 3000
+        try:
+            import yaml
+            with open(project_root / compose_file) as f:
+                compose_data = yaml.safe_load(f)
+            if compose_data and "services" in compose_data:
+                for svc in compose_data["services"].values():
+                    ports = svc.get("ports", [])
+                    for p in ports:
+                        p_str = str(p)
+                        if ":" in p_str:
+                            compose_port = int(p_str.split(":")[0])
+                            break
+                    if compose_port != 3000:
+                        break
+        except ImportError:
+            try:
+                content = (project_root / compose_file).read_text()
+                port_match = re.search(r'"?(\d+):(\d+)"?', content)
+                if port_match:
+                    compose_port = int(port_match.group(1))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        info["port"] = compose_port
+    elif is_expo:
         info["type"] = "expo"
         info["port"] = 8081
         info["dev_command"] = "npx expo start"

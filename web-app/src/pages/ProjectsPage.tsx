@@ -322,27 +322,25 @@ function ProjectCard({
       onClick={onClick}
       className={`group relative ${isSelected ? 'ring-2 ring-red-400 bg-red-50/30' : ''}`}
     >
-      {/* Selection checkbox */}
-      <button
-        onClick={onSelect}
-        aria-label={isSelected ? 'Deselect project' : 'Select project'}
-        className={`absolute top-3 left-3 p-0.5 rounded transition-all z-10 ${
-          selectionMode || isSelected
-            ? 'opacity-100'
-            : 'opacity-0 group-hover:opacity-100'
-        } ${isSelected ? 'text-red-600' : 'text-[#939084] hover:text-[#36342E]'}`}
-      >
-        {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
-      </button>
-
-      {/* Delete button */}
-      <button
-        onClick={onDelete}
-        aria-label="Delete project"
-        className="absolute top-3 right-3 p-1.5 rounded-[3px] text-[#939084] opacity-0 group-hover:opacity-100 hover:text-red-600 hover:bg-red-50 transition-all z-10"
-      >
-        <Trash2 size={14} />
-      </button>
+      {/* Action buttons - always visible */}
+      <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+        <button
+          onClick={onSelect}
+          aria-label={isSelected ? 'Deselect project' : 'Select project'}
+          className={`p-1 rounded-[3px] transition-colors ${
+            isSelected ? 'text-red-600 bg-red-50' : 'text-[#B8B5AD] hover:text-[#36342E] hover:bg-[#F8F4F0]'
+          }`}
+        >
+          {isSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+        </button>
+        <button
+          onClick={onDelete}
+          aria-label="Delete project"
+          className="p-1 rounded-[3px] text-[#B8B5AD] hover:text-red-600 hover:bg-red-50 transition-colors"
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
 
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs text-[#6B6960]">{dateStr}</span>
