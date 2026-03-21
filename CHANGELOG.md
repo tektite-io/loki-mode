@@ -5,6 +5,18 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.52.0] - 2026-03-21 - Cloud readiness: encryption, migrations, linting
+
+### Added
+- Fernet encryption for secrets (activates when PURPLE_LAB_SECRET_KEY is set)
+- Alembic database migrations with initial schema (5 tables)
+- ESLint 9 flat config (typescript-eslint + react-hooks + react-refresh)
+- crypto.py module with encrypt_value/decrypt_value helpers
+
+### Fixed
+- FastAPI lifespan: replaced deprecated @app.on_event with async context manager
+- Legacy plaintext secrets remain readable after encryption is enabled
+
 ## [6.51.0] - 2026-03-20 - Test stability, Docker production readiness
 
 ### Added

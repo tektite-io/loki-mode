@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -56,7 +57,44 @@ DIST_DIR = SCRIPT_DIR / "dist"
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Purple Lab", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown lifecycle."""
+    # -- Startup --
+    try:
+        from models import init_db
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url:
+            await init_db(db_url)
+            logger.info("Database initialized")
+        else:
+            logger.info("No DATABASE_URL set -- running in local mode (no auth, file-based storage)")
+    except ImportError:
+        logger.info("Database models not available -- running in local mode")
+    except Exception as exc:
+        logger.warning("Database initialization failed: %s -- falling back to local mode", exc)
+
+    yield
+
+    # -- Shutdown --
+    # Stop all file watchers
+    file_watcher.stop_all()
+
+    # Stop all dev servers
+    await dev_server_manager.stop_all()
+
+    # Clean up all terminal PTYs
+    for _sid, _pty in list(_terminal_ptys.items()):
+        try:
+            if _pty.isalive():
+                _pty.close(force=True)
+        except Exception:
+            pass
+    _terminal_ptys.clear()
+
+
+app = FastAPI(title="Purple Lab", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 _default_cors_origins = [
     f"http://127.0.0.1:{PORT}",
@@ -882,11 +920,14 @@ _SECRETS_FILE = SCRIPT_DIR.parent / ".loki" / "purple-lab" / "secrets.json"
 
 
 def _load_secrets() -> dict[str, str]:
-    """Load secrets from disk."""
+    """Load secrets from disk, decrypting values if encryption is configured."""
+    from crypto import decrypt_value, encryption_available
     if _SECRETS_FILE.exists():
         try:
             data = json.loads(_SECRETS_FILE.read_text())
             if isinstance(data, dict):
+                if encryption_available():
+                    return {k: decrypt_value(v) for k, v in data.items()}
                 return data
         except (json.JSONDecodeError, OSError):
             pass
@@ -894,9 +935,14 @@ def _load_secrets() -> dict[str, str]:
 
 
 def _save_secrets(secrets: dict[str, str]) -> None:
-    """Save secrets to disk. WARNING: stored in plaintext."""
+    """Save secrets to disk, encrypting values if PURPLE_LAB_SECRET_KEY is set."""
+    from crypto import encrypt_value, encryption_available
     _SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SECRETS_FILE.write_text(json.dumps(secrets, indent=2))
+    if encryption_available():
+        encrypted = {k: encrypt_value(v) for k, v in secrets.items()}
+        _SECRETS_FILE.write_text(json.dumps(encrypted, indent=2))
+    else:
+        _SECRETS_FILE.write_text(json.dumps(secrets, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -1138,40 +1184,6 @@ async def stop_session() -> JSONResponse:
         return JSONResponse(content={"stopped": True, "message": "Session stopped"})
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database if DATABASE_URL is configured."""
-    try:
-        from models import init_db
-        db_url = os.environ.get("DATABASE_URL")
-        if db_url:
-            await init_db(db_url)
-            logger.info("Database initialized")
-        else:
-            logger.info("No DATABASE_URL set -- running in local mode (no auth, file-based storage)")
-    except ImportError:
-        logger.info("Database models not available -- running in local mode")
-    except Exception as exc:
-        logger.warning("Database initialization failed: %s -- falling back to local mode", exc)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up any running session, file watchers, and dev servers when Purple Lab shuts down."""
-    # Stop all file watchers
-    file_watcher.stop_all()
-
-    # Stop all dev servers
-    await dev_server_manager.stop_all()
-
-    # Clean up all terminal PTYs
-    for _sid, _pty in list(_terminal_ptys.items()):
-        try:
-            if _pty.isalive():
-                _pty.close(force=True)
-        except Exception:
-            pass
-    _terminal_ptys.clear()
 
     if not session.running or session.process is None:
         return
