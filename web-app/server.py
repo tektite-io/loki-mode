@@ -3938,25 +3938,23 @@ def _pty_read(pty: "pexpect.spawn") -> Optional[str]:
 # Static file serving (built React app)
 # ---------------------------------------------------------------------------
 
-# Mount assets directory if dist exists
-if DIST_DIR.is_dir() and (DIST_DIR / "assets").is_dir():
-    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
-
-
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str) -> FileResponse:
-    """Serve the React SPA. All non-API routes return index.html."""
+    """Serve the React SPA and static assets from dist/."""
     index = DIST_DIR / "index.html"
     if not index.exists():
         return JSONResponse(
             status_code=503,
             content={"error": "Web app not built. Run: cd web-app && npm run build"},
         )
-    # Try to serve static file first
+    # Serve static files (JS, CSS, images) from dist/
     requested = DIST_DIR / full_path
     if full_path and requested.is_file() and str(requested.resolve()).startswith(str(DIST_DIR.resolve())):
-        return FileResponse(str(requested))
-    # Fallback to SPA index
+        # Set correct content type
+        import mimetypes
+        content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
+        return FileResponse(str(requested), media_type=content_type)
+    # SPA fallback: return index.html for all non-file routes
     return FileResponse(str(index))
 
 
