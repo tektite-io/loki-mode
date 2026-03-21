@@ -2638,7 +2638,7 @@ async def get_preview_info(session_id: str) -> JSONResponse:
         info["type"] = "web-app"
         info["entry_file"] = "index.html"
         info["preview_url"] = f"/api/sessions/{session_id}/preview/index.html"
-        info["dev_command"] = pkg_scripts.get("dev") or pkg_scripts.get("start")
+        info["dev_command"] = "npm run dev" if "dev" in pkg_scripts else "npm start" if "start" in pkg_scripts else None
         info["description"] = "Web application -- serves HTML/CSS/JS"
     elif is_express or (has_package_json and ("start" in pkg_scripts or "dev" in pkg_scripts) and not has_index_html):
         # API/server project
@@ -2650,7 +2650,7 @@ async def get_preview_info(session_id: str) -> JSONResponse:
             port = int(port_match.group(1))
         info["type"] = "api"
         info["port"] = port
-        info["dev_command"] = pkg_scripts.get("dev") or pkg_scripts.get("start")
+        info["dev_command"] = "npm run dev" if "dev" in pkg_scripts else "npm start" if "start" in pkg_scripts else None
         info["description"] = f"API server -- runs on port {port}"
         # Check for swagger/openapi
         for swagger_path in ["swagger.json", "openapi.json", "docs", "api-docs"]:
@@ -2669,7 +2669,7 @@ async def get_preview_info(session_id: str) -> JSONResponse:
         info["description"] = "Static site -- serves HTML directly"
     elif has_package_json and "test" in pkg_scripts:
         info["type"] = "library"
-        info["dev_command"] = pkg_scripts.get("test")
+        info["dev_command"] = "npm test"
         info["description"] = "Library/package -- run tests to verify"
     elif has_go_mod:
         info["type"] = "go-app"
