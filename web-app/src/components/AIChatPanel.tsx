@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, MessageSquare } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { Send, Square, MessageSquare, FileCode2, Terminal as TerminalIcon } from 'lucide-react';
 import { api } from '../api/client';
 import { Button } from './ui/Button';
 
@@ -28,6 +28,131 @@ function updateLastMessage(
   const last = updated[updated.length - 1];
   updated[updated.length - 1] = { ...last, ...updater(last) };
   return updated;
+}
+
+/** Parse categorized output lines into structured sections for display. */
+function parseStructuredContent(content: string): {
+  textLines: string[];
+  fileChanges: string[];
+  commands: string[];
+} {
+  const textLines: string[] = [];
+  const fileChanges: string[] = [];
+  const commands: string[] = [];
+
+  for (const line of content.split('\n')) {
+    if (line.startsWith('__FILE_CHANGE__')) {
+      fileChanges.push(line.replace('__FILE_CHANGE__', ''));
+    } else if (line.startsWith('__COMMAND__')) {
+      commands.push(line.replace('__COMMAND__', ''));
+    } else {
+      textLines.push(line);
+    }
+  }
+  return { textLines, fileChanges, commands };
+}
+
+function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
+  const [showFullOutput, setShowFullOutput] = useState(false);
+  const parsed = useMemo(
+    () => msg.role === 'system' ? parseStructuredContent(msg.content) : null,
+    [msg.role, msg.content],
+  );
+
+  if (msg.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] rounded-lg px-3 py-2 text-xs bg-primary/10 text-ink">
+          <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed overflow-x-auto">{msg.content}</pre>
+        </div>
+      </div>
+    );
+  }
+
+  // System message with structured output
+  const textContent = parsed ? parsed.textLines.join('\n').trim() : msg.content;
+  const isLong = textContent.split('\n').length > 30;
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[80%] rounded-lg px-3 py-2 text-xs bg-hover text-ink border-l-2 border-primary/40">
+        {/* Commands executed */}
+        {parsed && parsed.commands.length > 0 && (
+          <div className="mb-2 space-y-0.5">
+            {parsed.commands.map((cmd, j) => (
+              <div key={j} className="flex items-center gap-1.5 text-[11px] font-mono text-muted bg-card/50 px-2 py-0.5 rounded">
+                <TerminalIcon size={10} className="text-muted/60 flex-shrink-0" />
+                <span className="truncate">{cmd}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Main text content */}
+        <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed overflow-x-auto">
+          {isLong && !showFullOutput ? textContent.split('\n').slice(0, 30).join('\n') + '\n...' : textContent}
+          {msg.isStreaming && (
+            <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
+          )}
+        </pre>
+        {isLong && !msg.isStreaming && (
+          <button
+            onClick={() => setShowFullOutput(v => !v)}
+            className="text-[10px] text-primary hover:text-primary/80 mt-1 font-medium"
+          >
+            {showFullOutput ? 'Show less' : `Show all (${textContent.split('\n').length} lines)`}
+          </button>
+        )}
+
+        {/* File changes from categorized output */}
+        {parsed && parsed.fileChanges.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-border">
+            <span className="text-[11px] text-muted font-semibold uppercase flex items-center gap-1">
+              <FileCode2 size={11} />
+              Files modified ({parsed.fileChanges.length})
+            </span>
+            <ul className="mt-1 space-y-0.5">
+              {parsed.fileChanges.map((f, j) => (
+                <li key={j} className="text-[11px] font-mono text-primary/80">{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Git-detected file changes */}
+        {msg.filesChanged && msg.filesChanged.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-border">
+            <span className="text-[11px] text-muted font-semibold uppercase flex items-center gap-1">
+              <FileCode2 size={11} />
+              Changed files ({msg.filesChanged.length})
+            </span>
+            <ul className="mt-1 space-y-0.5">
+              {msg.filesChanged.map((f, j) => (
+                <li key={j} className="text-[11px] font-mono text-muted">{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Summary line */}
+        {msg.role === 'system' && !msg.isStreaming && msg.returncode !== undefined && (
+          <div className="mt-1 text-[10px] text-muted">
+            {msg.returncode === 0 ? (
+              <span>
+                Done
+                {parsed && (parsed.fileChanges.length > 0 || (msg.filesChanged && msg.filesChanged.length > 0))
+                  ? ` -- ${parsed.fileChanges.length + (msg.filesChanged?.length || 0)} files changed`
+                  : ''}
+                {parsed && parsed.commands.length > 0 ? `, ${parsed.commands.length} commands run` : ''}
+              </span>
+            ) : (
+              `Exit code: ${msg.returncode}`
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function AIChatPanel({ sessionId, defaultMode, onFilesChanged }: AIChatPanelProps) {
@@ -291,39 +416,7 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged }: AIChatPa
           </div>
         )}
         {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[80%] rounded-lg px-3 py-2 text-xs ${
-                msg.role === 'user'
-                  ? 'bg-primary/10 text-ink'
-                  : 'bg-hover text-ink border-l-2 border-primary/40'
-              }`}
-            >
-              <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed overflow-x-auto">{msg.content}
-                {msg.isStreaming && (
-                  <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
-                )}
-              </pre>
-              {msg.filesChanged && msg.filesChanged.length > 0 && (
-                <div className="mt-2 pt-2 border-t border-border">
-                  <span className="text-xs text-muted font-semibold uppercase">Files changed:</span>
-                  <ul className="mt-1 space-y-0.5">
-                    {msg.filesChanged.map((f, j) => (
-                      <li key={j} className="text-xs font-mono text-muted">{f}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {msg.role === 'system' && !msg.isStreaming && msg.returncode !== undefined && (
-                <div className="mt-1 text-[10px] text-muted">
-                  {msg.returncode === 0 ? 'Done' : `Exit code: ${msg.returncode}`}
-                </div>
-              )}
-            </div>
-          </div>
+          <ChatMessageBubble key={i} msg={msg} />
         ))}
       </div>
 

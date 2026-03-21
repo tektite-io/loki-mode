@@ -5,6 +5,18 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.59.0] - 2026-03-21 - AI Chat as Real Agent Interface + Auto-Fix Error Loop
+
+### Added
+- Error-aware chat: AI chat now auto-injects dev server errors and quality gate failures into context
+- Auto-fix loop: dev server crashes trigger automatic error repair (up to 3 attempts with circuit breaker)
+- Fix endpoint: POST /api/sessions/{id}/fix for manual error fixing via UI
+- Fix Error button: appears in preview when dev server crashes, triggers AI-powered error repair
+- Auto-fix status indicator: shows real-time progress of automatic error repair in preview panel
+- Structured chat output: file changes, commands, and text are categorized and displayed separately
+- Collapsible long output: chat messages over 30 lines show "Show all" toggle
+- npm noise filtering: removes npm warn/notice lines from chat output
+
 ## [6.58.1] - 2026-03-21 - fix: persist config selections, hide empty activity tabs
 
 ### Fixed

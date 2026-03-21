@@ -866,6 +866,80 @@ class DevServerManager:
             # Process exited -- mark as error if it was still starting or running
             if info.get("status") in ("starting", "running"):
                 info["status"] = "error"
+                # Auto-fix: trigger error repair if under circuit breaker limit
+                attempts = info.get("auto_fix_attempts", 0)
+                if attempts < 3:
+                    info["auto_fix_attempts"] = attempts + 1
+                    error_context = "\n".join(info.get("output_lines", [])[-30:])
+                    try:
+                        asyncio.ensure_future(
+                            self._auto_fix(session_id, error_context)
+                        )
+                    except Exception:
+                        pass
+
+    async def _auto_fix(self, session_id: str, error_context: str) -> None:
+        """Auto-fix a crashed dev server by invoking loki quick with the error."""
+        info = self.servers.get(session_id)
+        if not info:
+            return
+
+        attempt = info.get("auto_fix_attempts", 1)
+        # Preserve auto_fix_attempts across stop/start to maintain circuit breaker
+        saved_attempts = info.get("auto_fix_attempts", 0)
+        info["auto_fix_status"] = f"fixing (attempt {attempt}/3)"
+        logger.info("Auto-fix attempt %d/3 for session %s", attempt, session_id)
+
+        # Find the project directory for this session
+        target = _find_session_dir(session_id)
+        if target is None:
+            info["auto_fix_status"] = "failed (session not found)"
+            return
+
+        loki = _find_loki_cli()
+        if loki is None:
+            info["auto_fix_status"] = "failed (loki CLI not found)"
+            return
+
+        fix_message = (
+            f"The dev server crashed. Fix the error and ensure the app starts correctly.\n\n"
+            f"DEV SERVER ERROR OUTPUT:\n{error_context}"
+        )
+
+        # Save original command before stop() removes the info dict
+        cmd = info.get("command")
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    [loki, "quick", fix_message],
+                    cwd=str(target),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    env={**os.environ},
+                    start_new_session=True,
+                ),
+            )
+            if result.returncode == 0:
+                logger.info("Auto-fix succeeded for session %s, restarting dev server", session_id)
+                # Restart the dev server
+                await self.stop(session_id)
+                await asyncio.sleep(1)
+                await self.start(session_id, str(target), command=cmd)
+                # Transfer circuit breaker state to the new info dict
+                new_info = self.servers.get(session_id)
+                if new_info:
+                    new_info["auto_fix_attempts"] = saved_attempts
+                    new_info["auto_fix_status"] = "fixed, restarting..."
+            else:
+                # info may be stale after stop, but we only read from it here
+                info["auto_fix_status"] = f"fix attempt {attempt} failed"
+                logger.warning("Auto-fix attempt %d failed for session %s", attempt, session_id)
+        except Exception as e:
+            info["auto_fix_status"] = f"fix error: {str(e)[:100]}"
+            logger.error("Auto-fix error for session %s: %s", session_id, e)
 
     async def _health_check(self, port: int, retries: int = 3) -> bool:
         """Check if a port is responding to TCP connections."""
@@ -980,6 +1054,8 @@ class DevServerManager:
             "url": f"/proxy/{session_id}/" if info.get("port") and alive else None,
             "framework": info.get("framework"),
             "output": info.get("output_lines", [])[-20:],
+            "auto_fix_status": info.get("auto_fix_status"),
+            "auto_fix_attempts": info.get("auto_fix_attempts", 0),
         }
         if info.get("use_portless") and info.get("portless_app_name"):
             app_name = info["portless_app_name"]
@@ -2519,8 +2595,6 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
 
     # Clean up old completed tasks to prevent unbounded memory growth
     _cleanup_chat_tasks()
-
-    _cleanup_chat_tasks()
     task = ChatTask()
     _chat_tasks[task.id] = task
 
@@ -2536,6 +2610,33 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
         # This runs claude (or configured provider) in the project directory
         # to make changes based on the user's prompt -- works both during
         # active sessions and post-completion for iterative development.
+
+        # -- Phase 1: Inject project context (dev server errors, gate failures) --
+        context_parts = [req.message]
+
+        # Inject dev server errors if the server has crashed
+        ds_info = dev_server_manager.servers.get(session_id)
+        if ds_info and ds_info.get("status") == "error":
+            error_lines = ds_info.get("output_lines", [])[-30:]
+            if error_lines:
+                context_parts.append(
+                    "\n\nDEV SERVER ERROR (fix this):\n" + "\n".join(error_lines)
+                )
+
+        # Inject quality gate failures if any
+        gate_file = target / ".loki" / "quality" / "gate-failures.txt"
+        if gate_file.exists():
+            try:
+                gate_text = gate_file.read_text()[:2000]
+                if gate_text.strip():
+                    context_parts.append(
+                        "\n\nQUALITY GATE FAILURES:\n" + gate_text
+                    )
+            except OSError:
+                pass
+
+        full_message = "\n".join(context_parts)
+
         # Inject Docker Compose requirement into prompts so generated projects
         # always include a docker-compose.yml for containerized execution.
         docker_note = " (IMPORTANT: include a Dockerfile and docker-compose.yml so the app runs in a container via 'docker compose up')"
@@ -2550,12 +2651,12 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
             # Max mode: full loki start with the message as a PRD
             prd_path = target / ".loki" / "chat-prd.md"
             prd_path.parent.mkdir(parents=True, exist_ok=True)
-            prd_content = req.message + "\n\n## Deployment\nMUST include Dockerfile and docker-compose.yml for containerized execution." + docker_extra
+            prd_content = full_message + "\n\n## Deployment\nMUST include Dockerfile and docker-compose.yml for containerized execution." + docker_extra
             prd_path.write_text(prd_content)
             cmd_args = [loki, "start", "--provider", "claude", str(prd_path)]
         else:
             # Quick and Standard both use 'loki quick' -- fast, focused changes
-            cmd_args = [loki, "quick", req.message + docker_note]
+            cmd_args = [loki, "quick", full_message + docker_note]
         try:
             proc = subprocess.Popen(
                 cmd_args,
@@ -2586,7 +2687,17 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
                         continue
                     if not stripped:
                         continue
-                    task.output_lines.append(clean)
+                    # Skip npm noise lines
+                    if any(noise in stripped for noise in ("npm warn", "npm notice", "npm WARN")):
+                        continue
+                    # Categorize file change lines for structured frontend display
+                    if (stripped.startswith("Created ") or stripped.startswith("Modified ") or
+                            stripped.startswith("Deleted ") or stripped.startswith("Wrote ")):
+                        task.output_lines.append(f"__FILE_CHANGE__{clean}")
+                    elif (stripped.startswith("$ ") or stripped.startswith("Running: ")):
+                        task.output_lines.append(f"__COMMAND__{clean}")
+                    else:
+                        task.output_lines.append(clean)
                 proc.stdout.close()
 
             await asyncio.wait_for(
@@ -2745,6 +2856,105 @@ async def cancel_chat(session_id: str, task_id: str) -> JSONResponse:
     task.returncode = 1
     task.complete = True
     return JSONResponse(content={"cancelled": True})
+
+
+@app.post("/api/sessions/{session_id}/fix")
+async def fix_session(session_id: str) -> JSONResponse:
+    """Run loki quick with dev server error context to auto-fix crashes."""
+    if not re.match(r"^[a-zA-Z0-9._-]+$", session_id):
+        return JSONResponse(status_code=400, content={"error": "Invalid session ID"})
+    target = _find_session_dir(session_id)
+    if target is None:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    # Gather error context from dev server output
+    ds_info = dev_server_manager.servers.get(session_id)
+    error_lines: list[str] = []
+    if ds_info:
+        error_lines = ds_info.get("output_lines", [])[-30:]
+
+    if not error_lines:
+        return JSONResponse(status_code=400, content={"error": "No dev server error output to fix"})
+
+    error_context = "\n".join(error_lines)
+    fix_message = (
+        f"The dev server crashed. Fix the error and ensure the app starts correctly.\n\n"
+        f"DEV SERVER ERROR OUTPUT:\n{error_context}"
+    )
+
+    # Use the chat endpoint flow -- create a task and return task_id
+    _cleanup_chat_tasks()
+    task = ChatTask()
+    _chat_tasks[task.id] = task
+
+    async def run_fix() -> None:
+        loki = _find_loki_cli()
+        if loki is None:
+            task.output_lines = ["loki CLI not found"]
+            task.returncode = 1
+            task.complete = True
+            return
+        proc: Optional[subprocess.Popen] = None
+        try:
+            proc = subprocess.Popen(
+                [loki, "quick", fix_message],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                cwd=str(target),
+                env={**os.environ},
+                start_new_session=True,
+            )
+            task.process = proc
+            loop = asyncio.get_running_loop()
+
+            def _read() -> None:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    if task.cancelled:
+                        break
+                    clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line.rstrip("\n"))
+                    stripped = clean.strip()
+                    if stripped in ("[Tool: Read]", "[Tool: Bash]", "[Tool: Write]",
+                                    "[Tool: Edit]", "[Tool: Grep]", "[Tool: Glob]",
+                                    "[Result]", "[Thinking]"):
+                        continue
+                    if not stripped:
+                        continue
+                    task.output_lines.append(clean)
+                proc.stdout.close()
+
+            await asyncio.wait_for(loop.run_in_executor(None, _read), timeout=300)
+            proc.wait(timeout=10)
+            task.returncode = proc.returncode
+        except asyncio.TimeoutError:
+            if proc is not None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
+                proc.wait()
+            task.output_lines.append("Fix timed out after 5 minutes")
+            task.returncode = 1
+        except Exception as e:
+            task.output_lines.append(str(e))
+            task.returncode = 1
+            if proc is not None and proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
+                proc.wait()
+        task.complete = True
+
+    asyncio.create_task(run_fix())
+
+    return JSONResponse(content={
+        "task_id": task.id,
+        "status": "running",
+        "error_context": error_context[:500],
+    })
 
 
 @app.post("/api/sessions/{session_id}/review")

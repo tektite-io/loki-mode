@@ -232,6 +232,13 @@ export const api = {
   exportProject: (sessionId: string) =>
     fetchJSON<{ output: string; returncode: number }>(`/sessions/${encodeURIComponent(sessionId)}/export`, { method: 'POST' }),
 
+  // Fix dev server errors via loki quick
+  fixProject: (sessionId: string) =>
+    fetchJSON<{ task_id: string; status: string; error_context?: string }>(
+      `/sessions/${encodeURIComponent(sessionId)}/fix`,
+      { method: 'POST' },
+    ),
+
   // Deprecated: use chatStart + chatPoll instead (non-blocking)
   chatMessage: (sessionId: string, message: string, mode: string = 'quick') =>
     fetchJSON<{ task_id: string; status: string }>(
@@ -305,6 +312,8 @@ export const api = {
         framework: string | null;
         output: string[];
         portless_url?: string;
+        auto_fix_status?: string | null;
+        auto_fix_attempts?: number;
       }>(`/sessions/${encodeURIComponent(sessionId)}/devserver/status`),
   },
 

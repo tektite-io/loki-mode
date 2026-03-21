@@ -505,8 +505,11 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     framework: string | null;
     output: string[];
     portless_url?: string;
+    auto_fix_status?: string | null;
+    auto_fix_attempts?: number;
   } | null>(null);
   const [devServerStarting, setDevServerStarting] = useState(false);
+  const [fixingError, setFixingError] = useState(false);
   const [devServerError, setDevServerError] = useState<string | null>(null);
   const [customDevCommand, setCustomDevCommand] = useState('');
 
@@ -603,6 +606,31 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     } catch {
       // ignore
     }
+  }, [sessionData.id]);
+
+  // Fix dev server error via AI
+  const handleFixError = useCallback(async () => {
+    setFixingError(true);
+    try {
+      const result = await api.fixProject(sessionData.id);
+      if (result.task_id) {
+        // Poll until fix completes, then refresh dev server status
+        const maxPolls = 150;
+        let pollCount = 0;
+        let poll: { complete: boolean };
+        do {
+          await new Promise(r => setTimeout(r, 2000));
+          poll = await api.chatPoll(sessionData.id, result.task_id);
+          pollCount++;
+        } while (!poll.complete && pollCount < maxPolls);
+        // Refresh dev server status after fix
+        const status = await api.devserver.status(sessionData.id);
+        setDevServer(status);
+      }
+    } catch (e) {
+      setDevServerError(e instanceof Error ? e.message : 'Fix failed');
+    }
+    setFixingError(false);
   }, [sessionData.id]);
 
   // Determine preview URL: point iframe directly to dev server (avoids proxy path issues with asset URLs)
@@ -1244,8 +1272,11 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                             {devServer.status === 'starting' && (
                               <span>Starting dev server...</span>
                             )}
-                            {devServer.status === 'error' && (
+                            {devServer.status === 'error' && !devServer.auto_fix_status && (
                               <span>Dev server crashed</span>
+                            )}
+                            {devServer.status === 'error' && devServer.auto_fix_status && (
+                              <span>Auto-fixing: {devServer.auto_fix_status}</span>
                             )}
                             {devServer.command && (
                               <span className="text-xs font-mono opacity-60 ml-auto truncate max-w-xs">{devServer.command}</span>
@@ -1345,18 +1376,41 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                               </div>
                             )}
 
-                            {/* Error with output: show crash info and restart */}
+                            {/* Error with output: show crash info, fix button, and restart */}
                             {devServer?.status === 'error' && (
                               <div className="card p-3 max-w-md w-full border-danger/30 bg-danger/5">
                                 <div className="flex items-center justify-between mb-2">
                                   <p className="text-xs text-danger font-medium">Dev server crashed</p>
-                                  <button
-                                    onClick={() => handleStartDevServer(previewInfo.dev_command || customDevCommand || undefined)}
-                                    className="text-xs px-2 py-1 rounded border border-danger/40 text-danger hover:bg-danger/10 transition-colors"
-                                  >
-                                    Restart
-                                  </button>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={handleFixError}
+                                      disabled={fixingError}
+                                      className="text-xs px-2 py-1 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                                    >
+                                      {fixingError ? 'Fixing...' : 'Fix Error'}
+                                    </button>
+                                    <button
+                                      onClick={() => handleStartDevServer(previewInfo.dev_command || customDevCommand || undefined)}
+                                      className="text-xs px-2 py-1 rounded border border-danger/40 text-danger hover:bg-danger/10 transition-colors"
+                                    >
+                                      Restart
+                                    </button>
+                                  </div>
                                 </div>
+                                {/* Auto-fix status indicator */}
+                                {devServer.auto_fix_status && (
+                                  <div className="flex items-center gap-2 mb-2 px-2 py-1 rounded bg-primary/5 border border-primary/20">
+                                    <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                                    <span className="text-[11px] text-primary font-medium">
+                                      Auto-fix: {devServer.auto_fix_status}
+                                    </span>
+                                    {devServer.auto_fix_attempts !== undefined && devServer.auto_fix_attempts > 0 && (
+                                      <span className="text-[10px] text-muted ml-auto">
+                                        Attempt {devServer.auto_fix_attempts}/3
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                                 {devServer.output.length > 0 && (
                                   <pre className="text-[11px] font-mono text-danger/70 bg-danger/5 p-2 rounded max-h-32 overflow-y-auto whitespace-pre-wrap">
                                     {devServer.output.slice(-10).join('\n')}
