@@ -40,7 +40,6 @@ log_test() {
 cleanup() {
     rm -rf "$TEST_DIR"
     # Clean up any test processes
-    pkill -f "test-memory-" 2>/dev/null || true
 }
 trap cleanup EXIT
 

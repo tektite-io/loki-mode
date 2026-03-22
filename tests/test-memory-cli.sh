@@ -47,7 +47,6 @@ cleanup() {
     rm -rf "$TEST_DIR"
     rm -f /tmp/loki-memory-test-*.json 2>/dev/null || true
     # Clean up any test processes
-    pkill -f "test-memory-cli" 2>/dev/null || true
 }
 trap cleanup EXIT
 
