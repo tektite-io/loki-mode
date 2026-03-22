@@ -28,6 +28,7 @@
 | GitHub issues, PRs, syncing | `github-integration.md` |
 | Multi-provider (Codex, Gemini) | `providers.md` |
 | OpenSpec delta context, brownfield modifications | `openspec-integration.md` |
+| MiroFish market validation, `--mirofish` flag | `mirofish-integration.md` |
 | Plan deepening, knowledge extraction | `compound-learning.md` |
 
 ## Module Descriptions
@@ -117,6 +118,13 @@
 - Scenario-to-test mapping (GIVEN/WHEN/THEN)
 - Source mapping and verification tracking
 - Complexity-based agent strategy
+
+### mirofish-integration.md
+**When:** Project has MiroFish market validation data, `--mirofish` flag used
+- Market validation context interpretation
+- Sentiment-aware feature prioritization
+- Risk-driven task ordering
+- Advisory-only (never gates RARV or Completion Council)
 
 ### compound-learning.md (v5.30.0)
 **When:** After architecture phase (deepen plan), after verification (extract learnings)

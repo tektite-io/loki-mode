@@ -5,6 +5,20 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.60.0] - 2026-03-21 - MiroFish Market Validation Integration
+
+### Added
+- MiroFish swarm intelligence adapter (`autonomy/mirofish-adapter.py`) for pre-build market validation
+- CLI flags: `--mirofish`, `--mirofish-docker`, `--mirofish-rounds`, `--mirofish-timeout`, `--mirofish-bg`, `--no-mirofish`
+- Non-blocking background pipeline: ontology generation, graph building, simulation, report generation
+- Market validation context injection into RARV prompt with progressive enrichment
+- Queue population from MiroFish advisory tasks (risk mitigations, recommendations)
+- Docker container management for MiroFish (`loki-mirofish` container)
+- Skill documentation (`skills/mirofish-integration.md`) with sentiment interpretation and prioritization rules
+- 74 unit tests + 34 E2E integration tests
+- `loki doctor` integration for MiroFish health check
+- AGPL-3.0 license boundary maintained: HTTP-only communication, zero code import
+
 ## [6.59.0] - 2026-03-21 - AI Chat as Real Agent Interface + Auto-Fix Error Loop
 
 ### Added

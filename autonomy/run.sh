@@ -8125,6 +8125,70 @@ except Exception:
 " 2>/dev/null || true)
     fi
 
+    # MiroFish market validation context injection (if available)
+    local mirofish_context=""
+    if [[ -f ".loki/mirofish-context.json" ]]; then
+        mirofish_context=$(python3 -c "
+import json
+try:
+    with open('.loki/mirofish-context.json') as f:
+        data = json.load(f)
+    parts = ['MIROFISH MARKET VALIDATION:']
+    adv = data.get('analysis', {})
+    summary = adv.get('overall_sentiment', '')
+    score = adv.get('sentiment_score', 0)
+    conf = adv.get('confidence', '')
+    rec = adv.get('recommendation', '')
+    if summary:
+        parts.append(f'Overall: {summary} (score={score}, confidence={conf}, recommendation={rec})')
+    concerns = adv.get('key_concerns', [])
+    if concerns:
+        parts.append('Key Concerns: ' + '; '.join(c[:200] for c in concerns[:5]))
+    rankings = adv.get('feature_rankings', [])
+    if rankings:
+        ranked = ', '.join(f'{r[\"feature\"]}={r[\"reception_score\"]}' for r in rankings[:5])
+        parts.append(f'Feature Reception: {ranked}')
+    quotes = adv.get('notable_quotes', [])
+    if quotes:
+        parts.append('Agent Quotes: ' + ' | '.join(q[:150] for q in quotes[:3]))
+    parts.append('NOTE: MiroFish results are advisory only. They do NOT override Completion Council or quality gates.')
+    print(' '.join(parts))
+except Exception:
+    pass
+" 2>/dev/null || true)
+    elif [[ -f ".loki/mirofish/pipeline-state.json" ]]; then
+        mirofish_context=$(python3 -c "
+import json, os
+try:
+    with open('.loki/mirofish/pipeline-state.json') as f:
+        state = json.load(f)
+    status = state.get('status', 'unknown')
+    stage = state.get('current_stage', 0)
+    pid = state.get('pid', 0)
+    alive = False
+    if pid:
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except OSError:
+            pass
+    if status == 'running' and alive:
+        s3 = state.get('stages', {}).get('3_simulation', {})
+        progress = ''
+        if s3.get('status') == 'running':
+            cr = s3.get('current_round', 0)
+            tr = s3.get('total_rounds', 0)
+            if tr:
+                progress = f' (simulation round {cr}/{tr})'
+        print(f'MIROFISH_STATUS: Market validation running stage {stage}/4{progress}. Advisory will appear when complete.')
+    elif status == 'failed':
+        error = state.get('error', 'unknown')[:200]
+        print(f'MIROFISH_STATUS: Market validation failed at stage {stage}: {error}. Proceeding without.')
+except Exception:
+    pass
+" 2>/dev/null || true)
+    fi
+
     # Degraded providers with small models need simplified prompts
     # Full RARV/SDLC instructions overwhelm models < 30B parameters
     if [ "${PROVIDER_DEGRADED:-false}" = "true" ]; then
@@ -8149,15 +8213,15 @@ except Exception:
     else
         if [ $retry -eq 0 ]; then
             if [ -n "$prd" ]; then
-                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         else
             if [ -n "$prd" ]; then
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         fi
     fi
@@ -8440,6 +8504,97 @@ OPENSPEC_QUEUE_EOF
 }
 
 #===============================================================================
+# MiroFish Task Queue Population
+#===============================================================================
+
+# Populate the task queue from MiroFish market validation advisory
+# Only runs once -- skips if queue was already populated from MiroFish
+populate_mirofish_queue() {
+    # Skip if no MiroFish tasks file
+    if [[ ! -f ".loki/mirofish-tasks.json" ]]; then
+        return 0
+    fi
+
+    # Skip if already populated (marker file)
+    if [[ -f ".loki/queue/.mirofish-populated" ]]; then
+        log_info "MiroFish queue already populated, skipping"
+        return 0
+    fi
+
+    log_step "Populating task queue from MiroFish market validation..."
+
+    # Ensure queue directory exists
+    mkdir -p ".loki/queue"
+
+    # Read MiroFish tasks and create queue entries
+    python3 << 'MIROFISH_QUEUE_EOF'
+import json
+import os
+import sys
+
+mf_tasks_path = ".loki/mirofish-tasks.json"
+pending_path = ".loki/queue/pending.json"
+
+try:
+    with open(mf_tasks_path, "r") as f:
+        mf_tasks = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError) as e:
+    print(f"Warning: Could not read MiroFish tasks: {e}", file=sys.stderr)
+    sys.exit(0)
+
+if not isinstance(mf_tasks, list) or not mf_tasks:
+    print("No MiroFish tasks found to queue", file=sys.stderr)
+    sys.exit(0)
+
+# Load existing pending tasks (if any)
+existing = []
+if os.path.exists(pending_path):
+    try:
+        with open(pending_path, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                existing = data
+            elif isinstance(data, dict) and "tasks" in data:
+                existing = data["tasks"]
+    except (json.JSONDecodeError, FileNotFoundError):
+        existing = []
+
+# Convert MiroFish tasks to queue format (with deduplication)
+existing_ids = {t.get("id") for t in existing if isinstance(t, dict)}
+added = 0
+for i, task in enumerate(mf_tasks):
+    if not isinstance(task, dict):
+        continue
+    task_id = task.get("id", f"mirofish-{i+1:03d}")
+    if task_id in existing_ids:
+        continue
+    entry = {
+        "id": task_id,
+        "title": task.get("title", f"MiroFish Advisory {i+1}"),
+        "description": task.get("description", ""),
+        "priority": task.get("priority", "medium"),
+        "source": "mirofish",
+    }
+    if task.get("category"):
+        entry["category"] = task["category"]
+    existing.append(entry)
+    added += 1
+
+with open(pending_path, "w") as f:
+    json.dump(existing, f, indent=2)
+print(f"Added {added} MiroFish advisory tasks to queue", file=sys.stderr)
+MIROFISH_QUEUE_EOF
+
+    if [[ $? -ne 0 ]]; then
+        log_warn "Failed to populate MiroFish queue"
+        return 0
+    fi
+
+    touch ".loki/queue/.mirofish-populated"
+    log_info "MiroFish queue population complete"
+}
+
+#===============================================================================
 # Main Autonomous Loop
 #===============================================================================
 
@@ -8547,6 +8702,9 @@ run_autonomous() {
 
     # Populate task queue from OpenSpec artifacts (if present, runs once)
     populate_openspec_queue
+
+    # Populate task queue from MiroFish advisory (if present, runs once)
+    populate_mirofish_queue
 
     # Check max iterations before starting
     if check_max_iterations; then

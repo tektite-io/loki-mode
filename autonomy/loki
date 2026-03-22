@@ -504,6 +504,10 @@ cmd_start() {
     local provider=""
     local bmad_project_path=""
     local openspec_change_path=""
+    local mirofish_url=""
+    local mirofish_docker_image=""
+    local mirofish_bg=false
+    local mirofish_disabled=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -529,6 +533,12 @@ cmd_start() {
                 echo "  --budget USD          Cost budget limit (auto-pause when exceeded)"
                 echo "  --bmad-project PATH   Use BMAD Method project artifacts as input"
                 echo "  --openspec PATH       Use OpenSpec change directory as input"
+                echo "  --mirofish [URL]      Enable MiroFish market validation (default: localhost:5001)"
+                echo "  --mirofish-docker IMG Auto-start MiroFish from Docker image"
+                echo "  --mirofish-rounds N   Simulation rounds (default: 100)"
+                echo "  --mirofish-timeout S  Max pipeline wait in seconds (default: 3600)"
+                echo "  --mirofish-bg         Run MiroFish pipeline in background"
+                echo "  --no-mirofish         Disable MiroFish even if env var is set"
                 echo "  --yes, -y             Skip confirmation prompts (auto-confirm)"
                 echo ""
                 echo "Environment Variables:"
@@ -683,6 +693,68 @@ cmd_start() {
                 ;;
             --openspec=*)
                 openspec_change_path="${1#*=}"
+                shift
+                ;;
+            --mirofish)
+                mirofish_url="${2:-http://localhost:5001}"
+                if [[ "${mirofish_url}" == --* ]] || [[ -z "${2:-}" ]]; then
+                    mirofish_url="http://localhost:5001"
+                else
+                    shift
+                fi
+                shift
+                ;;
+            --mirofish=*)
+                mirofish_url="${1#*=}"
+                shift
+                ;;
+            --mirofish-docker)
+                if [[ -n "${2:-}" ]]; then
+                    mirofish_docker_image="$2"
+                    mirofish_url="${mirofish_url:-http://localhost:5001}"
+                    shift 2
+                else
+                    echo -e "${RED}--mirofish-docker requires a Docker image name${NC}"
+                    exit 1
+                fi
+                ;;
+            --mirofish-docker=*)
+                mirofish_docker_image="${1#*=}"
+                mirofish_url="${mirofish_url:-http://localhost:5001}"
+                shift
+                ;;
+            --mirofish-rounds)
+                if [[ -n "${2:-}" ]]; then
+                    export LOKI_MIROFISH_ROUNDS="$2"
+                    shift 2
+                else
+                    echo -e "${RED}--mirofish-rounds requires a number${NC}"
+                    exit 1
+                fi
+                ;;
+            --mirofish-rounds=*)
+                export LOKI_MIROFISH_ROUNDS="${1#*=}"
+                shift
+                ;;
+            --mirofish-timeout)
+                if [[ -n "${2:-}" ]]; then
+                    export LOKI_MIROFISH_TIMEOUT="$2"
+                    shift 2
+                else
+                    echo -e "${RED}--mirofish-timeout requires seconds${NC}"
+                    exit 1
+                fi
+                ;;
+            --mirofish-timeout=*)
+                export LOKI_MIROFISH_TIMEOUT="${1#*=}"
+                shift
+                ;;
+            --mirofish-bg)
+                mirofish_bg=true
+                shift
+                ;;
+            --no-mirofish)
+                mirofish_disabled=true
                 shift
                 ;;
             --budget)
@@ -847,6 +919,73 @@ cmd_start() {
         if [[ -z "$prd_file" ]] && [[ -f "$LOKI_DIR/openspec-prd-normalized.md" ]]; then
             prd_file="$LOKI_DIR/openspec-prd-normalized.md"
             echo -e "${CYAN}Using normalized OpenSpec PRD: $prd_file${NC}"
+        fi
+    fi
+
+    # MiroFish market validation (optional, non-blocking)
+    if [[ -z "$mirofish_url" ]] && [[ -n "${LOKI_MIROFISH_URL:-}" ]] && [[ "$mirofish_disabled" != "true" ]]; then
+        mirofish_url="$LOKI_MIROFISH_URL"
+    fi
+
+    if [[ -n "$mirofish_url" ]] && [[ "$mirofish_disabled" != "true" ]]; then
+        export MIROFISH_URL="$mirofish_url"
+        mkdir -p "$LOKI_DIR"
+
+        local mf_adapter="$(dirname "$(resolve_script_path "$0")")/mirofish-adapter.py"
+        if [[ ! -f "$mf_adapter" ]]; then
+            echo -e "${RED}Error: MiroFish adapter not found at $mf_adapter${NC}"
+            exit 1
+        fi
+
+        # Docker auto-start if requested
+        if [[ -n "$mirofish_docker_image" ]]; then
+            echo -e "${CYAN}Starting MiroFish container...${NC}"
+            if ! python3 "$mf_adapter" --docker-start --docker-image "$mirofish_docker_image" \
+                    ${LOKI_MIROFISH_PORT:+--port "$LOKI_MIROFISH_PORT"}; then
+                echo -e "${RED}Error: Failed to start MiroFish container${NC}"
+                exit 1
+            fi
+        fi
+
+        # Health check
+        if ! python3 "$mf_adapter" --health --url "$mirofish_url" 2>/dev/null; then
+            echo -e "${YELLOW}Warning: MiroFish not reachable at $mirofish_url${NC}"
+            echo "Start MiroFish with: loki start --mirofish-docker <image>"
+            echo -e "Continue without market validation? [y/N] \\c"
+            local _auto="${LOKI_AUTO_CONFIRM:-${CI:-false}}"
+            if [[ "$_auto" == "true" ]]; then
+                echo "y (auto-confirmed)"
+            else
+                read -r _mf_confirm
+                if [[ ! "$_mf_confirm" =~ ^[Yy] ]]; then
+                    exit 0
+                fi
+            fi
+            unset MIROFISH_URL
+        else
+            echo -e "${GREEN}MiroFish reachable at $mirofish_url${NC}"
+
+            # Need a PRD to run MiroFish
+            local _mf_prd="${prd_file:-}"
+            if [[ -z "$_mf_prd" ]]; then
+                echo -e "${YELLOW}Warning: No PRD file -- skipping MiroFish (needs PRD for simulation seed)${NC}"
+                unset MIROFISH_URL
+            else
+                # Validate PRD can be parsed for MiroFish
+                if python3 "$mf_adapter" "$_mf_prd" --validate --url "$mirofish_url" 2>/dev/null; then
+                    echo -e "${GREEN}PRD validated for MiroFish simulation${NC}"
+                    # Run with --background (adapter forks internally, returns immediately)
+                    python3 "$mf_adapter" "$_mf_prd" --output-dir "$LOKI_DIR" \
+                        --url "$mirofish_url" --background \
+                        ${LOKI_MIROFISH_ROUNDS:+--max-rounds "$LOKI_MIROFISH_ROUNDS"} \
+                        ${LOKI_MIROFISH_TIMEOUT:+--timeout "$LOKI_MIROFISH_TIMEOUT"}
+                    # PID is tracked in .loki/mirofish/pipeline-state.json by the adapter
+                    echo -e "${CYAN}MiroFish pipeline started in background. Check status: loki mirofish status${NC}"
+                else
+                    echo -e "${YELLOW}Warning: PRD validation for MiroFish failed. Continuing without.${NC}"
+                    unset MIROFISH_URL
+                fi
+            fi
         fi
     fi
 
@@ -5649,6 +5788,17 @@ cmd_doctor() {
     else
         echo -e "  ${YELLOW}WARN${NC}  ChromaDB - not running (docker start loki-chroma)"
         warn_count=$((warn_count + 1))
+    fi
+    # MiroFish check (optional service)
+    local _mf_url="${LOKI_MIROFISH_URL:-http://localhost:5001}"
+    if docker inspect loki-mirofish &>/dev/null 2>&1 || [[ -n "${LOKI_MIROFISH_URL:-}" ]]; then
+        if curl -sf "$_mf_url/health" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}PASS${NC}  MiroFish server ($_mf_url)"
+            pass_count=$((pass_count + 1))
+        else
+            echo -e "  ${YELLOW}WARN${NC}  MiroFish - not running (loki start --mirofish-docker <image>)"
+            warn_count=$((warn_count + 1))
+        fi
     fi
     # OTEL status
     if [ -n "${LOKI_OTEL_ENDPOINT:-}" ]; then
