@@ -508,6 +508,13 @@ mapping = {
     'model.fast': 'LOKI_MODEL_FAST',
     'notify.slack': 'LOKI_SLACK_WEBHOOK',
     'notify.discord': 'LOKI_DISCORD_WEBHOOK',
+    'provider': 'LOKI_PROVIDER',
+    'issue.provider': 'LOKI_ISSUE_PROVIDER',
+    'blind_validation': 'LOKI_BLIND_VALIDATION',
+    'adversarial_testing': 'LOKI_ADVERSARIAL_TESTING',
+    'spawn_timeout': 'LOKI_SPAWN_TIMEOUT',
+    'spawn_retries': 'LOKI_SPAWN_RETRIES',
+    'budget': 'LOKI_BUDGET_LIMIT',
 }
 for key, env_var in mapping.items():
     # Try nested dict lookup first, then flat key, then underscore variant
