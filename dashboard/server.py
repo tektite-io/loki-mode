@@ -30,7 +30,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -180,6 +180,8 @@ class ProjectUpdate(BaseModel):
 
 class ProjectResponse(BaseModel):
     """Schema for project response."""
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     description: Optional[str]
@@ -189,9 +191,6 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
     task_count: int = 0
     completed_task_count: int = 0
-
-    class Config:
-        from_attributes = True
 
 
 class TaskCreate(BaseModel):
@@ -231,6 +230,8 @@ class TaskMove(BaseModel):
 
 class TaskResponse(BaseModel):
     """Schema for task response."""
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     project_id: int
     title: str
@@ -245,9 +246,6 @@ class TaskResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
-
-    class Config:
-        from_attributes = True
 
 
 class SessionInfo(BaseModel):
@@ -416,7 +414,12 @@ async def _push_loki_state_loop() -> None:
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    await init_db()
+    try:
+        await init_db()
+        app.state.db_available = True
+    except Exception as exc:
+        logger.error("Database init failed: %s -- DB routes will return 503", exc)
+        app.state.db_available = False
     _telemetry.send_telemetry("dashboard_start")
     push_task = asyncio.create_task(_push_loki_state_loop())
     yield
@@ -723,50 +726,54 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
 ) -> list[ProjectResponse]:
     """List projects with pagination. Does not eager-load tasks for efficiency."""
-    from sqlalchemy import func as sa_func
+    try:
+        from sqlalchemy import func as sa_func
 
-    query = select(Project)
-    if status:
-        query = query.where(Project.status == status)
-    query = query.order_by(Project.created_at.desc()).offset(offset).limit(limit)
+        query = select(Project)
+        if status:
+            query = query.where(Project.status == status)
+        query = query.order_by(Project.created_at.desc()).offset(offset).limit(limit)
 
-    result = await db.execute(query)
-    projects = result.scalars().all()
+        result = await db.execute(query)
+        projects = result.scalars().all()
 
-    # Batch-fetch task counts instead of N+1 eager loading
-    project_ids = [p.id for p in projects]
-    response = []
-    if project_ids:
-        count_query = (
-            select(
-                Task.project_id,
-                sa_func.count().label("total"),
-                sa_func.count().filter(Task.status == TaskStatus.DONE).label("done"),
+        # Batch-fetch task counts instead of N+1 eager loading
+        project_ids = [p.id for p in projects]
+        response = []
+        if project_ids:
+            count_query = (
+                select(
+                    Task.project_id,
+                    sa_func.count().label("total"),
+                    sa_func.count().filter(Task.status == TaskStatus.DONE).label("done"),
+                )
+                .where(Task.project_id.in_(project_ids))
+                .group_by(Task.project_id)
             )
-            .where(Task.project_id.in_(project_ids))
-            .group_by(Task.project_id)
-        )
-        count_result = await db.execute(count_query)
-        counts = {row.project_id: (row.total, row.done) for row in count_result}
-    else:
-        counts = {}
+            count_result = await db.execute(count_query)
+            counts = {row.project_id: (row.total, row.done) for row in count_result}
+        else:
+            counts = {}
 
-    for project in projects:
-        total, done = counts.get(project.id, (0, 0))
-        response.append(
-            ProjectResponse(
-                id=project.id,
-                name=project.name,
-                description=project.description,
-                prd_path=project.prd_path,
-                status=project.status,
-                created_at=project.created_at,
-                updated_at=project.updated_at,
-                task_count=total,
-                completed_task_count=done,
+        for project in projects:
+            total, done = counts.get(project.id, (0, 0))
+            response.append(
+                ProjectResponse(
+                    id=project.id,
+                    name=project.name,
+                    description=project.description,
+                    prd_path=project.prd_path,
+                    status=project.status,
+                    created_at=project.created_at,
+                    updated_at=project.updated_at,
+                    task_count=total,
+                    completed_task_count=done,
+                )
             )
-        )
-    return response
+        return response
+    except Exception as exc:
+        logger.error("Failed to list projects: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Database query failed") from exc
 
 
 @app.post("/api/projects", response_model=ProjectResponse, status_code=201, dependencies=[Depends(auth.require_scope("control"))])
@@ -2133,7 +2140,7 @@ def _get_memory_storage():
 @app.get("/api/memory/search")
 async def search_memory(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
-    collection: str = Query(default="all", regex="^(episodes|patterns|skills|all)$"),
+    collection: str = Query(default="all", pattern="^(episodes|patterns|skills|all)$"),
     limit: int = Query(default=20, ge=1, le=100),
 ):
     """Full-text search across memory using FTS5."""

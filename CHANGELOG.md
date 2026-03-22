@@ -5,6 +5,29 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.61.0] - 2026-03-22 - Purple Lab Security and Reliability Overhaul
+
+### Security
+- Fixed critical shell injection vulnerability in dev server startup (shell=True with user input)
+- Hardened CORS: restricted methods, headers, and added wildcard origin guard
+- Added Pydantic field validator to reject dangerous shell metacharacters in dev commands
+
+### Fixed
+- Dashboard /api/projects returning 500 on database errors (added proper error handling)
+- Auto-fix tight loop causing resource exhaustion (added exponential backoff + circuit breaker)
+- Process cleanup only killing parent process, leaving orphans (now uses process groups via os.killpg)
+- 15 silent exception handlers in critical code paths (added logging with traceback)
+- Broken skill symlinks after Node.js Homebrew upgrade (enhanced doctor messaging)
+- Pydantic V2 deprecation warnings (Config class -> ConfigDict)
+- FastAPI regex parameter deprecation (regex= -> pattern=)
+- Database init failures silently breaking all DB routes (added error handling and health check)
+
+### Improved
+- WebSocket connection limits (MAX_WS_CLIENTS=50, MAX_TERMINAL_PTYS=20)
+- PID tracking now covers dev server, auto-fix, and chat processes (not just session)
+- Python framework detection reads only first 1KB instead of entire files
+- Doctor command now shows broken symlink target and suggests fix
+
 ## [6.60.0] - 2026-03-21 - MiroFish Market Validation Integration
 
 ### Added

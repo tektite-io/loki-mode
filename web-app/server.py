@@ -36,7 +36,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+import shlex
+
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger("purple-lab")
 
@@ -46,6 +48,8 @@ logger = logging.getLogger("purple-lab")
 
 HOST = os.environ.get("PURPLE_LAB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PURPLE_LAB_PORT", "57375"))
+MAX_WS_CLIENTS = int(os.environ.get("PURPLE_LAB_MAX_WS_CLIENTS", "50"))
+MAX_TERMINAL_PTYS = int(os.environ.get("PURPLE_LAB_MAX_TERMINALS", "20"))
 
 # Resolve paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -107,11 +111,15 @@ _cors_origins = (
     else _default_cors_origins
 )
 
+if "*" in _cors_origins:
+    logger.warning("CORS wildcard '*' detected -- restricting to localhost for security")
+    _cors_origins = _default_cors_origins
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
 )
 
 # ---------------------------------------------------------------------------
@@ -162,31 +170,36 @@ class SessionState:
 
 
 def _kill_tracked_child_processes() -> None:
-    """Kill only processes that Purple Lab started, not external loki sessions."""
-    import subprocess as _sp
+    """Kill all tracked child processes and their process groups."""
     tracked = _get_tracked_child_pids()
     if not tracked:
         return
 
+    # SIGTERM to process groups first
     for pid in tracked:
         try:
-            # Kill the entire process tree (children first, then parent)
-            _sp.run(["pkill", "-TERM", "-P", str(pid)],
-                     capture_output=True, timeout=5)
-            os.kill(pid, signal.SIGTERM)
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError, OSError):
-            pass
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
 
-    # Wait briefly then SIGKILL survivors
-    import time as _time
-    _time.sleep(2)
+    # Wait briefly for graceful shutdown
+    time.sleep(2)
+
+    # SIGKILL anything still running
     for pid in tracked:
         try:
-            _sp.run(["pkill", "-9", "-P", str(pid)],
-                     capture_output=True, timeout=5)
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, 0)  # Check if still alive
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
-            pass
+            pass  # Already dead
 
     _clear_tracked_pids()
 
@@ -305,6 +318,16 @@ class SecretRequest(BaseModel):
 
 class DevServerStartRequest(BaseModel):
     command: Optional[str] = None
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        dangerous = set(';|`$(){}<>\n\r')
+        if any(c in dangerous for c in v):
+            raise ValueError("Command contains disallowed shell characters")
+        return v.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +650,8 @@ class DevServerManager:
             py_file = root / py_entry
             if py_file.exists():
                 try:
-                    src = py_file.read_text(errors="replace")
+                    with open(py_file, "r", errors="replace") as f:
+                        src = f.read(1024)
                     if "fastapi" in src.lower() or "FastAPI" in src:
                         module = py_entry[:-3]
                         return {"command": f"uvicorn {module}:app --reload --port 8000",
@@ -713,15 +737,36 @@ class DevServerManager:
         expected_port = detected["expected_port"] if detected else 3000
         framework = detected["framework"] if detected else "unknown"
 
-        # Auto-install dependencies if needed
+        # Auto-install dependencies before starting the dev server
         actual_path = Path(actual_dir)
         needs_npm = (actual_path / "package.json").exists() and not (actual_path / "node_modules").exists()
         needs_pip = (actual_path / "requirements.txt").exists() and not (actual_path / "venv").exists()
+
+        build_env = {**os.environ}
+        build_env.update(_load_secrets())
+
         if needs_npm:
-            # Prepend npm install to the command
-            cmd_str = f"npm install && {cmd_str}"
+            try:
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=actual_dir,
+                    capture_output=True,
+                    timeout=120,
+                    env=build_env,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                logger.warning("npm install failed: %s", exc)
+
         if needs_pip:
-            cmd_str = f"pip install -r requirements.txt && {cmd_str}"
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+                    cwd=actual_dir,
+                    capture_output=True,
+                    timeout=120,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                logger.warning("pip install failed: %s", exc)
 
         # Check if portless is available and proxy is running
         use_portless = False
@@ -729,18 +774,17 @@ class DevServerManager:
         if self._has_portless() and self._ensure_portless_proxy():
             portless_app_name = self._portless_app_name(session_id)
             use_portless = True
-            # Wrap the command with portless
-            effective_cmd = f"portless {portless_app_name} {cmd_str}"
-        else:
-            effective_cmd = cmd_str
 
-        build_env = {**os.environ}
-        build_env.update(_load_secrets())
+        # Build command as list (no shell=True needed)
+        if use_portless and portless_app_name:
+            cmd_parts = ["portless", portless_app_name] + shlex.split(cmd_str)
+        else:
+            cmd_parts = shlex.split(cmd_str)
 
         try:
             proc = subprocess.Popen(
-                effective_cmd,
-                shell=True,
+                cmd_parts,
+                shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -753,6 +797,9 @@ class DevServerManager:
         except Exception as e:
             return {"status": "error", "message": f"Failed to start: {e}"}
 
+        _track_child_pid(proc.pid)
+
+        effective_cmd = " ".join(cmd_parts)
         server_info: dict = {
             "process": proc,
             "port": None,
@@ -861,22 +908,36 @@ class DevServerManager:
                     if detected_port:
                         info["port"] = detected_port
         except Exception:
-            pass
+            logger.error("Dev server monitor failed for session %s", session_id, exc_info=True)
         finally:
             # Process exited -- mark as error if it was still starting or running
             if info.get("status") in ("starting", "running"):
                 info["status"] = "error"
-                # Auto-fix: trigger error repair if under circuit breaker limit
+                # Auto-fix with exponential backoff and circuit breaker
                 attempts = info.get("auto_fix_attempts", 0)
-                if attempts < 3:
+                now = time.time()
+                timestamps = info.get("auto_fix_timestamps", [])
+                recent = [t for t in timestamps if now - t < 300]
+
+                if len(recent) >= 3:
+                    info["auto_fix_status"] = "circuit breaker open (3 failures in 5 min)"
+                    logger.warning("Auto-fix circuit breaker open for session %s", session_id)
+                elif attempts < 3:
                     info["auto_fix_attempts"] = attempts + 1
+                    timestamps.append(now)
+                    info["auto_fix_timestamps"] = timestamps
+                    backoff_seconds = 5 * (3 ** attempts)
                     error_context = "\n".join(info.get("output_lines", [])[-30:])
+
+                    async def _delayed_auto_fix():
+                        await asyncio.sleep(backoff_seconds)
+                        await self._auto_fix(session_id, error_context)
+
                     try:
-                        asyncio.ensure_future(
-                            self._auto_fix(session_id, error_context)
-                        )
+                        task = asyncio.ensure_future(_delayed_auto_fix())
+                        info["_auto_fix_task"] = task
                     except Exception:
-                        pass
+                        logger.warning("Failed to schedule auto-fix for session %s", session_id, exc_info=True)
 
     async def _auto_fix(self, session_id: str, error_context: str) -> None:
         """Auto-fix a crashed dev server by invoking loki quick with the error."""
@@ -970,6 +1031,11 @@ class DevServerManager:
         if not info:
             return {"stopped": False, "message": "No dev server running"}
 
+        # Cancel any pending auto-fix task
+        fix_task = info.get("_auto_fix_task")
+        if fix_task and not fix_task.done():
+            fix_task.cancel()
+
         # For Docker containers, run docker compose down
         if info.get("framework") == "docker":
             try:
@@ -986,7 +1052,7 @@ class DevServerManager:
                     cwd=project_dir,
                     capture_output=True, timeout=30,
                 )
-            except Exception:
+            except (ProcessLookupError, PermissionError, OSError):
                 pass
 
         proc = info["process"]
@@ -998,12 +1064,12 @@ class DevServerManager:
                 except (ProcessLookupError, PermissionError, OSError):
                     try:
                         proc.terminate()
-                    except Exception:
+                    except (ProcessLookupError, PermissionError, OSError):
                         pass
             else:
                 try:
                     proc.terminate()
-                except Exception:
+                except (ProcessLookupError, PermissionError, OSError):
                     pass
             try:
                 proc.wait(timeout=5)
@@ -1015,14 +1081,15 @@ class DevServerManager:
                     except (ProcessLookupError, PermissionError, OSError):
                         try:
                             proc.kill()
-                        except Exception:
+                        except (ProcessLookupError, PermissionError, OSError):
                             pass
                 else:
                     try:
                         proc.kill()
-                    except Exception:
+                    except (ProcessLookupError, PermissionError, OSError):
                         pass
 
+        _untrack_child_pid(proc.pid)
         return {"stopped": True, "message": "Dev server stopped"}
 
     async def status(self, session_id: str) -> dict:
@@ -1132,6 +1199,7 @@ async def _broadcast(msg: dict) -> None:
         try:
             await ws.send_text(data)
         except Exception:
+            logger.debug("WebSocket send failed for client", exc_info=True)
             dead.append(ws)
     for ws in dead:
         session.ws_clients.discard(ws)
@@ -1160,7 +1228,7 @@ async def _read_process_output() -> None:
                 "data": {"line": text, "timestamp": time.strftime("%H:%M:%S")},
             })
     except Exception:
-        pass
+        logger.error("Process output reader failed", exc_info=True)
     finally:
         # Process ended
         session.running = False
@@ -2669,6 +2737,7 @@ async def chat_session(session_id: str, req: ChatRequest) -> JSONResponse:
                 start_new_session=True,
             )
             task.process = proc
+            _track_child_pid(proc.pid)
             loop = asyncio.get_running_loop()
 
             def _read_lines() -> None:
@@ -3877,6 +3946,9 @@ async def _push_state_to_client(ws: WebSocket) -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
     """Real-time stream of loki output and events."""
+    if len(session.ws_clients) >= MAX_WS_CLIENTS:
+        await ws.close(code=1013, reason="Too many connections")
+        return
     await ws.accept()
     session.ws_clients.add(ws)
 
@@ -3953,6 +4025,9 @@ async def terminal_websocket(ws: WebSocket, session_id: str) -> None:
     reconnect or second browser tab). Only kills the PTY when the *last*
     WebSocket client for this session disconnects.
     """
+    if len(_terminal_ptys) >= MAX_TERMINAL_PTYS and session_id not in _terminal_ptys:
+        await ws.close(code=1013, reason="Too many terminal sessions")
+        return
     await ws.accept()
 
     if not HAS_PEXPECT:
@@ -4090,7 +4165,7 @@ async def terminal_websocket(ws: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     except Exception:
-        pass
+        logger.error("Terminal WebSocket error for session %s", session_id, exc_info=True)
     finally:
         reader_task.cancel()
         try:

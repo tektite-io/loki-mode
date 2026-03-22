@@ -4,9 +4,12 @@ Database setup for Loki Mode Dashboard.
 Uses SQLAlchemy 2.0 with async support and SQLite.
 """
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -40,16 +43,30 @@ async_session_factory = async_sessionmaker(
 
 async def init_db() -> None:
     """Initialize the database, creating all tables."""
-    # Ensure database directory exists
     os.makedirs(DATABASE_DIR, exist_ok=True)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database initialized at %s", DATABASE_PATH)
+    except Exception as exc:
+        logger.error("Database initialization failed: %s", exc, exc_info=True)
+        raise
 
 
 async def close_db() -> None:
     """Close database connections."""
     await engine.dispose()
+
+
+async def check_db_health() -> bool:
+    """Check if the database is accessible."""
+    try:
+        async with async_session_factory() as session:
+            from sqlalchemy import text
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 @asynccontextmanager

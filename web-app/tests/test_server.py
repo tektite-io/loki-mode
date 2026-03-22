@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # Ensure imports work
@@ -551,3 +552,67 @@ class TestChatModes:
         msg = "Please add error handling to the login endpoint"
         req = ChatRequest(message=msg)
         assert req.message == msg
+
+
+# ============================================================================
+# Test Command Validation (shell injection prevention)
+# ============================================================================
+
+
+class TestCommandValidation:
+    """Tests for DevServerStartRequest command validation."""
+
+    def test_rejects_semicolon_injection(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="; rm -rf /")
+
+    def test_rejects_pipe_injection(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="echo hello | cat /etc/passwd")
+
+    def test_rejects_backtick_injection(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="`whoami`")
+
+    def test_rejects_dollar_injection(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="$(cat /etc/passwd)")
+
+    def test_rejects_newline_injection(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="npm run dev\nrm -rf /")
+
+    def test_rejects_angle_brackets(self):
+        from server import DevServerStartRequest
+        with pytest.raises(ValidationError):
+            DevServerStartRequest(command="npm run dev > /dev/null")
+
+    def test_accepts_safe_npm_command(self):
+        from server import DevServerStartRequest
+        req = DevServerStartRequest(command="npm run dev")
+        assert req.command == "npm run dev"
+
+    def test_accepts_safe_python_command(self):
+        from server import DevServerStartRequest
+        req = DevServerStartRequest(command="python3 -m uvicorn app:app --reload")
+        assert req.command == "python3 -m uvicorn app:app --reload"
+
+    def test_accepts_none_command(self):
+        from server import DevServerStartRequest
+        req = DevServerStartRequest(command=None)
+        assert req.command is None
+
+    def test_accepts_command_with_flags(self):
+        from server import DevServerStartRequest
+        req = DevServerStartRequest(command="vite --host 0.0.0.0 --port 3000")
+        assert req.command == "vite --host 0.0.0.0 --port 3000"
+
+    def test_strips_whitespace(self):
+        from server import DevServerStartRequest
+        req = DevServerStartRequest(command="  npm run dev  ")
+        assert req.command == "npm run dev"

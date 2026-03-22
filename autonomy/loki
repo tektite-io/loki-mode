@@ -5741,7 +5741,10 @@ cmd_doctor() {
             echo -e "  ${GREEN}PASS${NC}  $sname  ${DIM}$short_path${NC}"
             pass_count=$((pass_count + 1))
         elif [ -L "$sdir" ]; then
-            echo -e "  ${RED}FAIL${NC}  $sname  ${DIM}(broken symlink at $short_path)${NC}"
+            local _target
+            _target=$(readlink "$sdir" 2>/dev/null || echo "unknown")
+            echo -e "  ${RED}FAIL${NC}  $sname  ${DIM}(broken symlink -> $_target)${NC}"
+            echo -e "         ${YELLOW}Fix: loki setup-skill${NC}"
             fail_count=$((fail_count + 1))
         else
             echo -e "  ${YELLOW}WARN${NC}  $sname  ${DIM}(not found - run 'loki setup-skill')${NC}"
