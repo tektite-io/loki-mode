@@ -29,6 +29,7 @@
 | Multi-provider (Codex, Gemini) | `providers.md` |
 | OpenSpec delta context, brownfield modifications | `openspec-integration.md` |
 | MiroFish market validation, `--mirofish` flag | `mirofish-integration.md` |
+| Legacy healing, modernization, archaeology | `healing.md` |
 | Plan deepening, knowledge extraction | `compound-learning.md` |
 
 ## Module Descriptions
@@ -132,6 +133,17 @@
 - Knowledge compounding: Extract structured solutions from task outcomes
 - Solution retrieval: Load relevant cross-project solutions during REASON phase
 - Composable phases: plan, deepen, work, review, compound
+
+### healing.md (v6.67.0)
+**When:** Legacy codebase modernization, `loki heal`, brownfield projects, code archaeology
+- 5 healing principles (friction-as-semantics, failure-first, adapters, incremental, knowledge preservation)
+- Healing RARV cycle (characterize before modifying)
+- Codebase archaeology protocol
+- Friction map management
+- Healing phase gates (archaeology > stabilize > isolate > modernize > validate)
+- Legacy-healing-auditor code review specialist
+- Language-specific guides (COBOL, legacy Java, PHP, Python 2)
+- Full reference: `references/legacy-healing-patterns.md`
 
 ### providers.md (v5.0.0)
 **When:** Using non-Claude providers (Codex, Gemini), understanding degraded mode

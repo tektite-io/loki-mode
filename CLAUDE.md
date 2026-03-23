@@ -35,7 +35,8 @@ skills/                     # On-demand skill modules (v3.0 architecture)
   00-index.md               # Module selection rules and routing
   model-selection.md        # Task tool, parallelization, thinking modes
   providers.md              # Multi-provider documentation
-  quality-gates.md          # 9-gate system, velocity-quality balance
+  quality-gates.md          # 10-gate system, velocity-quality balance
+  healing.md                # Legacy system healing (Amazon AGI Lab patterns)
   testing.md                # Playwright, E2E, property-based testing
   production.md             # HN patterns, CI/CD, context management
   troubleshooting.md        # Common issues, red flags, fallbacks
@@ -44,7 +45,8 @@ skills/                     # On-demand skill modules (v3.0 architecture)
   patterns-advanced.md      # OptiMind, k8s-valkey, Constitutional AI
   parallel-workflows.md     # Git worktrees, parallel streams, auto-merge
   github-integration.md     # GitHub issue import, PR creation, notifications
-references/                 # Detailed documentation (20 files)
+references/                 # Detailed documentation (21 files)
+  legacy-healing-patterns.md # Amazon AGI Lab: friction, adapters, archaeology
   openai-patterns.md        # OpenAI Agents SDK: guardrails, tripwires, handoffs
   lab-research-patterns.md  # DeepMind + Anthropic: Constitutional AI, debate
   production-patterns.md    # HN 2025: What actually works in production
@@ -105,6 +107,18 @@ LOKI_PROVIDER=codex loki start ./prd.md
 3. Anti-sycophancy checks (devil's advocate on unanimous approval)
 4. Severity-based blocking (Critical/High/Medium = BLOCK)
 5. Test coverage gates (>80% unit, 100% pass)
+6. Backward compatibility gate (healing mode - behavioral preservation, v6.67.0)
+
+### Legacy System Healing (v6.67.0)
+- **Inspired by**: Amazon AGI Lab's "How Agentic AI Helps Heal Systems We Can't Replace"
+- **CLI**: `loki heal <path> [--phase archaeology|stabilize|isolate|modernize|validate]`
+- **Principles**: Friction-as-semantics, failure-first learning, universal adapters, incremental healing, institutional knowledge preservation
+- **Artifacts**: `.loki/healing/` (friction-map.json, failure-modes.json, institutional-knowledge.md)
+- **Review**: `legacy-healing-auditor` specialist added to code review pool
+- **Gate**: Gate 10 backward compatibility check (blocks removal of unclassified friction)
+- **Hooks**: `hook_pre_healing_modify()`, `hook_post_healing_modify()`, `hook_healing_phase_gate()`
+- **Memory**: `FrictionPoint` and `FailureMode` schemas for healing-specific memory entries
+- **Skill**: `skills/healing.md` | **Reference**: `references/legacy-healing-patterns.md`
 
 ### Memory System (v5.15.0 - Complete Implementation)
 - **Episodic**: Specific interaction traces (`.loki/memory/episodic/`)
@@ -157,6 +171,10 @@ LOKI_PROVIDER=codex loki start ./prd.md
 | `get_rarv_tier()` | `run.sh:1311` | Map iteration to model tier |
 | `check_budget_limit()` | `run.sh:6125` | Budget circuit breaker |
 | `is_rate_limited()` | `run.sh:5940` | Rate limit detection |
+| `cmd_heal()` | `loki:8603` | Legacy system healing |
+| `hook_pre_healing_modify()` | `migration-hooks.sh:280` | Friction safety gate |
+| `hook_post_healing_modify()` | `migration-hooks.sh:320` | Characterization test verification |
+| `hook_healing_phase_gate()` | `migration-hooks.sh:375` | Healing phase transition gate |
 
 ### Critical Data Flow
 

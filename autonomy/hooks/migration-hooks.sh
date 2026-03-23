@@ -271,3 +271,173 @@ except: print(0)
 
     return 0
 }
+
+#===============================================================================
+# Healing-Specific Hooks (v6.67.0)
+# Inspired by Amazon AGI Lab's legacy system healing approach.
+# These hooks enforce behavioral preservation during healing operations.
+#===============================================================================
+
+# Hook: pre_healing_modify - runs BEFORE agent modifies any file in healing mode
+# Checks friction map to prevent removal of undocumented business rules
+hook_pre_healing_modify() {
+    local file_path="${1:-}"
+    local codebase_path="${LOKI_CODEBASE_PATH:-.}"
+    local heal_dir="${codebase_path}/.loki/healing"
+    local strict="${LOKI_HEAL_STRICT:-false}"
+
+    # Only enforce in healing mode
+    [[ "${LOKI_HEAL_MODE:-false}" != "true" ]] && return 0
+    [[ -z "$file_path" ]] && return 0
+
+    # Check if file has friction points
+    if [[ -f "$heal_dir/friction-map.json" ]]; then
+        local blocked
+        blocked=$(python3 -c "
+import json, sys
+file_path = sys.argv[1]
+strict = sys.argv[2] == 'true'
+with open(sys.argv[3]) as f:
+    data = json.load(f)
+for friction in data.get('frictions', []):
+    loc = friction.get('location', '')
+    if file_path in loc:
+        cls = friction.get('classification', 'unknown')
+        safe = friction.get('safe_to_remove', False)
+        if cls in ('business_rule', 'unknown') and not safe:
+            print(f'BLOCKED: Friction {friction.get(\"id\", \"?\")} in {loc} classified as {cls}')
+            sys.exit(0)
+        if strict and cls != 'true_bug':
+            print(f'BLOCKED (strict): Friction {friction.get(\"id\", \"?\")} in {loc} - strict mode requires explicit approval')
+            sys.exit(0)
+print('OK')
+" "$file_path" "$strict" "$heal_dir/friction-map.json" 2>/dev/null || echo "OK")
+
+        if [[ "$blocked" == BLOCKED* ]]; then
+            echo "HOOK_BLOCKED: $blocked"
+            echo "To proceed: Update friction-map.json to classify this friction or set safe_to_remove=true"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Hook: post_healing_modify - runs AFTER agent modifies a file in healing mode
+# Verifies characterization tests still pass after modification
+hook_post_healing_modify() {
+    local file_path="${1:-}"
+    local codebase_path="${LOKI_CODEBASE_PATH:-.}"
+    local heal_dir="${codebase_path}/.loki/healing"
+
+    [[ "${LOKI_HEAL_MODE:-false}" != "true" ]] && return 0
+
+    # Log the modification
+    if [[ -d "$heal_dir" ]]; then
+        local log_entry
+        log_entry="{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"healing_modify\",\"file\":\"${file_path}\",\"agent\":\"${LOKI_AGENT_ID:-unknown}\",\"phase\":\"${LOKI_HEAL_PHASE:-unknown}\"}"
+        echo "$log_entry" >> "$heal_dir/activity.jsonl" 2>/dev/null || true
+    fi
+
+    # Run characterization tests
+    local test_cmd
+    test_cmd=$(detect_test_command "$codebase_path")
+    local test_result_file
+    test_result_file=$(mktemp)
+
+    if ! eval "$test_cmd" > "$test_result_file" 2>&1; then
+        local test_output
+        test_output=$(cat "$test_result_file")
+        rm -f "$test_result_file"
+
+        # Revert the change - characterization tests must pass
+        git -C "$codebase_path" checkout -- "$file_path" 2>/dev/null || true
+        echo "HOOK_BLOCKED: Characterization tests failed after healing modification to ${file_path}. Change reverted."
+        echo "Test output: ${test_output}"
+
+        # Record failure in failure-modes.json
+        if [[ -f "$heal_dir/failure-modes.json" ]]; then
+            python3 -c "
+import json, sys
+from datetime import datetime
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+data.get('modes', []).append({
+    'mode_id': 'heal-fail-' + datetime.now().strftime('%Y%m%dT%H%M%S'),
+    'trigger': 'healing_modification',
+    'file': sys.argv[2],
+    'behavior': 'Characterization tests failed after modification',
+    'recovery': 'Change automatically reverted',
+    'is_intentional': False
+})
+with open(sys.argv[1], 'w') as f:
+    json.dump(data, f, indent=2)
+" "$heal_dir/failure-modes.json" "$file_path" 2>/dev/null || true
+        fi
+
+        return 1
+    fi
+
+    rm -f "$test_result_file"
+    return 0
+}
+
+# Hook: healing_phase_gate - mechanical verification before healing phase transition
+hook_healing_phase_gate() {
+    local from_phase="${1:-}"
+    local to_phase="${2:-}"
+    local codebase_path="${LOKI_CODEBASE_PATH:-.}"
+    local heal_dir="${codebase_path}/.loki/healing"
+
+    [[ "${LOKI_HEAL_MODE:-false}" != "true" ]] && return 0
+
+    case "${from_phase}:${to_phase}" in
+        archaeology:stabilize)
+            # Require: friction map has entries, characterization tests pass
+            local friction_count
+            friction_count=$(python3 -c "
+import json
+try:
+    with open('${heal_dir}/friction-map.json') as f:
+        print(len(json.load(f).get('frictions', [])))
+except: print(0)
+" 2>/dev/null || echo 0)
+            [[ "$friction_count" -eq 0 ]] && echo "GATE_BLOCKED: friction-map.json has 0 entries. Run archaeology first." && return 1
+
+            [[ ! -f "$heal_dir/institutional-knowledge.md" ]] && echo "GATE_BLOCKED: institutional-knowledge.md not found" && return 1
+
+            local test_cmd
+            test_cmd=$(detect_test_command "$codebase_path")
+            if ! eval "$test_cmd" >/dev/null 2>&1; then
+                echo "GATE_BLOCKED: Characterization tests do not pass"
+                return 1
+            fi
+            ;;
+        stabilize:isolate)
+            local test_cmd
+            test_cmd=$(detect_test_command "$codebase_path")
+            if ! eval "$test_cmd" >/dev/null 2>&1; then
+                echo "GATE_BLOCKED: Tests do not pass after stabilization"
+                return 1
+            fi
+            ;;
+        isolate:modernize)
+            local test_cmd
+            test_cmd=$(detect_test_command "$codebase_path")
+            if ! eval "$test_cmd" >/dev/null 2>&1; then
+                echo "GATE_BLOCKED: Tests do not pass after isolation"
+                return 1
+            fi
+            ;;
+        modernize:validate)
+            local test_cmd
+            test_cmd=$(detect_test_command "$codebase_path")
+            if ! eval "$test_cmd" >/dev/null 2>&1; then
+                echo "GATE_BLOCKED: Tests do not pass after modernization"
+                return 1
+            fi
+            ;;
+    esac
+
+    return 0
+}

@@ -5711,6 +5711,12 @@ SPECIALISTS = {
         "focus": "Outdated packages, CVEs, bloat, unused deps, license issues",
         "checks": "outdated dependencies, known CVEs, unnecessary imports, dependency bloat, license compatibility, unused packages",
         "priority": 3
+    },
+    "legacy-healing-auditor": {
+        "keywords": ["legacy", "heal", "migrate", "cobol", "fortran", "refactor", "modernize", "deprecat", "adapter", "friction", "characterization"],
+        "focus": "Behavioral preservation, friction safety, institutional knowledge retention",
+        "checks": "behavioral change without characterization test, removal of quirky code without friction map check, missing adapter layer for replaced components, institutional knowledge loss (deleted comments, removed error messages), breaking changes to undocumented APIs",
+        "priority": 4
     }
 }
 

@@ -165,6 +165,7 @@ GROWTH ──[continuous improvement loop]──> GROWTH
    - Running tests? Load testing.md
    - Code review? Load quality-gates.md
    - Debugging? Load troubleshooting.md
+   - Legacy healing? Load healing.md
    - Deploying? Load production.md
    - Parallel features? Load parallel-workflows.md
    - Architecture planning? Load compound-learning.md (deepen-plan)

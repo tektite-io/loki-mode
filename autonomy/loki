@@ -421,6 +421,7 @@ show_help() {
     echo "  checkpoint|cp    Save/restore session checkpoints"
     echo "  projects         Multi-project registry management"
     echo "  audit [cmd]      Agent audit log and quality scanning (log|scan)"
+    echo "  heal <path>      Legacy system healing (archaeology, stabilize, modernize)"
     echo "  review [opts]    Standalone code review with quality gates (diff, staged, PR, files)"
     echo "  optimize         Optimize prompts based on session history"
     echo "  enterprise       Enterprise feature management (tokens, OIDC)"
@@ -8600,6 +8601,418 @@ with open(manifest_path, 'w') as f:
     echo -e "View details: loki migrate --status ${migration_id}"
 }
 
+#===============================================================================
+# loki heal - Legacy System Healing (v6.67.0)
+# Inspired by Amazon AGI Lab's "How Agentic AI Helps Heal Systems We Can't Replace"
+# Modernize legacy codebases incrementally without breaking existing behavior.
+#===============================================================================
+
+cmd_heal_help() {
+    echo -e "${BOLD}loki heal${NC} - Legacy system healing (v6.67.0)"
+    echo ""
+    echo "Heal legacy codebases by understanding their real behaviors -- the quirks,"
+    echo "delays, error states, and invisible dependencies -- then modernizing"
+    echo "incrementally while preserving institutional logic."
+    echo ""
+    echo "Usage: loki heal <path-to-codebase> [options]"
+    echo ""
+    echo "Phases:"
+    echo "  archaeology    Extract knowledge, map dependencies, catalog friction"
+    echo "  stabilize      Add observability and tests without changing behavior"
+    echo "  isolate        Create adapter boundaries between components"
+    echo "  modernize      Replace components one at a time behind adapters"
+    echo "  validate       Verify behavioral equivalence with baseline"
+    echo ""
+    echo "Options:"
+    echo "  --phase PHASE        Start from specific phase (default: archaeology)"
+    echo "  --resume             Resume healing from last checkpoint"
+    echo "  --status             Show healing progress"
+    echo "  --report             Generate healing report"
+    echo "  --strict             Block ALL behavioral changes without approval"
+    echo "  --archaeology-only   Extract knowledge only, don't modify code"
+    echo "  --friction-map       Show friction map for target codebase"
+    echo "  --compliance PRESET  Compliance mode (healthcare|fintech|government)"
+    echo "  --provider NAME      AI provider (default: claude)"
+    echo "  --parallel N         Parallel healing agents (default: 1)"
+    echo "  --no-dashboard       Disable web dashboard"
+    echo "  --dry-run            Show healing plan without executing"
+    echo ""
+    echo "Environment Variables:"
+    echo "  LOKI_HEAL_MODE              Enable healing mode (auto-set by 'loki heal')"
+    echo "  LOKI_HEAL_PHASE             Override starting phase"
+    echo "  LOKI_HEAL_PRESERVE_FRICTION Warn before removing friction points (default: true)"
+    echo "  LOKI_HEAL_STRICT            Block all behavioral changes (default: false)"
+    echo ""
+    echo "Examples:"
+    echo "  loki heal ./legacy-app                        # Full healing pipeline"
+    echo "  loki heal ./legacy-app --phase archaeology     # Knowledge extraction only"
+    echo "  loki heal ./legacy-app --archaeology-only      # Extract without modifying"
+    echo "  loki heal ./legacy-app --resume                # Resume from checkpoint"
+    echo "  loki heal ./legacy-app --strict                # Strict behavioral preservation"
+    echo "  loki heal --status                             # Show healing progress"
+    echo "  loki heal --friction-map ./legacy-app          # View friction map"
+}
+
+cmd_heal() {
+    local codebase_path=""
+    local phase="${LOKI_HEAL_PHASE:-archaeology}"
+    local do_resume="false"
+    local do_status="false"
+    local do_report="false"
+    local do_friction_map="false"
+    local archaeology_only="false"
+    local strict="${LOKI_HEAL_STRICT:-false}"
+    local compliance=""
+    local provider="${LOKI_PROVIDER:-claude}"
+    local parallel="1"
+    local no_dashboard="false"
+    local dry_run="false"
+
+    if [ $# -eq 0 ]; then
+        cmd_heal_help
+        return 0
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                cmd_heal_help
+                return 0
+                ;;
+            --status)
+                do_status="true"
+                shift
+                ;;
+            --report)
+                do_report="true"
+                shift
+                ;;
+            --friction-map)
+                do_friction_map="true"
+                shift
+                ;;
+            --phase)
+                if [[ -z "${2:-}" ]]; then
+                    echo -e "${RED}Error: --phase requires a value (archaeology|stabilize|isolate|modernize|validate)${NC}"
+                    return 1
+                fi
+                phase="$2"
+                shift 2
+                ;;
+            --phase=*)
+                phase="${1#*=}"
+                shift
+                ;;
+            --resume)
+                do_resume="true"
+                shift
+                ;;
+            --strict)
+                strict="true"
+                shift
+                ;;
+            --archaeology-only)
+                archaeology_only="true"
+                phase="archaeology"
+                shift
+                ;;
+            --compliance)
+                if [[ -z "${2:-}" ]]; then
+                    echo -e "${RED}Error: --compliance requires a value${NC}"
+                    return 1
+                fi
+                compliance="$2"
+                shift 2
+                ;;
+            --provider)
+                if [[ -z "${2:-}" ]]; then
+                    echo -e "${RED}Error: --provider requires a value${NC}"
+                    return 1
+                fi
+                provider="$2"
+                shift 2
+                ;;
+            --parallel)
+                if [[ -z "${2:-}" ]]; then
+                    echo -e "${RED}Error: --parallel requires a value${NC}"
+                    return 1
+                fi
+                parallel="$2"
+                shift 2
+                ;;
+            --no-dashboard)
+                no_dashboard="true"
+                shift
+                ;;
+            --dry-run)
+                dry_run="true"
+                shift
+                ;;
+            -*)
+                echo -e "${RED}Unknown option: $1${NC}"
+                echo "Run 'loki heal --help' for usage."
+                return 1
+                ;;
+            *)
+                if [ -z "$codebase_path" ]; then
+                    codebase_path="$1"
+                else
+                    echo -e "${RED}Error: Unexpected argument: $1${NC}"
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Route to subcommands
+    if [ "$do_status" = "true" ]; then
+        local heal_dir="${codebase_path:-.}/.loki/healing"
+        if [[ ! -d "$heal_dir" ]]; then
+            echo -e "${YELLOW}No healing session found.${NC}"
+            echo "Start one with: loki heal <path-to-codebase>"
+            return 0
+        fi
+        local progress_file="$heal_dir/healing-progress.json"
+        if [[ -f "$progress_file" ]]; then
+            echo -e "${BOLD}Healing Progress${NC}"
+            echo ""
+            python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+print(f\"  Codebase:       {data.get('codebase', '?')}\")
+print(f\"  Started:        {data.get('started', '?')}\")
+print(f\"  Overall Health:  {data.get('overall_health', 0):.0%}\")
+print()
+for c in data.get('components', []):
+    pct = c.get('characterization_passing', 0) / max(c.get('characterization_tests', 1), 1)
+    print(f\"  [{c.get('phase', '?'):12s}] {c.get('name', '?')}\")
+    print(f\"               Friction: {c.get('friction_resolved', 0)}/{c.get('friction_points', 0)} resolved\")
+    print(f\"               Tests:    {c.get('characterization_passing', 0)}/{c.get('characterization_tests', 0)} passing\")
+    print(f\"               Health:   {c.get('health_score', 0):.0%}\")
+    print()
+" "$progress_file" 2>/dev/null || echo "  Error reading progress file."
+        else
+            echo "  No progress data yet. Healing may still be in archaeology phase."
+        fi
+        return 0
+    fi
+
+    if [ "$do_friction_map" = "true" ]; then
+        local friction_file="${codebase_path:-.}/.loki/healing/friction-map.json"
+        if [[ ! -f "$friction_file" ]]; then
+            echo -e "${YELLOW}No friction map found.${NC}"
+            echo "Run archaeology first: loki heal ${codebase_path:-.} --phase archaeology"
+            return 0
+        fi
+        echo -e "${BOLD}Friction Map${NC}"
+        echo ""
+        python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for f in data.get('frictions', []):
+    safe = 'YES' if f.get('safe_to_remove') else 'NO'
+    cls = f.get('classification', 'unknown')
+    print(f\"  [{f.get('id', '?')}] {f.get('location', '?')}\")
+    print(f\"    Behavior:       {f.get('behavior', '?')}\")
+    print(f\"    Classification: {cls}\")
+    print(f\"    Safe to remove: {safe}\")
+    if f.get('evidence'):
+        print(f\"    Evidence:       {f.get('evidence')}\")
+    print()
+" "$friction_file" 2>/dev/null || echo "  Error reading friction map."
+        return 0
+    fi
+
+    if [ "$do_report" = "true" ]; then
+        local heal_dir="${codebase_path:-.}/.loki/healing"
+        if [[ ! -d "$heal_dir" ]]; then
+            echo -e "${YELLOW}No healing session found.${NC}"
+            return 0
+        fi
+        echo -e "${BOLD}Healing Report${NC}"
+        echo ""
+        echo "  Friction map:               $(python3 -c "import json; print(len(json.load(open('$heal_dir/friction-map.json')).get('frictions', [])))" 2>/dev/null || echo '0') points"
+        echo "  Failure modes:              $(python3 -c "import json; print(len(json.load(open('$heal_dir/failure-modes.json')).get('modes', [])))" 2>/dev/null || echo '0') cataloged"
+        echo "  Institutional knowledge:    $(wc -l < "$heal_dir/institutional-knowledge.md" 2>/dev/null || echo '0') lines"
+        echo "  Characterization tests:     $(find "$heal_dir/characterization-tests/" -name "*.json" 2>/dev/null | wc -l | tr -d ' ') tests"
+        echo ""
+        return 0
+    fi
+
+    # Validate codebase path
+    if [ -z "$codebase_path" ]; then
+        echo -e "${RED}Error: Codebase path is required${NC}"
+        echo "Usage: loki heal <path-to-codebase> [options]"
+        return 1
+    fi
+
+    if [[ ! -d "$codebase_path" ]]; then
+        echo -e "${RED}Error: Directory not found: $codebase_path${NC}"
+        return 1
+    fi
+
+    # Validate phase
+    case "$phase" in
+        archaeology|stabilize|isolate|modernize|validate) ;;
+        *)
+            echo -e "${RED}Error: Invalid phase: $phase${NC}"
+            echo "Valid phases: archaeology, stabilize, isolate, modernize, validate"
+            return 1
+            ;;
+    esac
+
+    # Initialize healing directory
+    local heal_dir="$codebase_path/.loki/healing"
+    mkdir -p "$heal_dir"/{behavioral-baseline,characterization-tests}
+
+    # Initialize healing state files if they don't exist
+    [[ ! -f "$heal_dir/friction-map.json" ]] && echo '{"frictions":[]}' > "$heal_dir/friction-map.json"
+    [[ ! -f "$heal_dir/failure-modes.json" ]] && echo '{"modes":[]}' > "$heal_dir/failure-modes.json"
+    [[ ! -f "$heal_dir/institutional-knowledge.md" ]] && echo "# Institutional Knowledge Registry" > "$heal_dir/institutional-knowledge.md"
+
+    # Initialize or update healing progress
+    if [[ ! -f "$heal_dir/healing-progress.json" ]] || [ "$do_resume" != "true" ]; then
+        python3 -c "
+import json
+from datetime import datetime
+progress = {
+    'codebase': '$codebase_path',
+    'started': datetime.now().isoformat(),
+    'current_phase': '$phase',
+    'strict_mode': $( [ "$strict" = "true" ] && echo "True" || echo "False" ),
+    'components': [],
+    'overall_health': 0.0
+}
+with open('$heal_dir/healing-progress.json', 'w') as f:
+    json.dump(progress, f, indent=2)
+" || true
+    fi
+
+    emit_event healing cli start "phase=$phase" "codebase=$codebase_path" "strict=$strict" 2>/dev/null || true
+
+    echo -e "${BOLD}Legacy System Healing${NC}"
+    echo ""
+    echo -e "  Codebase:   $codebase_path"
+    echo -e "  Phase:      $phase"
+    echo -e "  Strict:     $strict"
+    echo -e "  Provider:   $provider"
+    if [ "$archaeology_only" = "true" ]; then
+        echo -e "  Mode:       archaeology-only (no modifications)"
+    fi
+    echo ""
+
+    if [ "$dry_run" = "true" ]; then
+        echo -e "${CYAN}Dry run: Showing healing plan without executing${NC}"
+        echo ""
+        echo "  Phase 1: Archaeology"
+        echo "    - Map dependency graph"
+        echo "    - Scan for friction points (sleeps, retries, magic values)"
+        echo "    - Extract institutional knowledge from comments"
+        echo "    - Write characterization tests for critical paths"
+        echo ""
+        echo "  Phase 2: Stabilize"
+        echo "    - Add logging/observability without behavior changes"
+        echo "    - Extract hardcoded config values"
+        echo "    - Add type annotations where possible"
+        echo ""
+        echo "  Phase 3: Isolate"
+        echo "    - Define component boundaries"
+        echo "    - Create adapter interfaces"
+        echo "    - Add integration tests at boundaries"
+        echo ""
+        echo "  Phase 4: Modernize"
+        echo "    - Replace components one at a time behind adapters"
+        echo "    - Verify characterization tests after each replacement"
+        echo ""
+        echo "  Phase 5: Validate"
+        echo "    - Compare outputs with pre-healing baseline"
+        echo "    - Generate healing report"
+        return 0
+    fi
+
+    # Build healing prompt for the AI provider
+    local heal_prompt="You are performing legacy system healing on the codebase at '${codebase_path}'.
+
+IMPORTANT: Read skills/healing.md for the full healing protocol.
+
+Current phase: ${phase}
+Strict mode: ${strict}
+Archaeology only: ${archaeology_only}
+
+HEALING RULES:
+1. FRICTION IS SEMANTICS: Before removing any 'quirky' code (sleeps, retries, magic values), verify it is not an undocumented business rule. Document all friction in .loki/healing/friction-map.json.
+2. LEARN THROUGH FAILURE: Deliberately probe error paths and edge cases. Catalog every failure mode in .loki/healing/failure-modes.json. Each failure teaches you about the system.
+3. CHARACTERIZE BEFORE MODIFYING: Write tests that capture CURRENT behavior (not intended behavior) before changing anything.
+4. PRESERVE INSTITUTIONAL LOGIC: Extract business rules from comments, git history, error messages, and test fixtures into .loki/healing/institutional-knowledge.md.
+5. INCREMENTAL ONLY: Change ONE component at a time. Verify ALL characterization tests pass after each change.
+
+Phase-specific instructions:
+- archaeology: Map dependencies, catalog friction, extract knowledge, write characterization tests. Do NOT modify source code.
+- stabilize: Add logging and observability. Extract config. Add type hints. Do NOT change behavior.
+- isolate: Create adapter interfaces at component boundaries. Add integration tests.
+- modernize: Replace components behind adapters. Verify characterization tests pass.
+- validate: Compare outputs with behavioral baseline. Generate healing report.
+
+$([ "$strict" = "true" ] && echo "STRICT MODE: You MUST NOT change any observable behavior without creating a .loki/signals/HUMAN_REVIEW_NEEDED signal and waiting for approval.")
+$([ "$archaeology_only" = "true" ] && echo "ARCHAEOLOGY ONLY: Do NOT modify any source files. Only create files in .loki/healing/.")
+
+Begin healing now. Follow the RARV cycle for each action."
+
+    # Execute with the appropriate provider
+    local heal_exit=0
+    case "$provider" in
+        claude)
+            local run_args=(--dangerously-skip-permissions -p "$heal_prompt" --output-format stream-json --verbose)
+            (cd "$codebase_path" && claude "${run_args[@]}" 2>&1) | \
+                while IFS= read -r line; do
+                    if echo "$line" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    if d.get('type') == 'assistant':
+        for item in d.get('message', {}).get('content', []):
+            if item.get('type') == 'text':
+                print(item.get('text', ''), end='')
+except Exception: pass
+" 2>/dev/null; then
+                        true
+                    fi
+                done && heal_exit=0 || heal_exit=$?
+            ;;
+        codex)
+            (cd "$codebase_path" && codex exec --full-auto "$heal_prompt" 2>&1) || heal_exit=$?
+            ;;
+        gemini)
+            (cd "$codebase_path" && gemini --approval-mode=yolo "$heal_prompt" 2>&1) || heal_exit=$?
+            ;;
+        cline)
+            (cd "$codebase_path" && cline -y "$heal_prompt" 2>&1) || heal_exit=$?
+            ;;
+        aider)
+            local aider_model="${LOKI_AIDER_MODEL:-claude-3.7-sonnet}"
+            local aider_flags="${LOKI_AIDER_FLAGS:-}"
+            # shellcheck disable=SC2086
+            (cd "$codebase_path" && aider --message "$heal_prompt" --yes-always --no-auto-commits --model "$aider_model" $aider_flags 2>&1) || heal_exit=$?
+            ;;
+    esac
+
+    emit_event healing cli complete "phase=$phase" "exit=$heal_exit" 2>/dev/null || true
+
+    if [ "$heal_exit" -eq 0 ]; then
+        echo ""
+        echo -e "${GREEN}Healing phase '${phase}' complete.${NC}"
+        echo -e "View progress: loki heal --status ${codebase_path}"
+        echo -e "View friction:  loki heal --friction-map ${codebase_path}"
+    else
+        echo ""
+        echo -e "${YELLOW}Healing phase '${phase}' finished with warnings (exit: $heal_exit).${NC}"
+        echo -e "Check: loki heal --status ${codebase_path}"
+    fi
+}
+
 cmd_migrate() {
     local codebase_path=""
     local target=""
@@ -10148,6 +10561,9 @@ main() {
             ;;
         optimize)
             cmd_optimize "$@"
+            ;;
+        heal)
+            cmd_heal "$@"
             ;;
         migrate)
             cmd_migrate "$@"
