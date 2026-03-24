@@ -10016,7 +10016,7 @@ if __name__ == "__main__":
                 log_info "Perpetual mode: Ignoring exit, continuing immediately..."
                 # BUG-RUN-010: Reset retry counter on success (only count failures)
                 retry=0
-                # BUG-NEW-003: Clean up per-iteration output before continuing
+                # BUG-NEW-003/E2E-005: Clean up per-iteration output before continuing
                 rm -f "$iter_output" 2>/dev/null
                 continue  # Immediately start next iteration, no wait
             fi
@@ -10064,7 +10064,7 @@ if __name__ == "__main__":
             log_step "Starting next iteration..."
             # BUG-RUN-010: Reset retry counter on success (only count failures)
             retry=0
-            # BUG-NEW-003: Clean up per-iteration output before continuing
+            # BUG-NEW-003/E2E-005: Clean up per-iteration output before continuing
             rm -f "$iter_output" 2>/dev/null
             continue  # Immediately start next iteration, no exponential backoff
         fi
