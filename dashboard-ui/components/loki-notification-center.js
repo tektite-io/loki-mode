@@ -1,8 +1,8 @@
 /**
- * @fileoverview Loki Notification Center Component - displays notification
- * alerts with severity levels, acknowledgment controls, and trigger
- * configuration. Polls /api/notifications every 5 seconds. Two tabs:
- * Feed (notification list) and Triggers (enable/disable alert rules).
+ * @fileoverview Loki Notification Center Component - enhanced notification
+ * system with bell icon, unread count badge, notification categories
+ * (Build, Quality, System, Security), time grouping, mark as read/unread,
+ * action buttons, and trigger configuration.
  *
  * @example
  * <loki-notification-center api-url="http://localhost:57374" theme="dark"></loki-notification-center>
@@ -19,6 +19,18 @@ const SEVERITY_COLORS = {
   critical: 'var(--loki-red, #ef4444)',
   warning:  'var(--loki-yellow, #eab308)',
   info:     'var(--loki-blue, #3b82f6)',
+  success:  'var(--loki-green, #1FC5A8)',
+};
+
+/**
+ * Notification categories with icons and labels.
+ * @type {Object<string, {label: string, icon: string}>}
+ */
+const CATEGORIES = {
+  build:    { label: 'Build',    icon: 'B' },
+  quality:  { label: 'Quality',  icon: 'Q' },
+  system:   { label: 'System',   icon: 'S' },
+  security: { label: 'Security', icon: '!' },
 };
 
 /**
@@ -39,6 +51,8 @@ export class LokiNotificationCenter extends LokiElement {
     this._summary = {};
     this._connected = false;
     this._activeTab = 'feed';
+    this._categoryFilter = 'all';
+    this._panelOpen = true;
     this._pollInterval = null;
   }
 
@@ -102,6 +116,13 @@ export class LokiNotificationCenter extends LokiElement {
     this._loadNotifications();
   }
 
+  async _unacknowledgeNotification(id) {
+    // Mark as unread by toggling acknowledge state
+    const apiUrl = this.getAttribute('api-url') || window.location.origin;
+    await fetch(apiUrl + '/api/notifications/' + encodeURIComponent(id) + '/unacknowledge', { method: 'POST' });
+    this._loadNotifications();
+  }
+
   async _acknowledgeAll() {
     const apiUrl = this.getAttribute('api-url') || window.location.origin;
     const unacked = this._notifications.filter(n => !n.acknowledged);
@@ -162,6 +183,26 @@ export class LokiNotificationCenter extends LokiElement {
     }
   }
 
+  _getTimeGroup(timestamp) {
+    if (!timestamp) return 'Other';
+    try {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+
+      if (date >= today) return 'Today';
+      if (date >= yesterday) return 'Yesterday';
+      if (date >= weekAgo) return 'This Week';
+      return 'Earlier';
+    } catch {
+      return 'Other';
+    }
+  }
+
   _escapeHTML(str) {
     if (!str) return '';
     return String(str)
@@ -175,10 +216,24 @@ export class LokiNotificationCenter extends LokiElement {
     return SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
   }
 
+  _getCategory(notification) {
+    return notification.category || notification.type || 'system';
+  }
+
   // -- Tab switching --
 
   _switchTab(tab) {
     this._activeTab = tab;
+    this.render();
+  }
+
+  _setCategoryFilter(cat) {
+    this._categoryFilter = cat;
+    this.render();
+  }
+
+  _togglePanel() {
+    this._panelOpen = !this._panelOpen;
     this.render();
   }
 
@@ -194,18 +249,42 @@ export class LokiNotificationCenter extends LokiElement {
       });
     });
 
+    // Category filter buttons
+    root.querySelectorAll('.cat-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._setCategoryFilter(btn.dataset.cat);
+      });
+    });
+
     // Acknowledge buttons
     root.querySelectorAll('.ack-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         this._acknowledgeNotification(btn.dataset.id);
       });
     });
 
-    // Acknowledge All button
+    // Mark as unread buttons
+    root.querySelectorAll('.unread-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._unacknowledgeNotification(btn.dataset.id);
+      });
+    });
+
+    // Acknowledge All / Mark all as read button
     const ackAllBtn = root.querySelector('.ack-all-btn');
     if (ackAllBtn) {
       ackAllBtn.addEventListener('click', () => {
         this._acknowledgeAll();
+      });
+    }
+
+    // Bell icon toggle
+    const bellBtn = root.querySelector('.bell-icon');
+    if (bellBtn) {
+      bellBtn.addEventListener('click', () => {
+        this._togglePanel();
       });
     }
 
@@ -215,9 +294,32 @@ export class LokiNotificationCenter extends LokiElement {
         this._toggleTrigger(input.dataset.triggerId, input.checked);
       });
     });
+
+    // Dismiss buttons
+    root.querySelectorAll('.dismiss-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._acknowledgeNotification(btn.dataset.id);
+      });
+    });
   }
 
   // -- Render helpers --
+
+  _renderBellIcon() {
+    const unread = this._summary.unacknowledged || 0;
+    return `
+      <div class="bell-container">
+        <button class="bell-icon" title="${unread} unread notifications">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          ${unread > 0 ? `<span class="badge">${unread > 99 ? '99+' : unread}</span>` : ''}
+        </button>
+      </div>
+    `;
+  }
 
   _renderSummaryBar() {
     const total = this._summary.total || 0;
@@ -241,35 +343,77 @@ export class LokiNotificationCenter extends LokiElement {
           </div>
         </div>
         ${unack > 0 ? `
-          <button class="ack-all-btn">Acknowledge All</button>
+          <button class="ack-all-btn">Mark All as Read</button>
         ` : ''}
       </div>
     `;
   }
 
-  _renderNotificationList() {
-    if (this._notifications.length === 0) {
-      return '<div class="empty-state">No notifications</div>';
-    }
+  _renderCategoryFilter() {
+    const cats = ['all', 'build', 'quality', 'system', 'security'];
+    return `
+      <div class="category-bar">
+        ${cats.map(cat => {
+          const isActive = this._categoryFilter === cat;
+          const label = cat === 'all' ? 'All' : (CATEGORIES[cat]?.label || cat);
+          return `<button class="cat-btn ${isActive ? 'active' : ''}" data-cat="${cat}">${label}</button>`;
+        }).join('')}
+      </div>
+    `;
+  }
 
-    // Newest first
-    const sorted = [...this._notifications].sort((a, b) => {
+  _renderNotificationList() {
+    let filtered = [...this._notifications].sort((a, b) => {
       return new Date(b.timestamp) - new Date(a.timestamp);
     });
 
-    return sorted.map(n => {
-      const acked = n.acknowledged;
-      const severityColor = this._getSeverityColor(n.severity);
-      return `
-        <div class="notif-row ${acked ? 'acknowledged' : ''}">
-          <span class="severity-dot" style="background: ${severityColor};" title="${this._escapeHTML(n.severity)}"></span>
-          <span class="notif-time">${this._formatTime(n.timestamp)}</span>
-          <span class="notif-message">${this._escapeHTML(n.message)}</span>
-          ${n.iteration != null ? `<span class="notif-iteration">iter ${n.iteration}</span>` : ''}
-          ${!acked ? `<button class="ack-btn" data-id="${this._escapeHTML(n.id)}">Ack</button>` : ''}
-        </div>
-      `;
-    }).join('');
+    if (this._categoryFilter !== 'all') {
+      filtered = filtered.filter(n => this._getCategory(n) === this._categoryFilter);
+    }
+
+    if (filtered.length === 0) {
+      return '<div class="empty-state">No notifications</div>';
+    }
+
+    // Group by time
+    const groups = {};
+    for (const n of filtered) {
+      const group = this._getTimeGroup(n.timestamp);
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(n);
+    }
+
+    const groupOrder = ['Today', 'Yesterday', 'This Week', 'Earlier', 'Other'];
+    let html = '';
+
+    for (const group of groupOrder) {
+      if (!groups[group] || groups[group].length === 0) continue;
+      html += `<div class="time-group-label">${group}</div>`;
+      html += groups[group].map(n => {
+        const acked = n.acknowledged;
+        const severityColor = this._getSeverityColor(n.severity);
+        const category = this._getCategory(n);
+        const catCfg = CATEGORIES[category] || { label: category, icon: '?' };
+
+        return `
+          <div class="notif-row ${acked ? 'acknowledged' : ''}">
+            <span class="severity-dot" style="background: ${severityColor};" title="${this._escapeHTML(n.severity)}"></span>
+            <span class="cat-icon" title="${catCfg.label}">${catCfg.icon}</span>
+            <span class="notif-time">${this._formatTime(n.timestamp)}</span>
+            <span class="notif-message">${this._escapeHTML(n.message)}</span>
+            ${n.iteration != null ? `<span class="notif-iteration">iter ${n.iteration}</span>` : ''}
+            <span class="notif-actions">
+              ${!acked
+                ? `<button class="ack-btn" data-id="${this._escapeHTML(n.id)}" title="Mark as read">Read</button>`
+                : `<button class="unread-btn" data-id="${this._escapeHTML(n.id)}" title="Mark as unread">Unread</button>`}
+              <button class="dismiss-btn" data-id="${this._escapeHTML(n.id)}" title="Dismiss">&#10005;</button>
+            </span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    return html;
   }
 
   _renderTriggerList() {
@@ -315,11 +459,56 @@ export class LokiNotificationCenter extends LokiElement {
           gap: 16px;
         }
 
+        /* Bell icon */
+        .bell-container {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 8px;
+        }
+
+        .bell-icon {
+          position: relative;
+          background: none;
+          border: 1px solid var(--loki-border);
+          border-radius: 5px;
+          padding: 8px 10px;
+          cursor: pointer;
+          color: var(--loki-text-secondary);
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          transition: all 0.2s;
+          font-family: inherit;
+        }
+
+        .bell-icon:hover {
+          border-color: var(--loki-accent);
+          color: var(--loki-accent);
+        }
+
+        .badge {
+          position: absolute;
+          top: -6px;
+          right: -6px;
+          background: var(--loki-red, #C45B5B);
+          color: white;
+          font-size: 10px;
+          font-weight: 700;
+          min-width: 18px;
+          height: 18px;
+          border-radius: 9px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0 4px;
+          font-family: 'JetBrains Mono', monospace;
+        }
+
         /* Tabs */
         .tabs {
           display: flex;
           gap: 2px;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
           background: var(--loki-bg-tertiary);
           border-radius: 5px;
           padding: 2px;
@@ -346,6 +535,38 @@ export class LokiNotificationCenter extends LokiElement {
         .tab.active {
           background: var(--loki-accent);
           color: white;
+        }
+
+        /* Category filter bar */
+        .category-bar {
+          display: flex;
+          gap: 4px;
+          margin-bottom: 12px;
+          flex-wrap: wrap;
+        }
+
+        .cat-btn {
+          padding: 4px 10px;
+          border: 1px solid var(--loki-border);
+          background: none;
+          color: var(--loki-text-muted);
+          cursor: pointer;
+          border-radius: 4px;
+          font-size: 11px;
+          font-weight: 500;
+          transition: all 0.2s;
+          font-family: inherit;
+        }
+
+        .cat-btn:hover {
+          border-color: var(--loki-border-light);
+          color: var(--loki-text-secondary);
+        }
+
+        .cat-btn.active {
+          background: var(--loki-accent-muted);
+          border-color: var(--loki-accent);
+          color: var(--loki-accent);
         }
 
         /* Summary bar */
@@ -392,7 +613,7 @@ export class LokiNotificationCenter extends LokiElement {
           line-height: 1.2;
         }
 
-        /* Acknowledge All button */
+        /* Mark All as Read button */
         .ack-all-btn {
           padding: 8px 16px;
           background: var(--loki-bg-card);
@@ -411,6 +632,17 @@ export class LokiNotificationCenter extends LokiElement {
         .ack-all-btn:hover {
           border-color: var(--loki-accent);
           color: var(--loki-accent);
+        }
+
+        /* Time group labels */
+        .time-group-label {
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--loki-text-muted);
+          padding: 10px 14px 4px;
+          background: var(--loki-bg-secondary);
         }
 
         /* Notification list */
@@ -449,6 +681,21 @@ export class LokiNotificationCenter extends LokiElement {
           flex-shrink: 0;
         }
 
+        .cat-icon {
+          width: 22px;
+          height: 22px;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 700;
+          background: var(--loki-bg-tertiary);
+          color: var(--loki-text-secondary);
+          flex-shrink: 0;
+          font-family: 'JetBrains Mono', monospace;
+        }
+
         .notif-time {
           font-size: 11px;
           font-family: 'JetBrains Mono', monospace;
@@ -474,7 +721,13 @@ export class LokiNotificationCenter extends LokiElement {
           white-space: nowrap;
         }
 
-        .ack-btn {
+        .notif-actions {
+          display: flex;
+          gap: 4px;
+          flex-shrink: 0;
+        }
+
+        .ack-btn, .unread-btn, .dismiss-btn {
           padding: 4px 10px;
           background: none;
           border: 1px solid var(--loki-border);
@@ -487,9 +740,19 @@ export class LokiNotificationCenter extends LokiElement {
           font-family: inherit;
         }
 
-        .ack-btn:hover {
+        .ack-btn:hover, .unread-btn:hover {
           border-color: var(--loki-accent);
           color: var(--loki-accent);
+        }
+
+        .dismiss-btn {
+          padding: 4px 6px;
+          font-size: 12px;
+        }
+
+        .dismiss-btn:hover {
+          border-color: var(--loki-red);
+          color: var(--loki-red);
         }
 
         /* Trigger list */
@@ -614,27 +877,32 @@ export class LokiNotificationCenter extends LokiElement {
       </style>
 
       <div class="notif-container">
+        ${this._renderBellIcon()}
+
         ${!this._connected ? '<div class="offline-notice">Connecting to notifications API...</div>' : ''}
 
-        <!-- Tabs -->
-        <div class="tabs">
-          <button class="tab ${this._activeTab === 'feed' ? 'active' : ''}" data-tab="feed">Feed</button>
-          <button class="tab ${this._activeTab === 'triggers' ? 'active' : ''}" data-tab="triggers">Triggers</button>
-        </div>
-
-        <!-- Feed Tab -->
-        ${this._activeTab === 'feed' ? `
-          ${this._renderSummaryBar()}
-          <div class="notif-list">
-            ${this._renderNotificationList()}
+        ${this._panelOpen ? `
+          <!-- Tabs -->
+          <div class="tabs">
+            <button class="tab ${this._activeTab === 'feed' ? 'active' : ''}" data-tab="feed">Feed</button>
+            <button class="tab ${this._activeTab === 'triggers' ? 'active' : ''}" data-tab="triggers">Triggers</button>
           </div>
-        ` : ''}
 
-        <!-- Triggers Tab -->
-        ${this._activeTab === 'triggers' ? `
-          <div class="trigger-list">
-            ${this._renderTriggerList()}
-          </div>
+          <!-- Feed Tab -->
+          ${this._activeTab === 'feed' ? `
+            ${this._renderSummaryBar()}
+            ${this._renderCategoryFilter()}
+            <div class="notif-list">
+              ${this._renderNotificationList()}
+            </div>
+          ` : ''}
+
+          <!-- Triggers Tab -->
+          ${this._activeTab === 'triggers' ? `
+            <div class="trigger-list">
+              ${this._renderTriggerList()}
+            </div>
+          ` : ''}
         ` : ''}
       </div>
     `;

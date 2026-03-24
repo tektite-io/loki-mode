@@ -89,13 +89,22 @@ export { LokiRunManager } from './components/loki-run-manager.js';
 export { LokiAuditViewer } from './components/loki-audit-viewer.js';
 export { LokiApiKeys } from './components/loki-api-keys.js';
 export { LokiTenantSwitcher } from './components/loki-tenant-switcher.js';
+<<<<<<< HEAD
 export { LokiDashboardHeader } from './components/loki-dashboard-header.js';
 export { LokiDashboardGrid } from './components/loki-dashboard-grid.js';
 export { LokiKpiCard } from './components/loki-kpi-card.js';
 export { LokiSessionTimeline } from './components/loki-session-timeline.js';
+=======
+export { LokiActivityStream } from './components/loki-activity-stream.js';
+export { LokiProviderHealth } from './components/loki-provider-health.js';
+export { LokiPipelineView } from './components/loki-pipeline-view.js';
+export { LokiMemoryGraph } from './components/loki-memory-graph.js';
+export { LokiCostWaterfall } from './components/loki-cost-waterfall.js';
+export { LokiAgentLeaderboard } from './components/loki-agent-leaderboard.js';
+>>>>>>> worktree-agent-a8771afe
 
 // Version
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 /**
  * Initialize all components with default configuration
@@ -153,10 +162,19 @@ const componentModules = [
   './components/loki-audit-viewer.js',
   './components/loki-api-keys.js',
   './components/loki-tenant-switcher.js',
+<<<<<<< HEAD
   './components/loki-dashboard-header.js',
   './components/loki-dashboard-grid.js',
   './components/loki-kpi-card.js',
   './components/loki-session-timeline.js',
+=======
+  './components/loki-activity-stream.js',
+  './components/loki-provider-health.js',
+  './components/loki-pipeline-view.js',
+  './components/loki-memory-graph.js',
+  './components/loki-cost-waterfall.js',
+  './components/loki-agent-leaderboard.js',
+>>>>>>> worktree-agent-a8771afe
 ];
 
 // Components are registered via customElements.define in their respective files
