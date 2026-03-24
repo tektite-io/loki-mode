@@ -3266,15 +3266,21 @@ set_phase() {
 
         log_info "Phase changed: $current_phase -> $new_phase"
 
-        # Update orchestrator state
+        # Update orchestrator state (atomic via temp file + mv)
+        # BUG ARCH-001 fix: prevent state corruption if process is killed mid-write
         if [ -f "$orch_file" ]; then
             python3 -c "
-import json, sys
-with open(sys.argv[1], 'r') as f:
+import json, sys, os, tempfile
+orch_file = sys.argv[1]
+new_phase = sys.argv[2]
+with open(orch_file, 'r') as f:
     data = json.load(f)
-data['currentPhase'] = sys.argv[2]
-with open(sys.argv[1], 'w') as f:
+data['currentPhase'] = new_phase
+orch_dir = os.path.dirname(orch_file)
+fd, tmp = tempfile.mkstemp(dir=orch_dir, suffix='.json')
+with os.fdopen(fd, 'w') as f:
     json.dump(data, f, indent=2)
+os.replace(tmp, orch_file)
 " "$orch_file" "$new_phase" 2>/dev/null || true
         fi
     fi
