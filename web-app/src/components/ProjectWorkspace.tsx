@@ -28,6 +28,7 @@ import { DeployPanel } from './DeployPanel';
 import type { BuildEvent } from './BuildActivityFeed';
 import { useKeyboardShortcuts, KeyboardShortcutsModal, ShortcutsHelpButton } from './KeyboardShortcuts';
 import { CommandPalette } from './CommandPalette';
+import { GitPanel } from './GitPanel';
 import type { CommandItem } from './CommandPalette';
 import { CheckpointTimeline } from './CheckpointTimeline';
 import { ChangePreview } from './ChangePreview';
@@ -210,7 +211,7 @@ function flattenFiles(nodes: FileNode[], prefix = ''): { path: string; name: str
   return result;
 }
 
-type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'deploy';
+type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'deploy' | 'git' | 'cicd';
 
 function SecretsPanel() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -1113,7 +1114,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     { id: 'terminal', label: 'Open Terminal', category: 'command' as const, icon: Terminal, action: () => setBottomPanelVisible(true) },
     { id: 'dashboard', label: 'Open Dashboard', category: 'command' as const, icon: LayoutDashboard, action: () => setActiveWorkspaceTab('dashboard') },
     { id: 'deploy', label: 'Deploy Project', category: 'command' as const, icon: Rocket, action: () => setActiveWorkspaceTab('deploy') },
-    { id: 'git', label: 'Git Status', category: 'command' as const, icon: GitBranch, action: () => setActiveWorkspaceTab('dashboard') },
+    { id: 'git', label: 'Git Status', category: 'command' as const, icon: GitBranch, action: () => setActiveWorkspaceTab('git') },
     { id: 'settings', label: 'Settings / Config', category: 'setting' as const, icon: Settings2, action: () => setActiveWorkspaceTab('config') },
     { id: 'quick-open', label: 'Quick Open File', category: 'file' as const, icon: FileCode2, action: () => { setShowQuickOpen(true); setQuickOpenQuery(''); }, shortcut: 'Cmd+P' },
     { id: 'zen', label: 'Toggle Zen Mode', category: 'setting' as const, icon: Maximize2, action: () => toggleZenMode() },
@@ -1325,6 +1326,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       { id: 'secrets' as const, label: 'Secrets', icon: KeyRound },
                       { id: 'prd' as const, label: 'PRD', icon: PrdIcon },
                       { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+                      { id: 'git' as const, label: 'Git', icon: GitBranch },
                     ]).map(tab => (
                       <button
                         key={tab.id}
@@ -1842,6 +1844,10 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                           />
                         </div>
                       )
+                    )}
+
+                    {activeWorkspaceTab === 'git' && (
+                      <GitPanel sessionId={sessionData.id} />
                     )}
                   </div>
                 </div>
