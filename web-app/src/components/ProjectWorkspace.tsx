@@ -24,6 +24,8 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { Skeleton, SkeletonEditor } from './ui/Skeleton';
 import { ActivityPanel } from './ActivityPanel';
 import { BuildProgressBar } from './BuildProgressBar';
+import { DeployPanel } from './DeployPanel';
+import type { BuildEvent } from './BuildActivityFeed';
 import { useKeyboardShortcuts, KeyboardShortcutsModal, ShortcutsHelpButton } from './KeyboardShortcuts';
 import { CommandPalette } from './CommandPalette';
 import type { CommandItem } from './CommandPalette';
@@ -206,7 +208,7 @@ function flattenFiles(nodes: FileNode[], prefix = ''): { path: string; name: str
   return result;
 }
 
-type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard';
+type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'deploy';
 
 function SecretsPanel() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -450,6 +452,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   const [externalChangeFile, setExternalChangeFile] = useState<string | null>(null);
   const filesChangedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [buildEvents, setBuildEvents] = useState<BuildEvent[]>([]);
 
   // Subscribe to WebSocket for file_changed events
   const { subscribe } = useWebSocket();
@@ -485,6 +488,9 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     } catch { /* ignore */ }
   }, []);
 
+  // Track previous phase for narration events
+  const prevPhaseRef = useRef<string>('idle');
+
   // Poll session status for build controls, provider, and progress
   useEffect(() => {
     const check = async () => {
@@ -493,8 +499,51 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
         setIsBuilding(status.running);
         setIsPaused(status.paused);
         if (status.provider) setSelectedProvider(status.provider);
+
+        const newPhase = status.phase || 'idle';
+
+        // Generate phase change + narration events when phase transitions
+        if (newPhase !== prevPhaseRef.current && newPhase !== 'idle') {
+          const now = new Date().toISOString();
+          const phaseLabels: Record<string, string> = {
+            planning: 'Planning phase started',
+            building: 'Building your project',
+            testing: 'Running tests',
+            reviewing: 'Reviewing code quality',
+            complete: 'Build complete',
+          };
+          const narrationMessages: Record<string, string> = {
+            planning: 'Analyzing requirements and designing the architecture...',
+            building: 'Writing code and creating project files...',
+            testing: 'Running test suite to verify everything works...',
+            reviewing: 'Checking code quality and best practices...',
+            complete: 'All done. Your project is ready.',
+          };
+
+          const events: BuildEvent[] = [
+            {
+              id: `phase-${Date.now()}`,
+              type: 'phase_change',
+              message: phaseLabels[newPhase] || `Phase: ${newPhase}`,
+              timestamp: now,
+            },
+          ];
+
+          if (narrationMessages[newPhase]) {
+            events.push({
+              id: `narration-${Date.now()}`,
+              type: 'narration',
+              message: narrationMessages[newPhase],
+              timestamp: now,
+            });
+          }
+
+          setBuildEvents(prev => [...prev, ...events]);
+          prevPhaseRef.current = newPhase;
+        }
+
         setBuildStatus({
-          phase: status.phase || 'idle',
+          phase: newPhase,
           iteration: status.iteration || 0,
           maxIterations: status.max_iterations || 10,
           cost: status.cost || 0,
@@ -553,6 +602,21 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     const unsub = subscribe('file_changed', (data: unknown) => {
       const payload = data as { paths?: string[]; event_types?: string[] };
       if (!payload.paths || payload.paths.length === 0) return;
+
+      // Generate build activity events from file changes
+      const now = new Date().toISOString();
+      const newEvents: BuildEvent[] = payload.paths.map((p, i) => {
+        const eventType = payload.event_types?.[i];
+        const isCreated = eventType === 'created' || eventType === 'IN_CREATE';
+        return {
+          id: `file-${Date.now()}-${i}`,
+          type: isCreated ? 'file_created' as const : 'file_modified' as const,
+          message: isCreated ? `Created ${p.split('/').pop()}` : `Modified ${p.split('/').pop()}`,
+          timestamp: now,
+          filePath: p,
+        };
+      });
+      setBuildEvents(prev => [...prev, ...newEvents]);
 
       // Show "files changed" indicator briefly
       setFilesChangedIndicator(true);
@@ -1014,7 +1078,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     { id: 'code', label: 'Open Code Editor', category: 'command' as const, icon: Code2, action: () => setActiveWorkspaceTab('code') },
     { id: 'terminal', label: 'Open Terminal', category: 'command' as const, icon: Terminal, action: () => setBottomPanelVisible(true) },
     { id: 'dashboard', label: 'Open Dashboard', category: 'command' as const, icon: LayoutDashboard, action: () => setActiveWorkspaceTab('dashboard') },
-    { id: 'deploy', label: 'Deploy Project', category: 'command' as const, icon: Rocket, action: () => setActiveWorkspaceTab('deploy' as any) },
+    { id: 'deploy', label: 'Deploy Project', category: 'command' as const, icon: Rocket, action: () => setActiveWorkspaceTab('deploy') },
     { id: 'git', label: 'Git Status', category: 'command' as const, icon: GitBranch, action: () => setActiveWorkspaceTab('dashboard') },
     { id: 'settings', label: 'Settings / Config', category: 'setting' as const, icon: Settings2, action: () => setActiveWorkspaceTab('config') },
     { id: 'quick-open', label: 'Quick Open File', category: 'file' as const, icon: FileCode2, action: () => { setShowQuickOpen(true); setQuickOpenQuery(''); }, shortcut: 'Cmd+P' },
@@ -1128,6 +1192,15 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
         <IconButton icon={Eye} label="Review project" size="sm" onClick={handleReview} disabled={!!actionState?.loading} />
         <IconButton icon={TestTube2} label="Run tests" size="sm" onClick={handleTest} disabled={!!actionState?.loading} />
         <IconButton icon={BookOpen} label="Explain project" size="sm" onClick={handleExplain} disabled={!!actionState?.loading} />
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Rocket}
+          onClick={() => setActiveWorkspaceTab('deploy')}
+          title="Deploy project"
+        >
+          Deploy
+        </Button>
         <ShortcutsHelpButton onClick={() => setShowHelp(true)} />
       </div>
 
@@ -1206,6 +1279,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                     {([
                       { id: 'code' as const, label: 'Code', icon: Code2 },
                       { id: 'preview' as const, label: 'Preview', icon: PreviewIcon },
+                      { id: 'deploy' as const, label: 'Deploy', icon: Rocket },
                       { id: 'config' as const, label: 'Config', icon: Settings2 },
                       { id: 'secrets' as const, label: 'Secrets', icon: KeyRound },
                       { id: 'prd' as const, label: 'PRD', icon: PrdIcon },
@@ -1659,6 +1733,10 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       </div>
                     )}
 
+                    {activeWorkspaceTab === 'deploy' && (
+                      <DeployPanel sessionId={sessionData.id} />
+                    )}
+
                     {activeWorkspaceTab === 'dashboard' && (
                       dashboardAvailable === false ? (
                         <div className="h-full flex flex-col items-center justify-center text-center p-8 gap-4">
@@ -1743,6 +1821,8 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                   sessionId={session.id}
                   isRunning={sessionData.status === 'running' || sessionData.status === 'in_progress'}
                   buildMode={buildMode}
+                  buildEvents={buildEvents}
+                  onFileClick={(path) => handleFileSelect(path, path.split('/').pop() || path)}
                 />
               </ErrorBoundary>
             </Panel>
