@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Square, MessageSquare, FileCode2, Terminal as TerminalIcon, Wrench, Image as ImageIcon, X } from 'lucide-react';
+import { Send, Square, MessageSquare, FileCode2, Terminal as TerminalIcon, Wrench, Image as ImageIcon, X, ThumbsUp, ThumbsDown, FileText, LayoutTemplate, BookOpen, AtSign } from 'lucide-react';
 import { api } from '../api/client';
 import { Button } from './ui/Button';
 
@@ -55,7 +55,131 @@ function parseStructuredContent(content: string): {
   return { textLines, fileChanges, commands };
 }
 
-function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
+// ---------------------------------------------------------------------------
+// Message reactions (H90) -- thumbs up/down feedback on AI messages
+// ---------------------------------------------------------------------------
+
+function MessageReactions({ msgIndex }: { msgIndex: number }) {
+  const [reaction, setReaction] = useState<'up' | 'down' | null>(null);
+
+  const handleReaction = (type: 'up' | 'down') => {
+    setReaction(reaction === type ? null : type);
+  };
+
+  return (
+    <div className="flex items-center gap-1 mt-1">
+      <button
+        onClick={() => handleReaction('up')}
+        className={`p-1 rounded transition-colors ${
+          reaction === 'up'
+            ? 'text-primary bg-primary/10'
+            : 'text-muted/40 hover:text-primary hover:bg-primary/5'
+        }`}
+        title="Helpful response"
+        aria-label="Thumbs up"
+      >
+        <ThumbsUp size={12} />
+      </button>
+      <button
+        onClick={() => handleReaction('down')}
+        className={`p-1 rounded transition-colors ${
+          reaction === 'down'
+            ? 'text-red-400 bg-red-400/10'
+            : 'text-muted/40 hover:text-red-400 hover:bg-red-400/5'
+        }`}
+        title="Not helpful"
+        aria-label="Thumbs down"
+      >
+        <ThumbsDown size={12} />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// @mention autocomplete (H89)
+// ---------------------------------------------------------------------------
+
+interface MentionOption {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}
+
+const MENTION_OPTIONS: MentionOption[] = [
+  { id: '@file', label: '@file', description: 'Reference a file in your project', icon: FileCode2 },
+  { id: '@template', label: '@template', description: 'Reference a template', icon: LayoutTemplate },
+  { id: '@docs', label: '@docs', description: 'Reference documentation', icon: BookOpen },
+];
+
+function MentionAutocomplete({
+  visible,
+  filter,
+  onSelect,
+  onClose,
+  selectedIndex,
+}: {
+  visible: boolean;
+  filter: string;
+  onSelect: (mention: string) => void;
+  onClose: () => void;
+  selectedIndex: number;
+}) {
+  if (!visible) return null;
+
+  const filtered = MENTION_OPTIONS.filter((opt) =>
+    opt.label.toLowerCase().includes(filter.toLowerCase()),
+  );
+
+  if (filtered.length === 0) return null;
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-1 bg-card border border-border rounded-lg shadow-lg py-1 z-50">
+      <div className="px-3 py-1">
+        <span className="text-[10px] text-muted font-semibold uppercase tracking-wider flex items-center gap-1">
+          <AtSign size={10} />
+          Mentions
+        </span>
+      </div>
+      {filtered.map((opt, i) => {
+        const Icon = opt.icon;
+        return (
+          <button
+            key={opt.id}
+            onClick={() => onSelect(opt.label)}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors text-left ${
+              i === selectedIndex ? 'bg-primary/10 text-primary' : 'text-ink hover:bg-hover'
+            }`}
+          >
+            <Icon size={14} className={i === selectedIndex ? 'text-primary' : 'text-muted'} />
+            <span className="font-medium">{opt.label}</span>
+            <span className="text-muted text-[11px]">{opt.description}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Typing indicator (H94) -- "Loki is thinking..."
+// ---------------------------------------------------------------------------
+
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+      <span className="text-[11px] text-muted italic">Loki is thinking...</span>
+    </div>
+  );
+}
+
+function ChatMessageBubble({ msg, msgIndex }: { msg: ChatMessage; msgIndex: number }) {
   const [showFullOutput, setShowFullOutput] = useState(false);
   const parsed = useMemo(
     () => msg.role === 'system' ? parseStructuredContent(msg.content) : null,
@@ -167,6 +291,11 @@ function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
             )}
           </div>
         )}
+
+        {/* Reactions (H90) -- only on completed system messages */}
+        {msg.role === 'system' && !msg.isStreaming && msg.content && (
+          <MessageReactions msgIndex={msgIndex} />
+        )}
       </div>
     </div>
   );
@@ -267,6 +396,11 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
 
   // Drag-and-drop handlers
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // @mention autocomplete state (H89)
+  const [mentionVisible, setMentionVisible] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState('');
+  const [mentionIndex, setMentionIndex] = useState(0);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -576,8 +710,10 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
           </div>
         )}
         {messages.map((msg, i) => (
-          <ChatMessageBubble key={i} msg={msg} />
+          <ChatMessageBubble key={i} msg={msg} msgIndex={i} />
         ))}
+        {/* Typing indicator (H94) */}
+        {streaming && <TypingIndicator />}
       </div>
 
       {/* Input area */}
@@ -663,22 +799,89 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
           >
             <ImageIcon size={16} />
           </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Ask AI to modify your project... (Shift+Enter for new line)"
+          <div className="flex-1 relative">
+            {/* @mention autocomplete popup (H89) */}
+            <MentionAutocomplete
+              visible={mentionVisible}
+              filter={mentionFilter}
+              selectedIndex={mentionIndex}
+              onSelect={(mention) => {
+                // Replace the @... text with the selected mention
+                const atIndex = input.lastIndexOf('@');
+                const before = atIndex >= 0 ? input.slice(0, atIndex) : input;
+                setInput(before + mention + ' ');
+                setMentionVisible(false);
+                setMentionIndex(0);
+                inputRef.current?.focus();
+              }}
+              onClose={() => setMentionVisible(false)}
+            />
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => {
+                const val = e.target.value;
+                setInput(val);
+                // Detect @ for mention autocomplete
+                const lastAt = val.lastIndexOf('@');
+                if (lastAt >= 0) {
+                  const afterAt = val.slice(lastAt);
+                  // Show autocomplete if @ is at end or followed by word chars only
+                  if (/^@\w*$/.test(afterAt)) {
+                    setMentionVisible(true);
+                    setMentionFilter(afterAt);
+                    setMentionIndex(0);
+                  } else {
+                    setMentionVisible(false);
+                  }
+                } else {
+                  setMentionVisible(false);
+                }
+              }}
+              onKeyDown={e => {
+                // Handle mention navigation
+                if (mentionVisible) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setMentionIndex(i => Math.min(i + 1, MENTION_OPTIONS.length - 1));
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setMentionIndex(i => Math.max(i - 1, 0));
+                    return;
+                  }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                    e.preventDefault();
+                    const filtered = MENTION_OPTIONS.filter(opt =>
+                      opt.label.toLowerCase().includes(mentionFilter.toLowerCase()),
+                    );
+                    if (filtered[mentionIndex]) {
+                      const atIndex = input.lastIndexOf('@');
+                      const before = atIndex >= 0 ? input.slice(0, atIndex) : input;
+                      setInput(before + filtered[mentionIndex].label + ' ');
+                      setMentionVisible(false);
+                      setMentionIndex(0);
+                    }
+                    return;
+                  }
+                  if (e.key === 'Escape') {
+                    setMentionVisible(false);
+                    return;
+                  }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Ask AI to modify your project... (Shift+Enter for new line)"
             rows={1}
-            className="flex-1 px-3 py-1.5 text-xs bg-card border border-border rounded-btn outline-none focus:border-primary transition-colors resize-none"
+            className="w-full px-3 py-1.5 text-xs bg-card border border-border rounded-btn outline-none focus:border-primary transition-colors resize-none"
             style={{ maxHeight: '120px', overflow: 'auto' }}
             disabled={sending}
           />
+          </div>
           {streaming ? (
             <Button
               size="sm"

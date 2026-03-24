@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { DollarSign, Clock, Zap } from 'lucide-react';
+import { ContextualHelp, HELP_TOOLTIPS } from './ContextualHelp';
 
 interface BuildProgressBarProps {
   phase: string;       // 'planning' | 'building' | 'testing' | 'reviewing' | 'complete' | 'idle'
@@ -58,9 +59,10 @@ export function BuildProgressBar({ phase, iteration, maxIterations, cost, startT
       </div>
 
       {/* Phase labels + stats */}
-      <div className="px-4 py-1.5 flex items-center gap-4 bg-card border-b border-border text-xs">
-        {/* Phase indicators */}
+      <div className="px-4 py-1.5 flex items-center gap-4 bg-card border-b border-border text-xs" data-tour="build-progress">
+        {/* Phase indicators with contextual help (H80) */}
         <div className="flex items-center gap-1">
+          <ContextualHelp text={HELP_TOOLTIPS.buildProgress} position="bottom" size={12} />
           {phases.map((p, i) => (
             <div key={p.id} className="flex items-center gap-1">
               <div className={`w-2 h-2 rounded-full transition-colors ${

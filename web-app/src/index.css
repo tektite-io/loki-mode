@@ -222,4 +222,25 @@
   .quick-input-placeholder-exit {
     animation: placeholder-fade-out 0.3s ease-in forwards;
   }
+
+  /* Slide-in from right for DocsSidebar (H85) */
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  .animate-slide-in-right {
+    animation: slide-in-right 0.25s ease-out forwards;
+  }
+
+  /* Fade-in for dropdown menus (H87) */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Feature discovery pulse (H83) */
+  @keyframes discovery-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.5); opacity: 0; }
+  }
 }

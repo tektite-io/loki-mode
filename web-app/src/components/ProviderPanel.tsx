@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { api } from '../api/client';
+import { ContextualHelp, HELP_TOOLTIPS } from './ContextualHelp';
 
 interface ProviderPanelProps {
   currentProvider?: string;
@@ -39,7 +40,10 @@ export function ProviderPanel({ currentProvider, isRunning, onProviderChange }: 
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-xs font-semibold text-muted-accessible uppercase tracking-wider">Provider</div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-semibold text-muted-accessible uppercase tracking-wider">Provider</span>
+        <ContextualHelp text={HELP_TOOLTIPS.providerSelector} position="right" size={12} />
+      </div>
       <div className="flex items-center gap-1 card rounded-card p-1">
         {['claude', 'codex', 'gemini'].map((p) => (
           <button

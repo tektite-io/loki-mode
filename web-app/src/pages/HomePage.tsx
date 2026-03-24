@@ -236,7 +236,7 @@ export default function HomePage() {
             </div>
 
             {/* One-line quick-start input */}
-            <div className="w-full max-w-2xl">
+            <div className="w-full max-w-2xl" data-tour="input-box">
               <div className="relative">
                 <input
                   ref={quickInputRef}

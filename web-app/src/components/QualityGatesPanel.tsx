@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChecklistSummary, ChecklistItem } from '../types/api';
+import { ContextualHelp, HELP_TOOLTIPS } from './ContextualHelp';
 
 interface QualityGatesPanelProps {
   checklist: ChecklistSummary | null;
@@ -52,9 +53,12 @@ export function QualityGatesPanel({ checklist, loading }: QualityGatesPanelProps
   return (
     <div className="card p-6">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-ink uppercase tracking-wider">
-          Quality Gates
-        </h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-sm font-semibold text-ink uppercase tracking-wider">
+            Quality Gates
+          </h3>
+          <ContextualHelp text={HELP_TOOLTIPS.qualityGates} position="right" size={13} />
+        </div>
         {checklist && (
           <span className="font-mono text-xs text-muted">
             {checklist.passed}/{checklist.total} passed

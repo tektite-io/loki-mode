@@ -1,22 +1,44 @@
-import { useState, useEffect, useCallback } from 'react';
-import { X, Keyboard } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { X, Keyboard, Search } from 'lucide-react';
 
 interface Shortcut {
   keys: string[];
   label: string;
+  category: 'navigation' | 'editor' | 'build' | 'general';
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.userAgent);
 const mod = isMac ? 'Cmd' : 'Ctrl';
 
 const SHORTCUTS: Shortcut[] = [
-  { keys: [`${mod}+S`], label: 'Save file' },
-  { keys: [`${mod}+P`], label: 'Quick open file' },
-  { keys: [`${mod}+\``], label: 'Toggle terminal' },
-  { keys: [`${mod}+B`], label: 'Start / stop build' },
-  { keys: [`${mod}+?`], label: 'Show keyboard shortcuts' },
-  { keys: ['Escape'], label: 'Close modals' },
+  // Navigation
+  { keys: [`${mod}+K`], label: 'Open Command Palette', category: 'navigation' },
+  { keys: [`${mod}+P`], label: 'Quick open file', category: 'navigation' },
+  { keys: [`${mod}+,`], label: 'Open settings', category: 'navigation' },
+
+  // Editor
+  { keys: [`${mod}+S`], label: 'Save file', category: 'editor' },
+  { keys: [`${mod}+Z`], label: 'Undo', category: 'editor' },
+  { keys: [`${mod}+Shift+Z`], label: 'Redo', category: 'editor' },
+
+  // Build
+  { keys: [`${mod}+B`], label: 'Start / stop build', category: 'build' },
+  { keys: [`${mod}+\``], label: 'Toggle terminal', category: 'build' },
+
+  // General
+  { keys: ['?'], label: 'Show keyboard shortcuts', category: 'general' },
+  { keys: [`${mod}+?`], label: 'Show keyboard shortcuts (alt)', category: 'general' },
+  { keys: ['Escape'], label: 'Close modals', category: 'general' },
 ];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  navigation: 'Navigation',
+  editor: 'Editor',
+  build: 'Build',
+  general: 'General',
+};
+
+const CATEGORY_ORDER = ['navigation', 'editor', 'build', 'general'];
 
 export function useKeyboardShortcuts({
   onToggleTerminal,
@@ -31,8 +53,19 @@ export function useKeyboardShortcuts({
     (e: KeyboardEvent) => {
       const isModKey = isMac ? e.metaKey : e.ctrlKey;
 
+      // Don't trigger "?" shortcut when typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable;
+
       // Cmd+? / Ctrl+?
       if (isModKey && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
+        e.preventDefault();
+        setShowHelp((prev) => !prev);
+        return;
+      }
+
+      // "?" key alone (when not in an input)
+      if (e.key === '?' && !isModKey && !isInput) {
         e.preventDefault();
         setShowHelp((prev) => !prev);
         return;
@@ -75,6 +108,34 @@ export function KeyboardShortcutsModal({
   open: boolean;
   onClose: () => void;
 }) {
+  const [search, setSearch] = useState('');
+
+  // Reset search when modal opens
+  useEffect(() => {
+    if (open) setSearch('');
+  }, [open]);
+
+  const filteredShortcuts = useMemo(() => {
+    if (!search.trim()) return SHORTCUTS;
+    const q = search.toLowerCase();
+    return SHORTCUTS.filter(
+      (s) =>
+        s.label.toLowerCase().includes(q) ||
+        s.keys.some((k) => k.toLowerCase().includes(q)) ||
+        s.category.toLowerCase().includes(q),
+    );
+  }, [search]);
+
+  // Group by category
+  const grouped = useMemo(() => {
+    const groups: Record<string, Shortcut[]> = {};
+    for (const s of filteredShortcuts) {
+      if (!groups[s.category]) groups[s.category] = [];
+      groups[s.category].push(s);
+    }
+    return groups;
+  }, [filteredShortcuts]);
+
   if (!open) return null;
 
   return (
@@ -83,9 +144,10 @@ export function KeyboardShortcutsModal({
       onClick={onClose}
     >
       <div
-        className="bg-card rounded-card shadow-card-hover border border-border w-full max-w-md mx-4"
+        className="bg-card rounded-xl shadow-2xl border border-border w-full max-w-md mx-4 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <Keyboard size={16} className="text-primary" />
@@ -98,26 +160,66 @@ export function KeyboardShortcutsModal({
             <X size={16} />
           </button>
         </div>
-        <div className="p-4 space-y-1">
-          {SHORTCUTS.map((s) => (
-            <div
-              key={s.label}
-              className="flex items-center justify-between px-2 py-2 rounded-btn hover:bg-hover"
-            >
-              <span className="text-xs text-ink">{s.label}</span>
-              <div className="flex items-center gap-1">
-                {s.keys.map((key) => (
-                  <kbd
-                    key={key}
-                    className="px-2 py-0.5 text-[11px] font-mono bg-hover border border-border rounded text-muted-accessible"
-                  >
-                    {key}
-                  </kbd>
-                ))}
-              </div>
-            </div>
-          ))}
+
+        {/* Search */}
+        <div className="px-4 py-2 border-b border-border">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Filter shortcuts..."
+              className="w-full pl-9 pr-3 py-1.5 text-xs bg-card border border-border rounded-btn outline-none focus:border-primary transition-colors"
+              autoFocus
+            />
+          </div>
         </div>
+
+        {/* Shortcuts grouped by category */}
+        <div className="max-h-[400px] overflow-y-auto terminal-scroll">
+          {CATEGORY_ORDER.map((cat) => {
+            const items = grouped[cat];
+            if (!items || items.length === 0) return null;
+            return (
+              <div key={cat}>
+                <div className="px-5 pt-3 pb-1">
+                  <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">
+                    {CATEGORY_LABELS[cat]}
+                  </span>
+                </div>
+                <div className="px-4 space-y-0.5 pb-2">
+                  {items.map((s) => (
+                    <div
+                      key={s.label}
+                      className="flex items-center justify-between px-2 py-2 rounded-btn hover:bg-hover"
+                    >
+                      <span className="text-xs text-ink">{s.label}</span>
+                      <div className="flex items-center gap-1">
+                        {s.keys.map((key) => (
+                          <kbd
+                            key={key}
+                            className="px-2 py-0.5 text-[11px] font-mono bg-hover border border-border rounded text-muted-accessible"
+                          >
+                            {key}
+                          </kbd>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredShortcuts.length === 0 && (
+            <div className="px-5 py-8 text-center">
+              <p className="text-xs text-muted">No shortcuts matching "{search}"</p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
         <div className="px-5 py-3 border-t border-border text-center">
           <span className="text-[11px] text-muted">
             Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-hover border border-border rounded">Escape</kbd> to close

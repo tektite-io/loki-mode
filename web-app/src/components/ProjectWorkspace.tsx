@@ -36,6 +36,8 @@ import { ChangePreview } from './ChangePreview';
 import type { FileNode, ChangePreviewData } from '../types/api';
 import { CICDPanel } from './CICDPanel';
 import type { SessionDetail } from '../api/client';
+import { FeatureDiscoveryDot, markFeatureDiscovered } from './FeatureDiscoveryDot';
+import { ContextualHelp, HELP_TOOLTIPS } from './ContextualHelp';
 
 // Wrapper to avoid inline import complexity
 function CICDPanelLazy({ sessionId }: { sessionId: string }) {
@@ -1335,13 +1337,20 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
                       { id: 'git' as const, label: 'Git', icon: GitBranch },
                       { id: 'cicd' as const, label: 'CI/CD', icon: CICDIcon },
-                    ]).map(tab => (
+                    ]).map(tab => {
+                      const discoveryMap: Record<string, 'deploy_tab' | 'git_tab'> = { deploy: 'deploy_tab', git: 'git_tab' };
+                      const discoveryFeature = discoveryMap[tab.id];
+                      return (
                       <button
                         key={tab.id}
                         role="tab"
                         aria-selected={activeWorkspaceTab === tab.id}
-                        onClick={() => setActiveWorkspaceTab(tab.id)}
-                        className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                        onClick={() => {
+                          setActiveWorkspaceTab(tab.id);
+                          if (discoveryFeature) markFeatureDiscovered(discoveryFeature);
+                        }}
+                        data-tour={tab.id === 'preview' ? 'preview-tab' : tab.id === 'deploy' ? 'deploy-tab' : undefined}
+                        className={`relative flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
                           activeWorkspaceTab === tab.id
                             ? 'border-primary text-primary'
                             : 'border-transparent text-muted hover:text-ink hover:border-border'
@@ -1349,8 +1358,12 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       >
                         <tab.icon size={14} />
                         {tab.label}
+                        {discoveryFeature && (
+                          <FeatureDiscoveryDot feature={discoveryFeature} className="ml-1" />
+                        )}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Tab content */}
