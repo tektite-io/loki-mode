@@ -89,6 +89,10 @@ export { LokiRunManager } from './components/loki-run-manager.js';
 export { LokiAuditViewer } from './components/loki-audit-viewer.js';
 export { LokiApiKeys } from './components/loki-api-keys.js';
 export { LokiTenantSwitcher } from './components/loki-tenant-switcher.js';
+export { LokiDashboardHeader } from './components/loki-dashboard-header.js';
+export { LokiDashboardGrid } from './components/loki-dashboard-grid.js';
+export { LokiKpiCard } from './components/loki-kpi-card.js';
+export { LokiSessionTimeline } from './components/loki-session-timeline.js';
 
 // Version
 export const VERSION = '1.3.0';
@@ -149,6 +153,10 @@ const componentModules = [
   './components/loki-audit-viewer.js',
   './components/loki-api-keys.js',
   './components/loki-tenant-switcher.js',
+  './components/loki-dashboard-header.js',
+  './components/loki-dashboard-grid.js',
+  './components/loki-kpi-card.js',
+  './components/loki-session-timeline.js',
 ];
 
 // Components are registered via customElements.define in their respective files

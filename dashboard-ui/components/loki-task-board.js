@@ -43,6 +43,10 @@ export class LokiTaskBoard extends LokiElement {
     this._error = null;
     this._draggedTask = null;
     this._selectedTask = null;
+    this._expandedCards = new Set();
+    this._selectedTasks = new Set();
+    this._bulkMode = false;
+    this._activeFilter = 'all';
     this._api = null;
     this._state = getState();
   }
@@ -122,7 +126,8 @@ export class LokiTaskBoard extends LokiElement {
   }
 
   _getTasksByStatus(status) {
-    return this._tasks.filter(t => {
+    const tasks = this._getFilteredTasks();
+    return tasks.filter(t => {
       const taskStatus = t.status?.toLowerCase().replace(/-/g, '_');
       return taskStatus === status;
     });
@@ -194,6 +199,107 @@ export class LokiTaskBoard extends LokiElement {
       this.render();
       console.error('Failed to move task:', error);
     }
+  }
+
+  _toggleCardExpand(taskId) {
+    if (this._expandedCards.has(taskId)) {
+      this._expandedCards.delete(taskId);
+    } else {
+      this._expandedCards.add(taskId);
+    }
+    this.render();
+  }
+
+  _toggleTaskSelection(taskId, event) {
+    if (event) event.stopPropagation();
+    if (this._selectedTasks.has(taskId)) {
+      this._selectedTasks.delete(taskId);
+    } else {
+      this._selectedTasks.add(taskId);
+    }
+    this.render();
+  }
+
+  _toggleBulkMode() {
+    this._bulkMode = !this._bulkMode;
+    if (!this._bulkMode) {
+      this._selectedTasks.clear();
+    }
+    this.render();
+  }
+
+  async _bulkMove(newStatus) {
+    const taskIds = [...this._selectedTasks];
+    for (const taskId of taskIds) {
+      const task = this._tasks.find(t => String(t.id) === String(taskId));
+      if (task && task.status !== newStatus) {
+        try {
+          if (task.isLocal) {
+            this._state.moveLocalTask(taskId, newStatus);
+          } else {
+            await this._api.moveTask(taskId, newStatus, 0);
+          }
+          task.status = newStatus;
+        } catch (error) {
+          console.error('Failed to bulk move task:', taskId, error);
+        }
+      }
+    }
+    this._selectedTasks.clear();
+    this._bulkMode = false;
+    this.render();
+    this._loadTasks();
+  }
+
+  async _bulkDelete() {
+    const taskIds = [...this._selectedTasks];
+    for (const taskId of taskIds) {
+      try {
+        await this._api.deleteTask(taskId);
+      } catch (error) {
+        console.error('Failed to delete task:', taskId, error);
+      }
+    }
+    this._selectedTasks.clear();
+    this._bulkMode = false;
+    this._loadTasks();
+  }
+
+  _setFilter(filter) {
+    this._activeFilter = filter;
+    this.render();
+  }
+
+  _getFilteredTasks() {
+    let filtered = [...this._tasks];
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    switch (this._activeFilter) {
+      case 'today':
+        filtered = filtered.filter(t => {
+          const created = t.created_at ? new Date(t.created_at) : null;
+          return created && created >= today;
+        });
+        break;
+      case 'this-week':
+        filtered = filtered.filter(t => {
+          const created = t.created_at ? new Date(t.created_at) : null;
+          return created && created >= weekAgo;
+        });
+        break;
+      case 'running':
+        filtered = filtered.filter(t => t.status === 'in_progress');
+        break;
+      case 'failed':
+        filtered = filtered.filter(t => t.status === 'failed' || t.status === 'error');
+        break;
+      default:
+        break;
+    }
+
+    return filtered;
   }
 
   _openAddTaskModal(status = 'pending') {
@@ -413,7 +519,13 @@ export class LokiTaskBoard extends LokiElement {
           border-radius: 4px;
           padding: 10px;
           cursor: pointer;
-          transition: all var(--loki-transition);
+          transition: transform 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease, border-color 0.2s ease;
+          animation: cardFadeIn 0.3s ease;
+        }
+
+        @keyframes cardFadeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .task-card:hover {
@@ -427,12 +539,22 @@ export class LokiTaskBoard extends LokiElement {
         }
 
         .task-card.dragging {
-          opacity: 0.5;
+          opacity: 0.4;
+          transform: scale(0.95);
           cursor: grabbing;
         }
 
         .task-card.local {
           border-left: 3px solid var(--loki-accent);
+        }
+
+        .task-card.selected {
+          border-color: var(--loki-accent);
+          box-shadow: 0 0 0 2px var(--loki-accent-muted);
+        }
+
+        .task-card.expanded {
+          background: var(--loki-bg-secondary);
         }
 
         .task-card-header {
@@ -714,6 +836,254 @@ export class LokiTaskBoard extends LokiElement {
           font-size: 11px;
           color: var(--loki-text-muted);
         }
+
+        /* G72: Smooth transition when cards move */
+        .kanban-tasks {
+          position: relative;
+        }
+
+        /* G73: Expanded card content */
+        .card-expanded-content {
+          margin-top: 8px;
+          padding-top: 8px;
+          border-top: 1px solid var(--loki-border);
+          animation: expandIn 0.25s ease;
+        }
+
+        @keyframes expandIn {
+          from { opacity: 0; max-height: 0; }
+          to { opacity: 1; max-height: 400px; }
+        }
+
+        .card-expanded-desc {
+          font-size: 11px;
+          line-height: 1.6;
+          color: var(--loki-text-secondary);
+          margin-bottom: 6px;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+
+        .card-expanded-meta {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 4px;
+          font-size: 10px;
+          color: var(--loki-text-muted);
+        }
+
+        .card-expanded-meta dt {
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        .card-expanded-meta dd {
+          margin: 0;
+          color: var(--loki-text-secondary);
+          font-family: 'JetBrains Mono', monospace;
+        }
+
+        .expand-toggle {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+          font-size: 10px;
+          color: var(--loki-text-muted);
+          cursor: pointer;
+          padding: 2px 0;
+        }
+
+        .expand-toggle:hover {
+          color: var(--loki-accent);
+        }
+
+        .expand-toggle svg {
+          width: 12px;
+          height: 12px;
+        }
+
+        /* G74: Bulk selection checkbox */
+        .task-checkbox {
+          width: 14px;
+          height: 14px;
+          border-radius: 3px;
+          border: 1.5px solid var(--loki-border-light);
+          background: var(--loki-bg-card);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          transition: all var(--loki-transition);
+        }
+
+        .task-checkbox:hover {
+          border-color: var(--loki-accent);
+        }
+
+        .task-checkbox.checked {
+          background: var(--loki-accent);
+          border-color: var(--loki-accent);
+        }
+
+        .task-checkbox.checked::after {
+          content: '';
+          width: 8px;
+          height: 8px;
+          background: white;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+          -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+          mask-size: contain;
+          -webkit-mask-size: contain;
+        }
+
+        .bulk-actions-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          background: var(--loki-accent-muted);
+          border: 1px solid var(--loki-accent);
+          border-radius: 4px;
+          margin-bottom: 12px;
+          font-size: 12px;
+          color: var(--loki-text-primary);
+          animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .bulk-count {
+          font-weight: 600;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--loki-accent);
+        }
+
+        .bulk-btn {
+          padding: 4px 10px;
+          font-size: 11px;
+          font-weight: 500;
+          border-radius: 3px;
+          border: 1px solid var(--loki-border);
+          background: var(--loki-bg-card);
+          color: var(--loki-text-secondary);
+          cursor: pointer;
+          transition: all var(--loki-transition);
+        }
+
+        .bulk-btn:hover {
+          background: var(--loki-bg-hover);
+          border-color: var(--loki-border-light);
+        }
+
+        .bulk-btn.danger {
+          color: var(--loki-red);
+          border-color: var(--loki-red-muted);
+        }
+
+        .bulk-btn.danger:hover {
+          background: var(--loki-red-muted);
+        }
+
+        /* G75: Quick filter dropdown */
+        .filter-bar {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+
+        .filter-label {
+          font-size: 11px;
+          color: var(--loki-text-muted);
+          font-weight: 500;
+        }
+
+        .filter-pill {
+          padding: 4px 10px;
+          font-size: 11px;
+          font-weight: 500;
+          border-radius: 9999px;
+          border: 1px solid var(--loki-border);
+          background: var(--loki-bg-secondary);
+          color: var(--loki-text-secondary);
+          cursor: pointer;
+          transition: all var(--loki-transition);
+        }
+
+        .filter-pill:hover {
+          border-color: var(--loki-border-light);
+          background: var(--loki-bg-hover);
+        }
+
+        .filter-pill.active {
+          background: var(--loki-accent);
+          border-color: var(--loki-accent);
+          color: white;
+        }
+
+        /* G71: Agent Avatars */
+        .agent-avatar {
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 8px;
+          font-weight: 700;
+          color: white;
+          flex-shrink: 0;
+          position: relative;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        .agent-avatar.architect { background: var(--loki-blue); }
+        .agent-avatar.developer { background: var(--loki-purple); }
+        .agent-avatar.tester { background: var(--loki-green); }
+        .agent-avatar.reviewer { background: var(--loki-yellow); }
+        .agent-avatar.default { background: var(--loki-text-muted); }
+
+        .agent-status-dot {
+          position: absolute;
+          bottom: -1px;
+          right: -1px;
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          border: 1.5px solid var(--loki-bg-card);
+        }
+
+        .agent-status-dot.active { background: var(--loki-green); }
+        .agent-status-dot.idle { background: var(--loki-text-muted); }
+        .agent-status-dot.failed { background: var(--loki-red); }
+
+        .agent-tooltip {
+          display: none;
+          position: absolute;
+          bottom: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          margin-bottom: 6px;
+          padding: 4px 8px;
+          background: var(--loki-bg-card);
+          border: 1px solid var(--loki-border);
+          border-radius: 3px;
+          font-size: 10px;
+          color: var(--loki-text-primary);
+          white-space: nowrap;
+          z-index: 10;
+          box-shadow: var(--loki-shadow-md);
+        }
+
+        .agent-avatar:hover .agent-tooltip {
+          display: block;
+        }
       </style>
     `;
 
@@ -739,8 +1109,61 @@ export class LokiTaskBoard extends LokiElement {
       content = `<div class="error">Error: ${this._escapeHtml(this._error)}</div>`;
     } else {
       const readonly = this.hasAttribute('readonly');
+      const filters = [
+        { id: 'all', label: 'All' },
+        { id: 'today', label: 'Today' },
+        { id: 'this-week', label: 'This Week' },
+        { id: 'running', label: 'Running' },
+        { id: 'failed', label: 'Failed' },
+      ];
+
+      const getAgentAvatar = (task) => {
+        if (!task.assigned_agent_id && !task.agent_type) return '';
+        const agentType = (task.agent_type || '').toLowerCase();
+        let initials = 'AG';
+        let cssClass = 'default';
+        let statusClass = 'idle';
+        let tooltipText = `Agent #${task.assigned_agent_id || '?'}`;
+
+        if (agentType.includes('architect') || agentType === 'ar') {
+          initials = 'AR'; cssClass = 'architect'; tooltipText = 'Architect';
+        } else if (agentType.includes('develop') || agentType === 'dv') {
+          initials = 'DV'; cssClass = 'developer'; tooltipText = 'Developer';
+        } else if (agentType.includes('test') || agentType === 'ts') {
+          initials = 'TS'; cssClass = 'tester'; tooltipText = 'Tester';
+        } else if (agentType.includes('review') || agentType === 'rv') {
+          initials = 'RV'; cssClass = 'reviewer'; tooltipText = 'Reviewer';
+        }
+
+        if (task.status === 'in_progress') statusClass = 'active';
+        if (task.status === 'failed' || task.status === 'error') statusClass = 'failed';
+
+        return `
+          <div class="agent-avatar ${cssClass}">
+            ${initials}
+            <span class="agent-status-dot ${statusClass}"></span>
+            <span class="agent-tooltip">${this._escapeHtml(tooltipText)}</span>
+          </div>
+        `;
+      };
 
       content = `
+        <div class="filter-bar">
+          <span class="filter-label">Filter:</span>
+          ${filters.map(f => `
+            <button class="filter-pill ${this._activeFilter === f.id ? 'active' : ''}" data-filter="${f.id}">${f.label}</button>
+          `).join('')}
+        </div>
+
+        ${this._bulkMode && this._selectedTasks.size > 0 ? `
+          <div class="bulk-actions-bar">
+            <span class="bulk-count">${this._selectedTasks.size}</span> selected
+            <button class="bulk-btn" data-bulk-action="in_progress">Move to In Progress</button>
+            <button class="bulk-btn" data-bulk-action="done">Mark Done</button>
+            <button class="bulk-btn danger" data-bulk-action="delete">Delete</button>
+          </div>
+        ` : ''}
+
         <div class="kanban-board">
           ${COLUMNS.map(col => {
             const tasks = this._getTasksByStatus(col.status);
@@ -757,26 +1180,48 @@ export class LokiTaskBoard extends LokiElement {
                 </div>
                 <div class="kanban-tasks" data-status="${col.status}">
                   ${tasks.length === 0 ? `<div class="empty-column">No tasks</div>` : ''}
-                  ${tasks.map(task => `
-                    <div class="task-card ${!readonly && !task.fromServer ? 'draggable' : ''} ${task.isLocal ? 'local' : ''}"
-                         data-task-id="${this._escapeHtml(String(task.id || ''))}"
+                  ${tasks.map(task => {
+                    const taskIdStr = String(task.id || '');
+                    const isExpanded = this._expandedCards.has(taskIdStr);
+                    const isSelected = this._selectedTasks.has(taskIdStr);
+                    return `
+                    <div class="task-card ${!readonly && !task.fromServer ? 'draggable' : ''} ${task.isLocal ? 'local' : ''} ${isExpanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}"
+                         data-task-id="${this._escapeHtml(taskIdStr)}"
                          tabindex="0"
                          role="button"
                          aria-label="Task: ${this._escapeHtml(task.title || 'Untitled')}, ${this._escapeHtml(String(task.priority || 'medium'))} priority"
                          ${!readonly && !task.fromServer ? 'draggable="true"' : ''}>
                       <div class="task-card-header">
-                        <span class="task-id">${task.isLocal ? 'LOCAL' : '#' + this._escapeHtml(String(task.id || ''))}</span>
-                        <span class="task-priority ${this._escapeHtml(String(task.priority || 'medium').toLowerCase())}">${this._escapeHtml(String(task.priority || 'medium'))}</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                          ${this._bulkMode ? `<div class="task-checkbox ${isSelected ? 'checked' : ''}" data-check-id="${this._escapeHtml(taskIdStr)}"></div>` : ''}
+                          <span class="task-id">${task.isLocal ? 'LOCAL' : '#' + this._escapeHtml(taskIdStr)}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                          ${getAgentAvatar(task)}
+                          <span class="task-priority ${this._escapeHtml(String(task.priority || 'medium').toLowerCase())}">${this._escapeHtml(String(task.priority || 'medium'))}</span>
+                        </div>
                       </div>
                       <div class="task-title">${this._escapeHtml(task.title || 'Untitled')}</div>
-                      ${task.description ? `<div class="task-desc">${this._escapeHtml(task.description.substring(0, 80))}${task.description.length > 80 ? '...' : ''}</div>` : ''}
+                      ${!isExpanded && task.description ? `<div class="task-desc">${this._escapeHtml(task.description.substring(0, 80))}${task.description.length > 80 ? '...' : ''}</div>` : ''}
                       <div class="task-meta">
                         <span class="task-type">${this._escapeHtml(String(task.type || 'task'))}</span>
-                        ${task.acceptance_criteria?.length ? `<span>${task.acceptance_criteria.length} criteria</span>` : ''}
-                        ${task.assigned_agent_id ? `<span>Agent #${this._escapeHtml(String(task.assigned_agent_id))}</span>` : ''}
+                        <span class="expand-toggle" data-expand-id="${this._escapeHtml(taskIdStr)}">
+                          ${isExpanded ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg> Less' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg> More'}
+                        </span>
                       </div>
+                      ${isExpanded ? `
+                        <div class="card-expanded-content">
+                          ${task.description ? `<div class="card-expanded-desc">${this._escapeHtml(task.description)}</div>` : ''}
+                          <dl class="card-expanded-meta">
+                            ${task.assigned_agent_id ? `<dt>Agent</dt><dd>#${this._escapeHtml(String(task.assigned_agent_id))}</dd>` : ''}
+                            ${task.created_at ? `<dt>Created</dt><dd>${this._escapeHtml(new Date(task.created_at).toLocaleString())}</dd>` : ''}
+                            ${task.updated_at ? `<dt>Updated</dt><dd>${this._escapeHtml(new Date(task.updated_at).toLocaleString())}</dd>` : ''}
+                            ${task.acceptance_criteria?.length ? `<dt>Criteria</dt><dd>${task.acceptance_criteria.length} items</dd>` : ''}
+                          </dl>
+                        </div>
+                      ` : ''}
                     </div>
-                  `).join('')}
+                  `;}).join('')}
                 </div>
                 ${!readonly && col.status === 'pending' ? `
                   <button class="add-task-btn" data-status="${col.status}" aria-label="Add new task to ${col.label}">+ Add Task</button>
@@ -794,6 +1239,13 @@ export class LokiTaskBoard extends LokiElement {
         <div class="board-header">
           <h2 class="board-title">Task Queue</h2>
           <div class="board-actions">
+            <button class="btn btn-secondary" id="bulk-toggle-btn" aria-label="Toggle bulk selection">
+              <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" aria-hidden="true">
+                <polyline points="9 11 12 14 22 4"/>
+                <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+              </svg>
+              ${this._bulkMode ? 'Cancel' : 'Select'}
+            </button>
             <button class="btn btn-secondary" id="refresh-btn" aria-label="Refresh task board">
               <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" aria-hidden="true">
                 <polyline points="23 4 23 10 17 10"/>
@@ -819,10 +1271,49 @@ export class LokiTaskBoard extends LokiElement {
       refreshBtn.addEventListener('click', () => this._loadTasks());
     }
 
+    // Bulk mode toggle
+    const bulkToggle = this.shadowRoot.getElementById('bulk-toggle-btn');
+    if (bulkToggle) {
+      bulkToggle.addEventListener('click', () => this._toggleBulkMode());
+    }
+
+    // Filter pills
+    this.shadowRoot.querySelectorAll('.filter-pill').forEach(pill => {
+      pill.addEventListener('click', () => this._setFilter(pill.dataset.filter));
+    });
+
+    // Bulk action buttons
+    this.shadowRoot.querySelectorAll('.bulk-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.bulkAction;
+        if (action === 'delete') {
+          this._bulkDelete();
+        } else {
+          this._bulkMove(action);
+        }
+      });
+    });
+
     // Add task buttons
     this.shadowRoot.querySelectorAll('.add-task-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         this._openAddTaskModal(btn.dataset.status);
+      });
+    });
+
+    // Task checkboxes (bulk mode)
+    this.shadowRoot.querySelectorAll('.task-checkbox').forEach(cb => {
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleTaskSelection(cb.dataset.checkId, e);
+      });
+    });
+
+    // Expand toggles
+    this.shadowRoot.querySelectorAll('.expand-toggle').forEach(toggle => {
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleCardExpand(toggle.dataset.expandId);
       });
     });
 
@@ -833,13 +1324,24 @@ export class LokiTaskBoard extends LokiElement {
 
       if (!task) return;
 
-      card.addEventListener('click', () => this._openTaskDetail(task));
+      card.addEventListener('click', (e) => {
+        // In bulk mode, clicking the card toggles selection
+        if (this._bulkMode) {
+          this._toggleTaskSelection(taskId, e);
+          return;
+        }
+        this._openTaskDetail(task);
+      });
 
       // Keyboard navigation support
       card.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          this._openTaskDetail(task);
+          if (this._bulkMode) {
+            this._toggleTaskSelection(taskId, e);
+          } else {
+            this._openTaskDetail(task);
+          }
         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           this._navigateTaskCards(card, e.key === 'ArrowDown' ? 'next' : 'prev');

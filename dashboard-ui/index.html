@@ -368,33 +368,63 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <header class="header">
-            <div class="logo">
-                <span class="logo-brand">Autonomi</span>
-                <span class="logo-subtitle">Loki Mode Dashboard</span>
-            </div>
-            <div class="header-actions">
-                <a href="https://github.com/asklokesh/claudeskill-loki-mode" class="docs-link" target="_blank">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                    GitHub
-                </a>
-                <div class="theme-toggle" id="theme-toggle" title="Toggle theme (T)">
-                    <button class="theme-toggle-option active" id="theme-opt-light" data-theme="light">Light</button>
-                    <button class="theme-toggle-option" id="theme-opt-dark" data-theme="dark">Dark</button>
-                </div>
-            </div>
-        </header>
+    <!-- G78: Dashboard Header -->
+    <loki-dashboard-header id="dashboard-header"></loki-dashboard-header>
 
+    <div class="container">
         <!-- API Configuration -->
         <div class="api-config">
             <label>API URL:</label>
             <input type="text" id="api-url" value="auto-detect" placeholder="auto-detect">
             <button id="connect-btn">Connect</button>
         </div>
+
+        <!-- G69: KPI Cards Row -->
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <div class="section-label">
+                        <span class="section-label-dot"></span>
+                        <span class="section-label-text">Metrics</span>
+                    </div>
+                    <h2 class="section-title">Key Metrics</h2>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                <loki-kpi-card id="kpi-iteration" label="Iteration" value="0" icon="activity" trend="flat"></loki-kpi-card>
+                <loki-kpi-card id="kpi-tasks" label="Tasks Completed" value="0" icon="check-circle" trend="up" trend-value="+0%"></loki-kpi-card>
+                <loki-kpi-card id="kpi-agents" label="Active Agents" value="0" icon="users" trend="flat"></loki-kpi-card>
+                <loki-kpi-card id="kpi-uptime" label="Uptime" value="--" icon="clock" trend="flat"></loki-kpi-card>
+            </div>
+        </section>
+
+        <!-- G70: Session Timeline -->
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <div class="section-label">
+                        <span class="section-label-dot"></span>
+                        <span class="section-label-text">Timeline</span>
+                    </div>
+                    <h2 class="section-title">Session Timeline</h2>
+                </div>
+            </div>
+            <loki-session-timeline id="session-timeline"></loki-session-timeline>
+        </section>
+
+        <!-- Overview Section -->
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <div class="section-label">
+                        <span class="section-label-dot"></span>
+                        <span class="section-label-text">Overview</span>
+                    </div>
+                    <h2 class="section-title">System Overview</h2>
+                </div>
+            </div>
+            <loki-overview id="overview"></loki-overview>
+        </section>
 
         <!-- Task Board Section -->
         <section class="section">
@@ -408,11 +438,8 @@
                 </div>
             </div>
             <p class="section-description">
-                Kanban-style task board with drag-and-drop support. Syncs with the Loki Mode API and supports local tasks.
+                Kanban-style task board with drag-and-drop, bulk actions, quick filters, and inline card expansion.
             </p>
-            <div class="code-block">
-                <code>&lt;loki-task-board api-url="auto-detect" project-id="1"&gt;&lt;/loki-task-board&gt;</code>
-            </div>
             <loki-task-board id="task-board"></loki-task-board>
         </section>
 
@@ -428,12 +455,6 @@
                         </div>
                         <h2 class="section-title">Session Control</h2>
                     </div>
-                </div>
-                <p class="section-description">
-                    Control panel for managing Loki Mode sessions with status display and action buttons.
-                </p>
-                <div class="code-block">
-                    <code>&lt;loki-session-control api-url="auto-detect"&gt;&lt;/loki-session-control&gt;</code>
                 </div>
                 <div class="component-wrapper">
                     <div class="component-label">Full Mode</div>
@@ -456,12 +477,6 @@
                         <h2 class="section-title">Log Stream</h2>
                     </div>
                 </div>
-                <p class="section-description">
-                    Real-time log viewer with filtering, auto-scroll, and download capabilities.
-                </p>
-                <div class="code-block">
-                    <code>&lt;loki-log-stream api-url="auto-detect" auto-scroll&gt;&lt;/loki-log-stream&gt;</code>
-                </div>
                 <loki-log-stream id="log-stream" auto-scroll max-lines="100"></loki-log-stream>
             </section>
         </div>
@@ -477,12 +492,6 @@
                     <h2 class="section-title">Memory Browser</h2>
                 </div>
             </div>
-            <p class="section-description">
-                Browse and explore the Loki Mode memory system including episodic, semantic, and procedural memories.
-            </p>
-            <div class="code-block">
-                <code>&lt;loki-memory-browser api-url="auto-detect" tab="summary"&gt;&lt;/loki-memory-browser&gt;</code>
-            </div>
             <loki-memory-browser id="memory-browser"></loki-memory-browser>
         </section>
 
@@ -496,12 +505,6 @@
                     </div>
                     <h2 class="section-title">Learning Dashboard</h2>
                 </div>
-            </div>
-            <p class="section-description">
-                Visualize learning metrics from cross-tool learning signals including preferences, error patterns, success patterns, and tool efficiency.
-            </p>
-            <div class="code-block">
-                <code>&lt;loki-learning-dashboard api-url="auto-detect" time-range="7d"&gt;&lt;/loki-learning-dashboard&gt;</code>
             </div>
             <loki-learning-dashboard id="learning-dashboard"></loki-learning-dashboard>
         </section>
@@ -517,12 +520,6 @@
                     <h2 class="section-title">Completion Council</h2>
                 </div>
             </div>
-            <p class="section-description">
-                Multi-agent completion verification. Council members vote on project completion with convergence tracking, circuit breaker, and anti-sycophancy checks.
-            </p>
-            <div class="code-block">
-                <code>&lt;loki-council-dashboard api-url="auto-detect"&gt;&lt;/loki-council-dashboard&gt;</code>
-            </div>
             <loki-council-dashboard id="council-dashboard"></loki-council-dashboard>
         </section>
 
@@ -537,9 +534,6 @@
                     <h2 class="section-title">Component Events</h2>
                 </div>
             </div>
-            <p class="section-description">
-                Events emitted by the components. Useful for integrating with your application.
-            </p>
             <div class="event-log" id="event-log">
                 <div class="event-log-entry">
                     <span class="event-log-time">--:--:--</span>
@@ -562,34 +556,24 @@
         import './components/loki-council-dashboard.js';
         import './components/loki-quality-gates.js';
         import './components/loki-rarv-timeline.js';
+        import './components/loki-overview.js';
+        import './components/loki-dashboard-header.js';
+        import './components/loki-dashboard-grid.js';
+        import './components/loki-kpi-card.js';
+        import './components/loki-session-timeline.js';
 
         // Initialize theme - default to light
         LokiTheme.init();
 
-        const optLight = document.getElementById('theme-opt-light');
-        const optDark = document.getElementById('theme-opt-dark');
-
         function updateThemeUI() {
             const theme = LokiTheme.getTheme();
             const isDark = theme.includes('dark') || theme === 'high-contrast';
-            // Also set data-theme on html for shell CSS
             document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-            optLight.classList.toggle('active', !isDark);
-            optDark.classList.toggle('active', isDark);
         }
 
-        optLight.addEventListener('click', () => {
-            LokiTheme.setTheme('light');
-            updateThemeUI();
-        });
-
-        optDark.addEventListener('click', () => {
-            LokiTheme.setTheme('dark');
-            updateThemeUI();
-        });
-
+        // The dashboard-header component has its own theme toggle (sun/moon icon)
+        // Listen for theme changes to keep shell CSS in sync
         window.addEventListener('loki-theme-change', () => updateThemeUI());
-
         updateThemeUI();
 
         // API URL configuration
@@ -603,18 +587,19 @@
         });
 
         function updateComponentsApiUrl(apiUrl) {
-            document.getElementById('task-board').setAttribute('api-url', apiUrl);
-            document.getElementById('session-control').setAttribute('api-url', apiUrl);
-            document.getElementById('session-control-compact').setAttribute('api-url', apiUrl);
-            document.getElementById('log-stream').setAttribute('api-url', apiUrl);
-            document.getElementById('memory-browser').setAttribute('api-url', apiUrl);
-            document.getElementById('learning-dashboard').setAttribute('api-url', apiUrl);
-            document.getElementById('council-dashboard').setAttribute('api-url', apiUrl);
+            const componentIds = [
+                'task-board', 'session-control', 'session-control-compact',
+                'log-stream', 'memory-browser', 'learning-dashboard',
+                'council-dashboard', 'dashboard-header', 'session-timeline', 'overview'
+            ];
+            componentIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.setAttribute('api-url', apiUrl);
+            });
         }
 
         // Event logging
         const eventLog = document.getElementById('event-log');
-        const logStream = document.getElementById('log-stream');
 
         function escapeHtml(str) {
             const div = document.createElement('div');
