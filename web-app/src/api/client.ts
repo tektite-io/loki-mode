@@ -33,6 +33,10 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => '');
     throw new Error(`API error ${res.status}: ${res.statusText}${body ? ` - ${body}` : ''}`);
   }
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('API endpoint not available. Please restart the server with the latest version.');
+  }
   return res.json();
 }
 

@@ -47,7 +47,7 @@ import {
   FullscreenButton, PreviewConsole, RefreshButton, PreviewSkeleton,
 } from './PreviewToolbar';
 import type { ConsoleMessage } from './PreviewToolbar';
-import { SmartSuggestions } from './SmartSuggestions';
+
 import { AIChatPanel } from './AIChatPanel';
 import { ConfidenceIndicator } from './ConfidenceIndicator';
 import { BuildInsights } from './BuildInsights';
@@ -1458,19 +1458,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                     </div>
                   ) : (
                     <div className="flex-1 flex flex-col min-h-0">
-                      <SmartSuggestions
-                        projectState={
-                          isBuilding ? 'building'
-                            : buildPhase === 'complete' ? 'completed'
-                            : sessionData.files.length === 0 ? 'empty'
-                            : 'idle'
-                        }
-                        hasSession={!!sessionData.id}
-                        files={sessionData.files.map(f => ({ path: f.path, type: f.type }))}
-                        phase={buildPhase}
-                        onSelect={() => {}}
-                        className="border-b border-border"
-                      />
                       <div className="flex-1 min-h-0">
                         <AIChatPanel sessionId={sessionData.id} defaultMode={buildMode} />
                       </div>
