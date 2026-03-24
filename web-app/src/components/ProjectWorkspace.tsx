@@ -12,7 +12,7 @@ import {
   Code2, Eye as PreviewIcon, Settings2, KeyRound, FileText as PrdIcon,
   AlertTriangle,
   Server, Package, Terminal,
-  RefreshCw,
+  RefreshCw, PanelLeftClose, PanelLeftOpen, PanelBottomClose, PanelBottomOpen, Maximize2, Minimize2,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -404,6 +404,19 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     name: string;
     type: 'file' | 'directory';
   } | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [bottomPanelVisible, setBottomPanelVisible] = useState(true);
+  const [zenMode, setZenMode] = useState(false);
+
+  const toggleZenMode = useCallback(() => {
+    setZenMode(prev => {
+      const next = !prev;
+      setSidebarVisible(!next);
+      setBottomPanelVisible(!next);
+      return next;
+    });
+  }, []);
+
   const [buildMode, setBuildMode] = useState<'quick' | 'standard' | 'max'>(() => {
     return (sessionStorage.getItem(`pl_buildmode_${sessionData.id}`) as 'quick' | 'standard' | 'max') || 'standard';
   });
@@ -985,6 +998,31 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
             ? 'bg-success/10 text-success' : 'bg-muted/10 text-muted'
         }`}>{sessionData.status}</span>
 
+        {/* Layout toggle buttons */}
+        <div className="flex items-center gap-0.5 border-l border-border pl-2 ml-1">
+          <button
+            onClick={() => setSidebarVisible(v => !v)}
+            title={sidebarVisible ? 'Hide file tree' : 'Show file tree'}
+            className="p-1.5 rounded hover:bg-hover text-muted hover:text-ink transition-colors"
+          >
+            {sidebarVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          </button>
+          <button
+            onClick={() => setBottomPanelVisible(v => !v)}
+            title={bottomPanelVisible ? 'Hide terminal/chat' : 'Show terminal/chat'}
+            className="p-1.5 rounded hover:bg-hover text-muted hover:text-ink transition-colors"
+          >
+            {bottomPanelVisible ? <PanelBottomClose size={16} /> : <PanelBottomOpen size={16} />}
+          </button>
+          <button
+            onClick={toggleZenMode}
+            title={zenMode ? 'Exit zen mode' : 'Zen mode (hide all panels)'}
+            className={`p-1.5 rounded hover:bg-hover transition-colors ${zenMode ? 'text-primary' : 'text-muted hover:text-ink'}`}
+          >
+            {zenMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </div>
+
         {/* Start Build button when not building */}
         {!isBuilding && (
           <Button
@@ -1042,6 +1080,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
             {/* Horizontal split: file tree | tabbed content */}
             <PanelGroup orientation="horizontal" className="h-full">
               {/* Sidebar: file tree */}
+              {sidebarVisible && (
               <Panel defaultSize={20} minSize={15}>
                 <div className="h-full flex flex-col border-r border-border bg-card">
                   <div className="px-3 py-2 border-b border-border flex items-center gap-2">
@@ -1087,8 +1126,9 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                   </div>
                 </div>
               </Panel>
+              )}
 
-              <PanelResizeHandle className="w-1 bg-border hover:bg-primary/30 transition-colors cursor-col-resize" />
+              {sidebarVisible && <PanelResizeHandle className="w-1 bg-border hover:bg-primary/30 transition-colors cursor-col-resize" />}
 
               {/* Main content area with workspace tabs */}
               <Panel defaultSize={80} minSize={40}>
@@ -1555,21 +1595,23 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
             </PanelGroup>
           </Panel>
 
-          <PanelResizeHandle className="h-1 bg-border hover:bg-primary/30 cursor-row-resize" />
+          {bottomPanelVisible && <PanelResizeHandle className="h-1 bg-border hover:bg-primary/30 cursor-row-resize" />}
 
-          <Panel defaultSize={30} minSize={15} collapsible>
-            <ErrorBoundary name="ActivityPanel">
-              <ActivityPanel
-                logs={null}
-                logsLoading={false}
-                agents={null}
-                checklist={null}
-                sessionId={session.id}
-                isRunning={sessionData.status === 'running' || sessionData.status === 'in_progress'}
-                buildMode={buildMode}
-              />
-            </ErrorBoundary>
-          </Panel>
+          {bottomPanelVisible && (
+            <Panel defaultSize={30} minSize={15} collapsible>
+              <ErrorBoundary name="ActivityPanel">
+                <ActivityPanel
+                  logs={null}
+                  logsLoading={false}
+                  agents={null}
+                  checklist={null}
+                  sessionId={session.id}
+                  isRunning={sessionData.status === 'running' || sessionData.status === 'in_progress'}
+                  buildMode={buildMode}
+                />
+              </ErrorBoundary>
+            </Panel>
+          )}
         </PanelGroup>
       </div>
 

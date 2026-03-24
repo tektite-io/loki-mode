@@ -11,35 +11,54 @@
   }
 
   /* Bump small text sizes for readability */
-  .text-xs { font-size: 0.8125rem !important; line-height: 1.4 !important; }
-  .text-\[10px\] { font-size: 0.6875rem !important; }
-  .text-\[11px\] { font-size: 0.75rem !important; }
+  .text-xs { font-size: 0.8125rem !important; line-height: 1.5 !important; }
+  .text-sm { font-size: 0.9375rem !important; line-height: 1.5 !important; }
+  .text-\[10px\] { font-size: 0.75rem !important; }
+  .text-\[11px\] { font-size: 0.8125rem !important; }
 
-  /* Custom scrollbar for terminal */
-  .terminal-scroll::-webkit-scrollbar {
-    width: 6px;
+  /* Smooth transitions everywhere */
+  *, *::before, *::after {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .terminal-scroll::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .terminal-scroll::-webkit-scrollbar-thumb {
-    background: rgba(85, 61, 233, 0.2);
-    border-radius: 3px;
-  }
-  .terminal-scroll::-webkit-scrollbar-thumb:hover {
-    background: rgba(85, 61, 233, 0.35);
-  }
+
+  /* Custom scrollbar */
+  .terminal-scroll::-webkit-scrollbar { width: 6px; }
+  .terminal-scroll::-webkit-scrollbar-track { background: transparent; }
+  .terminal-scroll::-webkit-scrollbar-thumb { background: rgba(85, 61, 233, 0.2); border-radius: 3px; }
+  .terminal-scroll::-webkit-scrollbar-thumb:hover { background: rgba(85, 61, 233, 0.35); }
 }
 
 @layer components {
+  /* Cards with smooth hover */
   .card {
     background: #FFFFFF;
     border: 1px solid #ECEAE3;
-    border-radius: 5px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
   }
   .card:hover, .card-hover:hover {
-    box-shadow: 0 5px 10px rgba(0,0,0,0.08);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.08), 0 3px 10px rgba(0,0,0,0.04);
+    transform: translateY(-1px);
+  }
+
+  /* Better buttons */
+  button, [role="button"], .rounded-btn {
+    border-radius: 8px !important;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  button:active, [role="button"]:active {
+    transform: scale(0.97);
+  }
+
+  /* Tab improvements */
+  [role="tab"] {
+    padding: 0.5rem 1rem !important;
+    font-size: 0.875rem !important;
+    font-weight: 500;
+    border-radius: 6px 6px 0 0;
   }
 
   .pattern-nodes {
@@ -60,6 +79,7 @@
   ::selection { background: #E8E4FD; color: #201515; }
 
   @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0s !important; }
     .phase-active { animation: none; }
   }
 
