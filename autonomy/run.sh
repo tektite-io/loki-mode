@@ -947,8 +947,9 @@ emit_event_json() {
         else
             json_data+=","
         fi
-        # Quote string values, leave numbers/booleans as-is
-        if [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" =~ ^(true|false|null)$ ]]; then
+        # Quote string values, leave numbers/booleans/floats as-is
+        # BUG-NEW-004: Also match floats (e.g., cost=3.14) not just integers
+        if [[ "$value" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ "$value" =~ ^(true|false|null)$ ]]; then
             json_data+="\"$key\":$value"
         else
             # Escape backslashes, quotes, and special chars in value
@@ -9850,6 +9851,8 @@ if __name__ == "__main__":
                 log_info "Perpetual mode: Ignoring exit, continuing immediately..."
                 # BUG-RUN-010: Reset retry counter on success (only count failures)
                 retry=0
+                # BUG-NEW-003: Clean up per-iteration output before continuing
+                rm -f "$iter_output" 2>/dev/null
                 continue  # Immediately start next iteration, no wait
             fi
 
@@ -9896,6 +9899,8 @@ if __name__ == "__main__":
             log_step "Starting next iteration..."
             # BUG-RUN-010: Reset retry counter on success (only count failures)
             retry=0
+            # BUG-NEW-003: Clean up per-iteration output before continuing
+            rm -f "$iter_output" 2>/dev/null
             continue  # Immediately start next iteration, no exponential backoff
         fi
 
