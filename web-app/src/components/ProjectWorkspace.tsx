@@ -580,6 +580,8 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     return () => { cancelled = true; clearInterval(interval); };
   }, [activeWorkspaceTab, sessionData.id]);
 
+  // (auto-start moved after handleStartDevServer declaration)
+
   const handleStartDevServer = useCallback(async (command?: string) => {
     setDevServerStarting(true);
     setDevServerError(null);
@@ -597,6 +599,18 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     }
     setDevServerStarting(false);
   }, [sessionData.id]);
+
+  // Auto-start dev server when project loads (if not already running)
+  const autoStartAttempted = useRef(false);
+  useEffect(() => {
+    if (autoStartAttempted.current) return;
+    if (!previewInfo?.dev_command) return;
+    if (devServer?.running || devServer?.status === 'starting') return;
+    if (devServerStarting) return;
+
+    autoStartAttempted.current = true;
+    handleStartDevServer(previewInfo.dev_command);
+  }, [previewInfo?.dev_command, devServer?.running, devServer?.status, devServerStarting, handleStartDevServer]);
 
   const handleStopDevServer = useCallback(async () => {
     try {
