@@ -222,4 +222,64 @@
   .quick-input-placeholder-exit {
     animation: placeholder-fade-out 0.3s ease-in forwards;
   }
+
+  /* Settings page dark mode overrides */
+  .dark .bg-\[\#FAF9F6\] { background-color: #0F0F11 !important; }
+  .dark .border-\[\#553DE9\] { border-color: #7B6BEF !important; }
+  .dark .bg-\[\#553DE9\]\/5 { background-color: rgba(123, 107, 239, 0.08) !important; }
+  .dark .bg-\[\#553DE9\]\/10 { background-color: rgba(123, 107, 239, 0.15) !important; }
+  .dark .hover\:bg-\[\#E8E4FD\]:hover { background-color: rgba(123, 107, 239, 0.2) !important; }
+  .dark .divide-\[\#ECEAE3\] > :not([hidden]) ~ :not([hidden]) { border-color: #2A2A30; }
+
+  /* Toggle switch dark mode */
+  .dark button[role="switch"][aria-checked="false"] { background-color: #2A2A30; }
+
+  /* Range slider dark mode */
+  .dark input[type="range"] {
+    background: linear-gradient(to right, #7B6BEF, #7B6BEF) !important;
+  }
+  .dark input[type="range"]::-webkit-slider-thumb {
+    background: #E8E6E3;
+  }
+
+  /* Kbd dark mode */
+  .dark kbd {
+    background-color: #222228 !important;
+    border-color: #2A2A30 !important;
+    color: #8A8880 !important;
+  }
+
+  /* High contrast mode */
+  .high-contrast .text-\[\#6B6960\],
+  .high-contrast .text-\[\#939084\] {
+    color: #36342E !important;
+  }
+  .dark.high-contrast .text-\[\#6B6960\],
+  .dark.high-contrast .text-\[\#939084\],
+  .dark.high-contrast .text-\[\#8A8880\] {
+    color: #C5C0B8 !important;
+  }
+  .high-contrast .border-\[\#ECEAE3\] {
+    border-color: #939084 !important;
+  }
+  .dark.high-contrast .border-\[\#ECEAE3\],
+  .dark.high-contrast .border-\[\#2A2A30\] {
+    border-color: #555 !important;
+  }
+
+  /* Enhanced focus indicators */
+  .enhanced-focus *:focus-visible {
+    outline-width: 3px !important;
+    outline-offset: 3px !important;
+  }
+
+  /* Motion preferences (applied via JS class) */
+  .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+    transition-duration: 50ms !important;
+    animation-duration: 50ms !important;
+  }
+  .no-motion *, .no-motion *::before, .no-motion *::after {
+    transition-duration: 0s !important;
+    animation: none !important;
+  }
 }
