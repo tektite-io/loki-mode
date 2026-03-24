@@ -1481,7 +1481,7 @@ class DevServerManager:
                 if framework == "docker":
                     await asyncio.to_thread(
                         subprocess.run,
-                        ["docker", "compose", "up", "-d", "--build"],
+                        ["docker", "compose", "up", "-d", "--build", "--no-deps"],
                         capture_output=True, cwd=str(target), timeout=120
                     )
                 # Restart the dev server
@@ -1732,17 +1732,17 @@ class DevServerManager:
                 was_running = prev.get("status") in ("running", None)
                 now_failed = svc["state"] in ("exited", "dead")
 
-                # Also detect services that never started (failed on initial docker compose up).
-                # On first poll, prev is empty ({}) so prev.get("status") is None, which counts
-                # as "was_running" above. But if a service was already "exited" before we ever
-                # saw it as "running", the next poll would see prev.status="exited" and skip it.
-                # Detect this case: first time we see a service in a failed state with no prior fix.
-                first_seen_failed = (
-                    not prev  # No previous health record for this service
-                    and now_failed
+                # Detect services that need fixing:
+                # 1. was_running and now_failed: service transitioned from running to exited
+                # 2. Persistently failed: service is exited AND has never been successfully fixed
+                #    (fix_attempts == 0 or fix_status != "fixed")
+                persistently_failed = (
+                    now_failed
+                    and prev.get("fix_status") != "fixed"
+                    and prev.get("status") in ("exited", "dead", None)
                 )
 
-                if (was_running and now_failed) or first_seen_failed:
+                if (was_running and now_failed) or persistently_failed:
                     svc_health["restarts"] = prev.get("restarts", 0) + 1
                     logger.warning("Docker service '%s' failed (exit %s)", name, svc.get("exit_code"))
 
@@ -1766,14 +1766,51 @@ class DevServerManager:
 
                         info["_auto_fixing"] = True
                         svc_logs = docker_ctx.get("service_logs", {}).get(name, "")
-                        diagnoses = _diagnose_errors(svc_logs)
-                        diag_text = "\n".join(f"- {d['diagnosis']}: {d['suggestion']}" for d in diagnoses)
 
-                        fix_prompt = f"The '{name}' Docker service crashed (exit code {svc.get('exit_code', 1)}).\n"
-                        if diag_text:
-                            fix_prompt += f"\nDiagnosis:\n{diag_text}\n"
-                        fix_prompt += f"\nService logs:\n{svc_logs[:2000]}\n"
-                        fix_prompt += "\nFix the issue and ensure the service starts correctly."
+                        # Read compose file for AI context
+                        compose_content = ""
+                        compose_file = project_dir / "docker-compose.yml"
+                        if not compose_file.exists():
+                            compose_file = project_dir / "docker-compose.yaml"
+                        if compose_file.exists():
+                            try:
+                                compose_content = compose_file.read_text(errors="replace")[:5000]
+                            except OSError:
+                                pass
+
+                        # Read service Dockerfile for AI context
+                        dockerfile_content = ""
+                        for df_path in [project_dir / name / "Dockerfile", project_dir / "Dockerfile"]:
+                            if df_path.exists():
+                                try:
+                                    dockerfile_content = df_path.read_text(errors="replace")[:3000]
+                                    break
+                                except OSError:
+                                    pass
+
+                        fix_prompt = f"""You are debugging a Docker Compose service that has failed.
+
+SERVICE: {name}
+STATUS: exited/dead (exit code {svc.get('exit_code', 1)})
+
+DOCKER COMPOSE LOGS (last 50 lines):
+{svc_logs[:3000]}
+
+DOCKER-COMPOSE.YML:
+{compose_content}
+"""
+                        if dockerfile_content:
+                            fix_prompt += f"\nDOCKERFILE ({name}/Dockerfile):\n{dockerfile_content}\n"
+
+                        fix_prompt += """
+INSTRUCTIONS:
+1. Analyze the error in the logs above
+2. Identify the root cause
+3. Fix the issue by editing the necessary files (docker-compose.yml, Dockerfile, source code, package.json, requirements.txt, etc.)
+4. Make sure the fix works on any platform (Docker Desktop, Linux, Docker-in-Docker, Kubernetes)
+5. Do NOT just restart -- actually fix the underlying code/config problem
+6. After fixing, the system will rebuild with 'docker compose up --build'
+7. Common issues: named volumes for node_modules (use anonymous), missing dependencies, port conflicts, wrong commands"""
 
                         svc_health["fix_attempts"] += 1
                         svc_health["fix_timestamps"] = recent_fixes + [now]

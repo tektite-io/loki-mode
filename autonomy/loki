@@ -7054,70 +7054,191 @@ QPRDEOF
 cmd_monitor() {
     local project_dir="${1:-.}"
 
+    # Resolve to absolute path
+    if [[ ! "$project_dir" = /* ]]; then
+        project_dir="$(cd "$project_dir" 2>/dev/null && pwd)" || {
+            echo -e "${RED}Error: directory not found: $1${NC}"
+            return 1
+        }
+    fi
+
     if [[ ! -f "$project_dir/docker-compose.yml" ]] && [[ ! -f "$project_dir/docker-compose.yaml" ]]; then
         echo -e "${RED}No docker-compose.yml found in $project_dir${NC}"
         return 1
     fi
 
-    echo -e "${CYAN}Monitoring Docker Compose services in $project_dir...${NC}"
+    echo -e "${CYAN}AI-Powered Docker Monitor${NC}"
+    echo -e "Project: ${BOLD}$project_dir${NC}"
+    echo -e "Provider: ${GREEN}${LOKI_PROVIDER:-claude}${NC}"
     echo "Press Ctrl+C to stop."
     echo ""
 
     local fix_count=0
-    local max_fixes=10
+    local max_fixes="${LOKI_MONITOR_MAX_FIXES:-10}"
+    local poll_interval="${LOKI_MONITOR_INTERVAL:-10}"
+    local consecutive_healthy=0
+
+    trap 'echo ""; echo -e "${CYAN}Monitor stopped.${NC}"; return 0' INT TERM
 
     while true; do
-        # Check service status
-        local status
-        status=$(cd "$project_dir" && docker compose ps -a --format json 2>/dev/null)
+        # 1. CAPTURE: Get service status (all services including stopped)
+        local ps_output
+        ps_output=$(cd "$project_dir" && docker compose ps -a --format json 2>/dev/null)
 
-        if [[ -z "$status" ]]; then
+        if [[ -z "$ps_output" ]]; then
             echo -e "${YELLOW}No services found. Waiting...${NC}"
-            sleep 10
+            sleep "$poll_interval"
             continue
         fi
 
-        # Parse each service
-        local has_failure=false
+        # Parse services and find failures
+        local failed_services=""
+        local all_healthy=true
+        local service_summary=""
+
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
-            local svc_name svc_state
-            svc_name=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('Service',d.get('Name','')))" 2>/dev/null)
-            svc_state=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('State',''))" 2>/dev/null)
+            local svc_name svc_state svc_exit
+            svc_name=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('Service',d.get('Name','')))" 2>/dev/null || echo "unknown")
+            svc_state=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
+            svc_exit=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('ExitCode',0))" 2>/dev/null || echo "0")
+
+            service_summary="${service_summary}${svc_name}=${svc_state} "
 
             if [[ "$svc_state" == "exited" ]] || [[ "$svc_state" == "dead" ]]; then
-                has_failure=true
-                echo -e "${RED}Service '$svc_name' is $svc_state${NC}"
-
-                if [[ $fix_count -lt $max_fixes ]]; then
-                    # Get logs for the failed service
-                    local logs
-                    logs=$(cd "$project_dir" && docker compose logs --tail 30 "$svc_name" 2>/dev/null)
-
-                    echo -e "${CYAN}Auto-fixing $svc_name...${NC}"
-
-                    # Run loki quick with targeted fix
-                    LOKI_MAX_ITERATIONS=5 LOKI_AUTO_FIX=true \
-                    loki quick "Fix the '$svc_name' Docker service. It exited with an error. Logs: $logs" \
-                        2>&1 | while IFS= read -r fline; do echo "  $fline"; done
-
-                    # Rebuild and restart
-                    echo -e "${CYAN}Rebuilding $svc_name...${NC}"
-                    (cd "$project_dir" && docker compose up -d --build --no-deps "$svc_name" 2>&1) | while IFS= read -r fline; do echo "  $fline"; done
-
-                    fix_count=$((fix_count + 1))
-                    echo -e "${GREEN}Fix attempt $fix_count/$max_fixes for $svc_name${NC}"
-                else
-                    echo -e "${YELLOW}Max fix attempts ($max_fixes) reached. Manual intervention needed.${NC}"
-                fi
+                all_healthy=false
+                failed_services="${failed_services} ${svc_name}"
             fi
-        done <<< "$status"
+        done <<< "$ps_output"
 
-        if [[ "$has_failure" == "false" ]]; then
-            echo -e "\r${GREEN}All services healthy${NC} $(date +%H:%M:%S)  \c"
+        if [[ "$all_healthy" == "true" ]]; then
+            consecutive_healthy=$((consecutive_healthy + 1))
+            printf "\r${GREEN}[healthy]${NC} %s (%s)   " "$service_summary" "$(date +%H:%M:%S)"
+            sleep "$poll_interval"
+            continue
         fi
 
-        sleep 10
+        consecutive_healthy=0
+
+        # 2. CAPTURE LOGS and CONTEXT for each failed service, then feed to AI
+        for svc_name in $failed_services; do
+            if [[ $fix_count -ge $max_fixes ]]; then
+                echo -e "\n${RED}Max fix attempts ($max_fixes) reached for this session.${NC}"
+                echo "Manual intervention needed. Check: cd $project_dir && docker compose logs $svc_name"
+                sleep "$poll_interval"
+                continue 2
+            fi
+
+            echo -e "\n${RED}[FAILURE] $svc_name is down${NC}"
+
+            local logs
+            logs=$(cd "$project_dir" && docker compose logs --tail 50 "$svc_name" 2>/dev/null | head -c 3000)
+
+            # Gather docker-compose.yml for AI context (truncated to avoid ARG_MAX)
+            local compose_content=""
+            if [[ -f "$project_dir/docker-compose.yml" ]]; then
+                compose_content=$(head -c 5000 "$project_dir/docker-compose.yml")
+            elif [[ -f "$project_dir/docker-compose.yaml" ]]; then
+                compose_content=$(head -c 5000 "$project_dir/docker-compose.yaml")
+            fi
+
+            # Gather Dockerfile for the failing service (truncated)
+            local dockerfile_content=""
+            for df_path in "$project_dir/$svc_name/Dockerfile" "$project_dir/Dockerfile" "$project_dir/Dockerfile.$svc_name"; do
+                if [[ -f "$df_path" ]]; then
+                    dockerfile_content=$(head -c 3000 "$df_path")
+                    break
+                fi
+            done
+
+            # 3. FEED TO AI: Construct a rich prompt with all context
+            local ai_prompt="You are debugging a Docker Compose service that has failed.
+
+SERVICE: $svc_name
+STATUS: exited/dead
+
+DOCKER COMPOSE LOGS (last 50 lines):
+$logs
+
+DOCKER-COMPOSE.YML:
+$compose_content"
+
+            if [[ -n "$dockerfile_content" ]]; then
+                ai_prompt="${ai_prompt}
+
+DOCKERFILE ($svc_name/Dockerfile):
+$dockerfile_content"
+            fi
+
+            ai_prompt="${ai_prompt}
+
+INSTRUCTIONS:
+1. Analyze the error in the logs above
+2. Identify the root cause
+3. Fix the issue by editing the necessary files (docker-compose.yml, Dockerfile, source code, package.json, requirements.txt, etc.)
+4. Make sure the fix works on any platform (Docker Desktop, Linux, Docker-in-Docker, Kubernetes)
+5. Do NOT just restart -- actually fix the underlying code/config problem
+6. After fixing, the system will rebuild with 'docker compose up --build'
+7. Common issues: named volumes for node_modules (use anonymous), missing dependencies, port conflicts, wrong commands"
+
+            echo -e "${CYAN}[AI] Analyzing $svc_name failure with ${LOKI_PROVIDER:-claude}...${NC}"
+
+            # 4. LET AI FIX: Run loki quick with the AI prompt
+            # The AI provider (claude/codex/gemini/ollama) decides what to fix
+            fix_count=$((fix_count + 1))
+            echo -e "${CYAN}[FIX] Attempt $fix_count/$max_fixes${NC}"
+
+            (
+                cd "$project_dir"
+                LOKI_MAX_ITERATIONS=5 LOKI_AUTO_FIX=true \
+                "$0" quick "$ai_prompt" 2>&1 | while IFS= read -r fline; do
+                    echo "  $fline"
+                done
+            )
+
+            # 5. REBUILD: Docker compose up --build for the fixed service
+            echo -e "${CYAN}[REBUILD] Rebuilding $svc_name...${NC}"
+            (cd "$project_dir" && docker compose up -d --build --no-deps "$svc_name" 2>&1) | while IFS= read -r fline; do
+                echo "  $fline"
+            done
+
+            # 6. VERIFY: Wait and check if the fix worked
+            echo -e "${CYAN}[VERIFY] Waiting 15s for $svc_name to stabilize...${NC}"
+            sleep 15
+
+            local verify_state
+            verify_state=$(cd "$project_dir" && docker compose ps -a --format json 2>/dev/null | VERIFY_SVC="$svc_name" python3 -c "
+import json, sys, os
+svc = os.environ['VERIFY_SVC']
+raw = sys.stdin.read().strip()
+if not raw:
+    print('unknown')
+    sys.exit(0)
+# Handle both JSON array (v2.21+) and NDJSON formats
+try:
+    parsed = json.loads(raw)
+    services = parsed if isinstance(parsed, list) else [parsed]
+except json.JSONDecodeError:
+    services = []
+    for line in raw.split(chr(10)):
+        try: services.append(json.loads(line))
+        except: pass
+for s in services:
+    if not isinstance(s, dict): continue
+    if s.get('Service', s.get('Name','')) == svc:
+        print(s.get('State','unknown'))
+        sys.exit(0)
+print('unknown')
+" 2>/dev/null || echo "unknown")
+
+            if [[ "$verify_state" == "running" ]]; then
+                echo -e "${GREEN}[SUCCESS] $svc_name is now running!${NC}"
+            else
+                echo -e "${YELLOW}[RETRY] $svc_name still not healthy (state: $verify_state). Will retry on next poll.${NC}"
+            fi
+        done
+
+        sleep "$poll_interval"
     done
 }
 

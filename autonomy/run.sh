@@ -630,6 +630,8 @@ if [ -f "$TELEMETRY_SCRIPT" ]; then
     source "$TELEMETRY_SCRIPT"
 fi
 
+
+
 # 2026 Research Enhancements (minimal additions)
 PROMPT_REPETITION=${LOKI_PROMPT_REPETITION:-true}
 CONFIDENCE_ROUTING=${LOKI_CONFIDENCE_ROUTING:-true}
