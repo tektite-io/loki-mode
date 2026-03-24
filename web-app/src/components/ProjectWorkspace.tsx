@@ -35,6 +35,7 @@ import { CheckpointTimeline } from './CheckpointTimeline';
 import { ChangePreview } from './ChangePreview';
 import type { FileNode, ChangePreviewData } from '../types/api';
 import { CICDPanel } from './CICDPanel';
+import { Celebration } from './Celebration';
 import type { SessionDetail } from '../api/client';
 
 // Wrapper to avoid inline import complexity
@@ -451,6 +452,8 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   } | null>(null);
   const [isBuilding, setIsBuilding] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevBuildPhaseRef = useRef<string>('idle');
   const [buildStatus, setBuildStatus] = useState<{
     phase: string;
     iteration: number;
@@ -1140,8 +1143,20 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     return 'building';
   }, [isBuilding, buildStatus.phase, sessionData.status]);
 
+  // Trigger celebration when build completes
+  useEffect(() => {
+    if (buildPhase === 'complete' && prevBuildPhaseRef.current !== 'complete') {
+      setShowCelebration(true);
+    }
+    prevBuildPhaseRef.current = buildPhase;
+  }, [buildPhase]);
+
   return (
     <div className="flex flex-col h-full relative">
+      {/* Build completion celebration */}
+      {showCelebration && (
+        <Celebration type="build-complete" onDismiss={() => setShowCelebration(false)} />
+      )}
       {/* Header */}
       <div className="bg-card px-3 py-2 flex items-center gap-3 flex-shrink-0 border-b border-border">
         <button onClick={() => {

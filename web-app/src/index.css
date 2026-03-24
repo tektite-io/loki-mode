@@ -355,5 +355,107 @@
     .hero-bg::after { animation: none; }
     .typing-cursor { animation: none; opacity: 1; }
     .counter-animate { animation: none; opacity: 1; }
+  /* --- Delightful Micro-Interactions --- */
+
+  /* Button hover: gentle glow */
+  button:hover:not(:disabled),
+  [role="button"]:hover:not(:disabled) {
+    box-shadow: 0 0 12px rgba(85, 61, 233, 0.15);
+  }
+  .dark button:hover:not(:disabled),
+  .dark [role="button"]:hover:not(:disabled) {
+    box-shadow: 0 0 12px rgba(85, 61, 233, 0.25);
+  }
+
+  /* Card hover: lift + shadow + slight scale */
+  .card:hover, .card-hover:hover {
+    transform: translateY(-2px) scale(1.005);
+  }
+
+  /* Icon button: rotate on hover */
+  button svg, [role="button"] svg {
+    transition: transform 200ms ease;
+  }
+  button:hover:not(:disabled) svg,
+  [role="button"]:hover:not(:disabled) svg {
+    transform: rotate(3deg);
+  }
+
+  /* Input focus: glow */
+  input:focus, textarea:focus, select:focus {
+    box-shadow: 0 0 0 3px rgba(85, 61, 233, 0.1);
+  }
+  .dark input:focus, .dark textarea:focus, .dark select:focus {
+    box-shadow: 0 0 0 3px rgba(85, 61, 233, 0.2);
+  }
+
+  /* --- Typing indicator dots --- */
+  .typing-dots {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+    margin-left: 2px;
+  }
+  .typing-dot {
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background-color: #553DE9;
+    opacity: 0.4;
+    animation: typing-bounce 1.2s ease-in-out infinite;
+  }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+  .dark .typing-dot { background-color: #7B6BEF; }
+
+  @keyframes typing-bounce {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  /* --- Chat message fade-in --- */
+  @keyframes chat-fade-in {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .chat-message-enter {
+    animation: chat-fade-in 0.3s ease-out forwards;
+  }
+
+  /* --- Warm empty state fade-in --- */
+  .warm-empty-state-enter {
+    animation: chat-fade-in 0.5s ease-out forwards;
+  }
+
+  /* --- Confetti animation --- */
+  @keyframes confetti-fall {
+    0% { opacity: 1; transform: translateY(0) rotate(0deg); }
+    100% { opacity: 0; transform: translateY(85vh) rotate(720deg); }
+  }
+
+  /* --- Celebration banner --- */
+  @keyframes celebration-banner-in {
+    0% { opacity: 0; transform: translate(-50%, -20px) scale(0.95); }
+    100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  }
+  .celebration-banner-enter {
+    animation: celebration-banner-in 0.4s ease-out forwards;
+  }
+
+  /* --- Achievement toast --- */
+  @keyframes achievement-slide-in {
+    0% { opacity: 0; transform: translateX(100px); }
+    100% { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes achievement-slide-out {
+    0% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(100px); }
+  }
+  .achievement-toast-enter {
+    animation: achievement-slide-in 0.35s ease-out forwards;
+  }
+  .achievement-toast-exit {
+    animation: achievement-slide-out 0.3s ease-in forwards;
   }
 }

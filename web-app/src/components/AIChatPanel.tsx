@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Send, Square, MessageSquare, FileCode2, Terminal as TerminalIcon, Wrench, Image as ImageIcon, X } from 'lucide-react';
 import { api } from '../api/client';
 import { Button } from './ui/Button';
+import { LoadingMessages } from './LoadingMessages';
 
 interface AIChatPanelProps {
   sessionId: string;
@@ -89,7 +90,11 @@ function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
   const isLong = textContent.split('\n').length > 30;
 
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-start gap-2 chat-message-enter">
+      {/* Loki avatar */}
+      <div className="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <span className="text-[10px] font-bold text-primary">L</span>
+      </div>
       <div className="max-w-[80%] rounded-lg px-3 py-2 text-xs bg-hover text-ink border-l-2 border-primary/40">
         {/* Commands executed */}
         {parsed && parsed.commands.length > 0 && (
@@ -567,11 +572,13 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 terminal-scroll">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <MessageSquare size={28} className="text-muted/30 mb-3" />
-            <p className="text-xs text-muted font-medium">No messages yet</p>
-            <p className="text-[11px] text-muted/70 mt-1 max-w-[200px]">
-              Ask the AI to build, modify, or explain your code. Drop an image or paste a screenshot.
+          <div className="flex flex-col items-center justify-center py-12 text-center chat-message-enter">
+            <div className="w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center mb-3">
+              <span className="text-base font-bold text-primary">L</span>
+            </div>
+            <p className="text-xs text-ink font-semibold mb-1">Hey! I'm Loki, your AI coding companion.</p>
+            <p className="text-[11px] text-muted/70 max-w-[240px]">
+              Tell me what you want to build and I'll make it happen. Drop an image or paste a screenshot to get started.
             </p>
           </div>
         )}
@@ -585,7 +592,16 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
         {/* Status bar when streaming */}
         {streaming && (
           <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-[10px] text-muted font-mono">Streaming...</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-primary font-medium">Loki is thinking</span>
+                <span className="typing-dots">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </span>
+              </div>
+            </div>
             <button
               onClick={handleCancel}
               className="flex items-center gap-1 text-[10px] text-red-400 hover:text-red-300 transition-colors"

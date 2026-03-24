@@ -92,6 +92,12 @@ function useAnimatedCounter(target: number, duration: number = 1200) {
   }, [started, target, duration]);
 
   return { count, ref };
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) return 'Good morning! What shall we build today?';
+  if (hour >= 12 && hour < 17) return 'Good afternoon! Ready to create something amazing?';
+  if (hour >= 17 && hour < 22) return 'Good evening! Late night coding session?';
+  return 'Burning the midnight oil? Let\'s build something cool.';
 }
 
 export default function HomePage() {
@@ -370,6 +376,17 @@ export default function HomePage() {
                 <p className="text-[#6B6960] text-sm font-medium mb-3 tracking-wide uppercase">
                   Ready to build something amazing?
                 </p>
+            {/* Hero section */}
+            <div className="text-center mt-12 mb-10">
+              <p className="text-sm text-primary font-medium mb-2">{getGreeting()}</p>
+              <h2 className="font-heading text-h1 text-[#36342E]">
+                Describe it. Build it. Ship it.
+              </h2>
+              <p className="text-[#6B6960] mt-3 text-base max-w-xl mx-auto">
+                Type what you want to build. Purple Lab handles the rest --
+                from code to containers, autonomously.
+              </p>
+            </div>
 
                 {/* A6: Gradient text on heading */}
                 <h2 className="font-heading text-h1 gradient-text">
