@@ -1092,6 +1092,24 @@ cmd_start() {
         --outcome success \
         --context "{\"provider\":\"$effective_provider\",\"prd_path\":\"${prd_file:-}\"}"
 
+    # Pre-flight: check that the provider CLI is installed
+    if ! command -v "$effective_provider" &>/dev/null; then
+        echo -e "${RED}Error: Provider CLI '$effective_provider' is not installed.${NC}"
+        echo ""
+        echo "Install it first:"
+        case "$effective_provider" in
+            claude) echo "  npm install -g @anthropic-ai/claude-code" ;;
+            codex)  echo "  npm install -g @openai/codex" ;;
+            gemini) echo "  npm install -g @google/gemini-cli" ;;
+            cline)  echo "  npm install -g @anthropic-ai/cline" ;;
+            aider)  echo "  pip install aider-chat" ;;
+            *)      echo "  Check the provider documentation for installation." ;;
+        esac
+        echo ""
+        echo "Check your environment: loki doctor"
+        exit 1
+    fi
+
     exec "$RUN_SH" "${args[@]}"
 }
 
@@ -3335,8 +3353,10 @@ cmd_web_start() {
 
     # Wait for server to be ready
     local retries=0
+    local server_ready=false
     while [ $retries -lt 15 ]; do
         if curl -s "http://${PURPLE_LAB_DEFAULT_HOST}:${port}/api/session/status" > /dev/null 2>&1; then
+            server_ready=true
             break
         fi
         sleep 0.5
@@ -3351,21 +3371,33 @@ cmd_web_start() {
     fi
 
     local url="http://${PURPLE_LAB_DEFAULT_HOST}:${port}"
-    echo -e "${GREEN}Purple Lab running at: $url${NC} (PID: $pid)"
+
+    if [ "$server_ready" = true ]; then
+        echo -e "${GREEN}Purple Lab running at: $url${NC} (PID: $pid)"
+    else
+        echo -e "${YELLOW}Purple Lab starting at: $url${NC} (PID: $pid)"
+        echo "Server may still be loading. Refresh the browser if it does not load immediately."
+    fi
     echo -e "Logs: $log_file"
     echo -e "Stop with: ${CYAN}loki web stop${NC}"
 
-    # Open browser
+    # Open browser only after server is confirmed ready
     if [ "$open_browser" = true ]; then
-        echo ""
-        if command -v open &> /dev/null; then
-            open "$url"
-        elif command -v xdg-open &> /dev/null; then
-            xdg-open "$url"
-        elif command -v start &> /dev/null; then
-            start "$url"
+        if [ "$server_ready" = true ]; then
+            echo ""
+            if command -v open &> /dev/null; then
+                open "$url"
+            elif command -v xdg-open &> /dev/null; then
+                xdg-open "$url"
+            elif command -v start &> /dev/null; then
+                start "$url"
+            else
+                echo "Please open in browser: $url"
+            fi
         else
-            echo "Please open in browser: $url"
+            echo ""
+            echo -e "${YELLOW}Browser not opened because server is not ready yet.${NC}"
+            echo "Open manually when ready: $url"
         fi
     fi
 }
@@ -5873,6 +5905,40 @@ cmd_doctor() {
     doctor_check "Gemini CLI"          gemini   optional || true
     doctor_check "Cline CLI"           cline    optional || true
     doctor_check "Aider CLI"           aider    optional || true
+
+    # Check if at least one provider is installed
+    local _any_provider=false
+    for _dp in claude codex gemini cline aider; do
+        command -v "$_dp" &>/dev/null && _any_provider=true && break
+    done
+    if ! $_any_provider; then
+        echo -e "  ${RED}FAIL${NC}  No AI provider CLI installed -- at least one is required"
+        echo -e "         ${YELLOW}Install: npm install -g @anthropic-ai/claude-code${NC}"
+        fail_count=$((fail_count + 1))
+    fi
+    echo ""
+
+    echo -e "${CYAN}API Keys:${NC}"
+    # Note: CLI tools use their own login sessions outside Docker/K8s.
+    # This section helps first-time users verify they can authenticate.
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        echo -e "  ${GREEN}PASS${NC}  ANTHROPIC_API_KEY is set"
+        pass_count=$((pass_count + 1))
+    elif command -v claude &>/dev/null; then
+        echo -e "  ${DIM}  --  ${NC}  ANTHROPIC_API_KEY not set (Claude CLI uses its own login)"
+    fi
+    if [ -n "${OPENAI_API_KEY:-}" ]; then
+        echo -e "  ${GREEN}PASS${NC}  OPENAI_API_KEY is set"
+        pass_count=$((pass_count + 1))
+    elif command -v codex &>/dev/null; then
+        echo -e "  ${DIM}  --  ${NC}  OPENAI_API_KEY not set (Codex CLI uses its own login)"
+    fi
+    if [ -n "${GOOGLE_API_KEY:-${GEMINI_API_KEY:-}}" ]; then
+        echo -e "  ${GREEN}PASS${NC}  GOOGLE_API_KEY is set"
+        pass_count=$((pass_count + 1))
+    elif command -v gemini &>/dev/null; then
+        echo -e "  ${DIM}  --  ${NC}  GOOGLE_API_KEY not set (Gemini CLI uses its own login)"
+    fi
     echo ""
 
     echo -e "${CYAN}Skills:${NC}"
@@ -7046,6 +7112,25 @@ QPRDEOF
     # Emit event
     emit_event session cli quick_start "task=$(echo "$task_desc" | head -c 100)"
 
+    # Pre-flight: check that the provider CLI is installed
+    local _quick_provider="${LOKI_PROVIDER:-claude}"
+    if ! command -v "$_quick_provider" &>/dev/null; then
+        echo -e "${RED}Error: Provider CLI '$_quick_provider' is not installed.${NC}"
+        echo ""
+        echo "Install your AI provider CLI first:"
+        case "$_quick_provider" in
+            claude) echo "  npm install -g @anthropic-ai/claude-code" ;;
+            codex)  echo "  npm install -g @openai/codex" ;;
+            gemini) echo "  npm install -g @google/gemini-cli" ;;
+            cline)  echo "  npm install -g @anthropic-ai/cline" ;;
+            aider)  echo "  pip install aider-chat" ;;
+            *)      echo "  Check the provider documentation for installation." ;;
+        esac
+        echo ""
+        echo "Then verify: loki doctor"
+        exit 1
+    fi
+
     # Run the orchestrator with quick settings
     exec "$RUN_SH" "$quick_prd"
 }
@@ -7798,6 +7883,25 @@ ENDGITIGNORE
     else
         echo -e "  1. Review and edit: ${BOLD}prd.md${NC}"
         echo -e "  2. Run: ${BOLD}loki start prd.md${NC}"
+    fi
+
+    # Check if an AI provider CLI is available
+    local _has_provider=false
+    for _pcli in claude codex gemini cline aider; do
+        if command -v "$_pcli" &>/dev/null; then
+            _has_provider=true
+            break
+        fi
+    done
+    if ! $_has_provider; then
+        echo ""
+        echo -e "${YELLOW}Note: No AI provider CLI detected.${NC}"
+        echo "  Install at least one before running 'loki start':"
+        echo "    npm install -g @anthropic-ai/claude-code   (recommended)"
+        echo "    npm install -g @openai/codex"
+        echo "    npm install -g @google/gemini-cli"
+        echo ""
+        echo "  Then verify your setup: ${BOLD}loki doctor${NC}"
     fi
 }
 

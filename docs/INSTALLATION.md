@@ -476,7 +476,7 @@ loki-mode/
 │   └── INSTALLATION.md   # This file
 ├── CHANGELOG.md          # Version history
 ├── VERSION               # Current version number
-├── LICENSE               # MIT License
+├── LICENSE               # Business Source License 1.1
 ├── references/           # Agent and deployment references
 │   ├── agents.md
 │   ├── deployment.md
@@ -484,11 +484,11 @@ loki-mode/
 ├── autonomy/             # Autonomous runner (CLI only)
 │   ├── run.sh
 │   └── README.md
-├── examples/             # Sample PRDs for testing
+├── templates/            # 22 PRD templates for project scaffolding
 │   ├── simple-todo-app.md
 │   ├── api-only.md
 │   ├── static-landing-page.md
-│   └── full-stack-demo.md
+│   └── ... (22 templates total)
 ├── tests/                # Test suite (CLI only)
 │   ├── run-all-tests.sh
 │   ├── test-bootstrap.sh
@@ -497,7 +497,7 @@ loki-mode/
     └── vibe-kanban.md
 ```
 
-**Note:** Some files/directories (autonomy, tests, examples) are only available with full installation (Options A or B).
+**Note:** Some files/directories (autonomy, tests, templates) are only available with full installation (Options A or B).
 
 ---
 
@@ -795,16 +795,25 @@ rm -rf ~/.claude/skills/loki-mode
 
 After installation:
 
-1. **Quick Test:** Run a simple example
+1. **Verify Setup:** Check your environment is ready
    ```bash
-   ./autonomy/run.sh examples/simple-todo-app.md
+   loki doctor
    ```
 
-2. **Read Documentation:** Check out [README.md](README.md) for usage guides
+2. **Scaffold a Project:** Create a project from a template
+   ```bash
+   loki init my-app --template simple-todo-app
+   cd my-app
+   ```
 
-3. **Create Your First PRD:** See the Quick Start section in README
+3. **Start Building:** Launch autonomous development
+   ```bash
+   loki start prd.md
+   ```
 
-4. **Join the Community:** Report issues or contribute at [GitHub](https://github.com/asklokesh/loki-mode)
+4. **Read Documentation:** Check out [README.md](../README.md) for usage guides
+
+5. **Join the Community:** Report issues or contribute at [GitHub](https://github.com/asklokesh/loki-mode)
 
 ---
 
@@ -812,7 +821,7 @@ After installation:
 
 - **Issues/Bugs:** [GitHub Issues](https://github.com/asklokesh/loki-mode/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/asklokesh/loki-mode/discussions)
-- **Documentation:** [README.md](README.md)
+- **Documentation:** [README.md](../README.md)
 
 ---
 

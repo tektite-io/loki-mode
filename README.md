@@ -27,7 +27,15 @@
 ```bash
 npm install -g loki-mode
 loki doctor                        # verify environment
-loki start ./prd.md                # autonomous build starts
+loki init my-app --template simple-todo-app
+cd my-app
+loki start prd.md                  # autonomous build starts
+```
+
+Or skip scaffolding and go straight to a quick task:
+
+```bash
+loki quick "build a landing page with a signup form"
 ```
 
 <details>
