@@ -376,6 +376,20 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ service }) }
     ),
 
+  // Deploy
+  deployProject: (sessionId: string, platform: string) =>
+    fetchJSON<{ url?: string; error?: string; output?: string }>(
+      `/sessions/${encodeURIComponent(sessionId)}/deploy`,
+      { method: 'POST', body: JSON.stringify({ platform }) },
+    ),
+
+  // GitHub push (create repo + push)
+  githubPush: (sessionId: string) =>
+    fetchJSON<{ repo_url?: string; error?: string; output?: string }>(
+      `/sessions/${encodeURIComponent(sessionId)}/github/push`,
+      { method: 'POST' },
+    ),
+
   // Auth endpoints
   getMe: () =>
     fetchJSON<{ authenticated: boolean; local_mode?: boolean; sub?: string; email?: string; name?: string; avatar?: string }>('/auth/me'),

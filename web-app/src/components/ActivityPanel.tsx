@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Terminal, MessageSquare, ScrollText, Bot, ShieldCheck, Check, X, Clock, Users, ChevronRight } from 'lucide-react';
+import { Terminal, MessageSquare, ScrollText, Bot, ShieldCheck, Check, X, Clock, Users, ChevronRight, Activity } from 'lucide-react';
 import { TerminalOutput } from './TerminalOutput';
 import { TerminalEmulator } from './TerminalEmulator';
 import { AIChatPanel } from './AIChatPanel';
+import { BuildActivityFeed } from './BuildActivityFeed';
+import type { BuildEvent } from './BuildActivityFeed';
 import type { LogEntry, Agent, ChecklistSummary } from '../types/api';
 
 interface ActivityPanelProps {
@@ -14,9 +16,11 @@ interface ActivityPanelProps {
   isRunning?: boolean;
   subscribe?: (type: string, callback: (data: unknown) => void) => () => void;
   buildMode?: 'quick' | 'standard' | 'max';
+  buildEvents?: BuildEvent[];
+  onFileClick?: (path: string) => void;
 }
 
-type TabId = 'terminal' | 'chat' | 'build' | 'agents' | 'quality';
+type TabId = 'terminal' | 'chat' | 'activity' | 'build' | 'agents' | 'quality';
 
 interface TabDef {
   id: TabId;
@@ -28,6 +32,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'terminal', label: 'Terminal', icon: Terminal, alwaysShow: true },
   { id: 'chat', label: 'AI Chat', icon: MessageSquare, alwaysShow: true },
+  { id: 'activity', label: 'Activity', icon: Activity, alwaysShow: true },
   { id: 'build', label: 'Build Log', icon: ScrollText },
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'quality', label: 'Quality', icon: ShieldCheck },
@@ -108,6 +113,8 @@ export function ActivityPanel({
   isRunning,
   subscribe,
   buildMode,
+  buildEvents,
+  onFileClick,
 }: ActivityPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('terminal');
 
@@ -175,6 +182,7 @@ export function ActivityPanel({
         </div>
         {activeTab === 'build' && <TerminalOutput logs={logs} loading={logsLoading} subscribe={subscribe} />}
         {activeTab === 'agents' && <AgentsTab agents={agents} />}
+        {activeTab === 'activity' && <BuildActivityFeed events={buildEvents || []} onFileClick={onFileClick} />}
         {activeTab === 'quality' && <QualityTab checklist={checklist} />}
         {activeTab === 'chat' && <AIChatPanel sessionId={sessionId} defaultMode={buildMode} />}
       </div>
