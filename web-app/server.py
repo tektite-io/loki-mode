@@ -1088,6 +1088,7 @@ class DevServerManager:
 
             asyncio.create_task(self._monitor_output(session_id))
             asyncio.create_task(self._monitor_backend_output(session_id))
+            asyncio.create_task(self._continuous_log_monitor(session_id))
 
             # Wait for either frontend or backend port (up to 30s)
             for _ in range(60):
@@ -1238,6 +1239,7 @@ class DevServerManager:
         self.servers[session_id] = server_info
 
         asyncio.create_task(self._monitor_output(session_id))
+        asyncio.create_task(self._continuous_log_monitor(session_id))
 
         # For Docker projects, also start the service health monitor
         if framework == "docker":
@@ -1407,6 +1409,170 @@ class DevServerManager:
                 fe_proc = info.get("process")
                 if fe_proc and fe_proc.poll() is not None:
                     info["status"] = "error"
+
+    async def _continuous_log_monitor(self, session_id: str) -> None:
+        """Continuously monitor dev server output for errors and auto-fix.
+
+        This runs alongside _monitor_output and watches for error patterns
+        in the accumulated log lines. When errors are detected while the
+        process is still running (not yet crashed), it triggers the AI
+        provider to diagnose and fix the issue proactively.
+        """
+        info = self.servers.get(session_id)
+        if not info:
+            return
+
+        last_error_check: float = 0
+        error_cooldown = 30  # Don't check more than every 30 seconds
+
+        while True:
+            info = self.servers.get(session_id)
+            if not info:
+                break
+
+            await asyncio.sleep(5)
+
+            now = time.time()
+            if now - last_error_check < error_cooldown:
+                continue
+
+            # Check recent output for error indicators
+            recent_lines = info.get("output_lines", [])[-30:]
+            if not recent_lines:
+                continue
+
+            recent_text = "\n".join(recent_lines)
+
+            # Look for error indicators in the output
+            error_indicators = [
+                "Error:", "ERROR", "FATAL", "error:", "failed",
+                "TypeError:", "SyntaxError:", "ModuleNotFoundError:",
+                "Cannot find module", "ENOENT", "EACCES", "EADDRINUSE",
+                "Connection refused", "Build failed", "Compilation failed",
+                "npm ERR!", "pip install failed",
+            ]
+
+            has_error = any(indicator in recent_text for indicator in error_indicators)
+
+            # Also check if the process exited
+            proc = info.get("process")
+            process_dead = proc and proc.poll() is not None
+
+            if not has_error and not process_dead:
+                continue
+
+            last_error_check = now
+
+            # Don't fix if already fixing (either from this monitor or _auto_fix)
+            if info.get("_auto_fixing"):
+                continue
+
+            # Don't fix if the _monitor_output auto-fix already handled it
+            # (process exited = _monitor_output triggers _auto_fix, skip here)
+            if process_dead:
+                continue
+
+            project_dir = info.get("project_dir", ".")
+
+            logger.info("Error detected in dev server output for session %s, triggering AI fix", session_id)
+
+            # Broadcast to frontend that we are auto-fixing
+            try:
+                await _broadcast({
+                    "type": "auto_fix",
+                    "data": {
+                        "session_id": session_id,
+                        "status": "detecting",
+                        "message": "Error detected in dev server output. AI is analyzing...",
+                    }
+                })
+            except Exception:
+                pass
+
+            # Gather context and trigger fix
+            info["_auto_fixing"] = True
+            try:
+                # Get Docker context if applicable
+                docker_ctx: dict = {}
+                if info.get("framework") == "docker":
+                    try:
+                        docker_ctx = await _gather_docker_context(Path(project_dir))
+                    except Exception:
+                        pass
+
+                # Build AI prompt with full context
+                compose_content = ""
+                compose_file = Path(project_dir) / "docker-compose.yml"
+                if not compose_file.exists():
+                    compose_file = Path(project_dir) / "docker-compose.yaml"
+                if compose_file.exists():
+                    try:
+                        compose_content = compose_file.read_text(errors="replace")[:5000]
+                    except OSError:
+                        pass
+
+                error_lines = "\n".join(info.get("output_lines", [])[-50:])
+
+                fix_prompt = (
+                    "The dev server has errors. Analyze and fix them.\n\n"
+                    f"DEV SERVER OUTPUT (last 50 lines):\n{error_lines[:3000]}\n"
+                )
+                if docker_ctx:
+                    svc_status = docker_ctx.get("service_status", [])
+                    if svc_status:
+                        fix_prompt += f"\nDOCKER SERVICE STATUS: {json.dumps(svc_status)}\n"
+                if compose_content:
+                    fix_prompt += f"\nDOCKER-COMPOSE.YML:\n{compose_content}\n"
+                fix_prompt += (
+                    f"\nPROJECT DIRECTORY: {project_dir}\n\n"
+                    "INSTRUCTIONS:\n"
+                    "1. Analyze the error in the output above\n"
+                    "2. Fix the root cause (edit code, config, Dockerfile, etc.)\n"
+                    "3. The system will automatically restart/rebuild after your fix\n"
+                    "4. Make the fix work on any platform"
+                )
+
+                # Trigger AI fix
+                loki = _find_loki_cli()
+                if loki:
+                    fix_env = {**os.environ, **_load_secrets()}
+                    fix_env["LOKI_MAX_ITERATIONS"] = "5"
+                    fix_env["LOKI_AUTO_FIX"] = "true"
+
+                    await asyncio.to_thread(
+                        subprocess.run,
+                        [loki, "quick", fix_prompt],
+                        capture_output=True, text=True, cwd=project_dir, timeout=300,
+                        env=fix_env,
+                    )
+
+                    # Rebuild if Docker
+                    if info.get("framework") == "docker":
+                        await asyncio.to_thread(
+                            subprocess.run,
+                            ["docker", "compose", "up", "-d", "--build", "--no-deps"],
+                            capture_output=True, cwd=project_dir, timeout=120,
+                        )
+
+                    # Broadcast fix complete
+                    try:
+                        await _broadcast({
+                            "type": "auto_fix",
+                            "data": {
+                                "session_id": session_id,
+                                "status": "completed",
+                                "message": "AI fix applied. Rebuilding...",
+                            }
+                        })
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error("Continuous log monitor fix failed: %s", e)
+            finally:
+                # Re-fetch info in case it was replaced during the fix
+                info = self.servers.get(session_id)
+                if info:
+                    info["_auto_fixing"] = False
 
     async def _auto_fix(self, session_id: str, error_context: str) -> None:
         """Auto-fix a crashed dev server by invoking loki quick with the error."""
@@ -4304,6 +4470,10 @@ async def get_preview_info(session_id: str) -> JSONResponse:
         if not entry_path.exists():
             info["preview_url"] = None
             info["entry_file"] = None
+
+    # Indicate whether AI-driven continuous log monitoring is active for this session
+    server_info = dev_server_manager.servers.get(session_id)
+    info["ai_detected"] = server_info is not None
 
     return JSONResponse(content=info)
 
