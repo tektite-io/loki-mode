@@ -303,6 +303,11 @@ export default function TemplatesPage() {
           Choose a starting point and customize with AI. Each template is a complete PRD
           ready to become your next project.
         </p>
+    <div className="max-w-[1400px] mx-auto px-6 max-md:px-4 py-8">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-heading text-h1 text-[#36342E]">Templates</h1>
+        <span className="text-xs text-muted">{templates?.length || 0} templates available</span>
+      </div>
 
         {/* Centered search bar */}
         <div className="relative max-w-xl mx-auto mb-5">

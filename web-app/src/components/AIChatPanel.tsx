@@ -3,6 +3,7 @@ import { Send, Square, MessageSquare, FileCode2, Terminal as TerminalIcon, Wrenc
 import { api } from '../api/client';
 import { Button } from './ui/Button';
 import { LoadingMessages } from './LoadingMessages';
+import { useSubmitGuard } from '../hooks/useSubmitGuard';
 
 interface AIChatPanelProps {
   sessionId: string;
@@ -66,7 +67,7 @@ function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-lg px-3 py-2 text-xs bg-primary/10 text-ink">
+        <div className="max-w-[80%] max-md:max-w-[90%] rounded-lg px-3 py-2 max-md:px-4 max-md:py-3 text-xs max-md:text-sm bg-primary/10 text-ink">
           {msg.imageUrl && (
             <div className="mb-2">
               <img
@@ -96,6 +97,8 @@ function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
         <span className="text-[10px] font-bold text-primary">L</span>
       </div>
       <div className="max-w-[80%] rounded-lg px-3 py-2 text-xs bg-hover text-ink border-l-2 border-primary/40">
+    <div className="flex justify-start">
+      <div className="max-w-[80%] max-md:max-w-[90%] rounded-lg px-3 py-2 max-md:px-4 max-md:py-3 text-xs max-md:text-sm bg-hover text-ink border-l-2 border-primary/40">
         {/* Commands executed */}
         {parsed && parsed.commands.length > 0 && (
           <div className="mb-2 space-y-0.5">
@@ -554,7 +557,7 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
   return (
     <div
       ref={dropZoneRef}
-      className={`flex flex-col h-full relative ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
+      className={`flex flex-col h-full relative max-md:fixed max-md:inset-0 max-md:z-40 max-md:bg-white dark:max-md:bg-[#1A1A1E] ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -570,7 +573,7 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
       )}
 
       {/* Messages area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 terminal-scroll">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 max-md:p-4 space-y-3 max-md:space-y-4 terminal-scroll scroll-smooth-bottom">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 text-center chat-message-enter">
             <div className="w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center mb-3">
@@ -588,7 +591,7 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
       </div>
 
       {/* Input area */}
-      <div className="border-t border-border p-2 flex-shrink-0">
+      <div className="border-t border-border p-2 max-md:p-3 flex-shrink-0">
         {/* Status bar when streaming */}
         {streaming && (
           <div className="flex items-center justify-between mb-2 px-1">
@@ -691,7 +694,7 @@ export function AIChatPanel({ sessionId, defaultMode, onFilesChanged, services }
             }}
             placeholder="Ask AI to modify your project... (Shift+Enter for new line)"
             rows={1}
-            className="flex-1 px-3 py-1.5 text-xs bg-card border border-border rounded-btn outline-none focus:border-primary transition-colors resize-none"
+            className="flex-1 px-3 py-1.5 max-md:py-3 max-md:text-base text-xs bg-card border border-border rounded-btn outline-none focus:border-primary transition-colors resize-none"
             style={{ maxHeight: '120px', overflow: 'auto' }}
             disabled={sending}
           />

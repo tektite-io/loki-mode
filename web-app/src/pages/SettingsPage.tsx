@@ -15,6 +15,9 @@ import {
   Loader2,
   AlertCircle,
 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ExternalLink, Check } from 'lucide-react';
+import { Card } from '../components/ui/Card';
 import { api } from '../api/client';
 import { SettingToggle } from '../components/settings/SettingToggle';
 import { SettingSelect } from '../components/settings/SettingSelect';
@@ -229,6 +232,9 @@ export default function SettingsPage() {
   const [fontScaling, setFontScaling] = useState(() => loadSetting('fontScaling', '100'));
 
   // -- About state --
+  const [selectedProvider, setSelectedProvider] = useState('claude');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [version, setVersion] = useState('');
 
   // -- Keyboard shortcuts filter --
@@ -334,6 +340,11 @@ export default function SettingsPage() {
       return next;
     });
 
+  const handleProviderChange = async (provider: string) => {
+    setSelectedProvider(provider);
+    // K105: Optimistic UI -- show "Saved" immediately
+    setSaved(true);
+    setSaving(true);
     try {
       await api.setProvider(providerId);
       const info = await api.getCurrentProvider();
@@ -346,12 +357,17 @@ export default function SettingsPage() {
       setTestResults((prev) => ({ ...prev, [providerId]: 'error' }));
     } finally {
       setTestingProvider(null);
+      setSaving(false);
+      setTimeout(() => setSaved(false), 2000);
     }
   }, []);
 
   // -------------------------------------------------------------------------
   // Provider priority reorder
   // -------------------------------------------------------------------------
+  return (
+    <div className="max-w-[800px] mx-auto px-6 max-md:px-4 py-8">
+      <h1 className="font-heading text-h1 max-md:text-h2 text-[#36342E] mb-8">Settings</h1>
 
   const moveProviderPriority = useCallback((providerId: string, direction: 'up' | 'down') => {
     setProviderPriority((prev) => {
@@ -392,10 +408,8 @@ export default function SettingsPage() {
     }
   }
 
-  // =========================================================================
-  // Category panels
-  // =========================================================================
-
+  // ==================================================================  // Category panels
+  // ==================================================================
   function GeneralSettings() {
     return (
       <div>
@@ -827,6 +841,15 @@ greet("world");`}</pre>
             );
           })}
         </div>
+        {saving && !saved && (
+          <p className="text-xs text-[#6B6960] mt-2">Saving...</p>
+        )}
+        {saved && (
+          <p className="flex items-center gap-1 text-xs text-[#1FC5A8] mt-2 font-medium">
+            <Check size={12} /> Saved
+          </p>
+        )}
+      </section>
 
         <div className="mt-4 p-3 rounded-lg bg-[#FAF9F6] border border-[#ECEAE3]">
           <p className="text-xs text-[#6B6960]">
@@ -1040,10 +1063,8 @@ greet("world");`}</pre>
     );
   }
 
-  // =========================================================================
-  // Layout
-  // =========================================================================
-
+  // ==================================================================  // Layout
+  // ==================================================================
   return (
     <div className="flex h-full min-h-0">
       {/* Left sidebar - category navigation */}
