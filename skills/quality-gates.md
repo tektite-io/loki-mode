@@ -2,7 +2,7 @@
 
 **Never ship code without passing all quality gates.**
 
-## The 9 Quality Gates
+## The 10 Quality Gates
 
 1. **Input Guardrails** - Validate scope, detect injection, check constraints (OpenAI SDK)
 2. **Static Analysis** - CodeQL, ESLint/Pylint, type checking
@@ -13,6 +13,34 @@
 7. **Test Coverage Gates** - Unit: 100% pass, >80% coverage; Integration: 100% pass
 8. **Mock Detector** - Classifies internal vs external mocks; flags tests that never import source code, tautological assertions, and high internal mock ratios
 9. **Test Mutation Detector** - Detects assertion value changes alongside implementation changes (test fitting), low assertion density, and missing pass/fail tracking
+10. **Backward Compatibility** - Behavioral preservation, friction safety, institutional knowledge retention (healing mode)
+
+## Gate 10: Backward Compatibility & Behavioral Preservation (v6.67.0)
+
+**Triggered when:** `LOKI_HEAL_MODE=true` or `loki heal` is active, or diff touches files flagged in `.loki/healing/friction-map.json`.
+
+**Purpose:** Prevent accidental removal of institutional logic or behavioral changes to legacy code without explicit documentation.
+
+**Checks:**
+1. **Friction Safety** - If modified code matches a friction-map entry, verify `safe_to_remove` is true or `classification` is `true_bug`
+2. **Characterization Test Coverage** - Modified legacy components must have characterization tests in `.loki/healing/characterization-tests/`
+3. **Comment Preservation** - Deleted comments containing business rule keywords (hack, workaround, compliance, per requirement) must be extracted to `institutional-knowledge.md` first
+4. **Adapter Verification** - Replaced components must have an adapter layer that preserves the original interface
+5. **Behavioral Baseline** - If a baseline exists in `.loki/healing/behavioral-baseline/`, outputs must match or differences must be documented as intentional
+
+**Severity:**
+- Removing friction point classified as `business_rule` or `unknown` without approval = **Critical** (BLOCK)
+- Missing characterization test for modified legacy component = **High** (BLOCK)
+- Deleted business rule comment without knowledge extraction = **Medium** (BLOCK)
+- Missing adapter for replaced component = **High** (BLOCK)
+- Behavioral baseline mismatch without documentation = **Medium** (BLOCK)
+
+**Disabling (not recommended for healing mode):**
+```bash
+LOKI_GATE_BACKWARD_COMPAT=false  # Disable gate 10
+```
+
+---
 
 ## Gate 8 and 9: Automated Test Integrity
 
@@ -285,7 +313,7 @@ velocity_quality_balance:
 
 ## Specialist Review Pool (v5.30.0)
 
-5 named expert reviewers. Select 3 per review based on change type.
+6 named expert reviewers. Select 3 per review based on change type.
 
 **Inspired by:** Compound Engineering Plugin's 14 named review agents -- specialized expertise catches more issues than generic reviewers.
 
@@ -296,6 +324,7 @@ velocity_quality_balance:
 | **architecture-strategist** | SOLID, coupling, cohesion, patterns, abstraction, dependency direction | *(always included -- design quality affects everything)* |
 | **test-coverage-auditor** | Missing tests, edge cases, error paths, boundary conditions | test, spec, coverage, assert, mock, fixture, expect, describe |
 | **dependency-analyst** | Outdated packages, CVEs, bloat, unused deps, license issues | package, import, require, dependency, npm, pip, yarn, lock |
+| **legacy-healing-auditor** | Behavioral preservation, friction safety, institutional knowledge | legacy, heal, migrate, cobol, fortran, refactor, modernize, deprecat |
 
 ### Selection Rules
 

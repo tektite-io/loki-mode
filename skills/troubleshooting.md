@@ -708,6 +708,39 @@ EOF
 
 ---
 
+### Healing Signals (v6.67.0)
+
+These signals support legacy system healing workflows (see `skills/healing.md`):
+
+| Signal | Purpose | Creates | Consumes |
+|--------|---------|---------|----------|
+| `FRICTION_DETECTED` | New friction point found during archaeology | Healing agent | Orchestrator |
+| `BEHAVIOR_CHANGE_RISK` | Code change may alter legacy behavior | Code review | Healing agent |
+| `INSTITUTIONAL_KNOWLEDGE_FOUND` | Tribal knowledge extracted from code | Archaeology scan | Knowledge registry |
+| `HEALING_PHASE_COMPLETE` | Component completed a healing phase | Phase gate | Orchestrator |
+| `LEGACY_COMPATIBILITY_RISK` | Breaking change to legacy API detected | Adapter verification | Healing agent |
+
+**FRICTION_DETECTED Schema:**
+```json
+{
+  "timestamp": "2026-01-25T10:30:00Z",
+  "friction_id": "friction-042",
+  "location": "src/billing/invoice.py:234",
+  "behavior": "Sleep 2s before committing transaction",
+  "classification": "unknown",
+  "agent": "eng-001-healer"
+}
+```
+
+**Processing Rules:**
+- `FRICTION_DETECTED`: Add to friction-map.json, do NOT remove the friction until classified
+- `BEHAVIOR_CHANGE_RISK`: Pause modification, verify characterization tests exist
+- `INSTITUTIONAL_KNOWLEDGE_FOUND`: Append to institutional-knowledge.md
+- `HEALING_PHASE_COMPLETE`: Run phase gate hook before advancing
+- `LEGACY_COMPATIBILITY_RISK`: Block if in strict mode, warn otherwise
+
+---
+
 ### Other Workflow Signals
 
 These signals coordinate parallel worktrees (see `skills/parallel-workflows.md`):

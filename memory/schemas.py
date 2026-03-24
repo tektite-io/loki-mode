@@ -782,3 +782,158 @@ class ProceduralSkill:
     def add_error_fix(self, error: str, fix: str) -> None:
         """Add a common error and its fix."""
         self.common_errors.append(ErrorFix(error=error, fix=fix))
+
+
+# -----------------------------------------------------------------------------
+# Healing Memory Types (v6.67.0)
+# Inspired by Amazon AGI Lab's failure-first learning approach.
+# These types store friction points, failure modes, and institutional knowledge
+# discovered during legacy system healing operations.
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class FrictionPoint:
+    """
+    A friction point discovered during codebase archaeology.
+
+    Friction points are behaviors that appear to be bugs but may actually
+    be undocumented business rules. They must be classified before removal.
+
+    Attributes:
+        id: Unique identifier (e.g., "friction-001")
+        location: File path and line number (e.g., "src/billing/invoice.py:234")
+        behavior: Description of the observed behavior
+        classification: business_rule, true_bug, or unknown
+        evidence: Evidence supporting the classification
+        discovered_by: How this was discovered (archaeology_scan, manual, test_failure)
+        timestamp: When discovered
+        safe_to_remove: Whether it's safe to remove this friction
+    """
+    id: str
+    location: str
+    behavior: str
+    classification: str = "unknown"  # business_rule | true_bug | unknown
+    evidence: str = ""
+    discovered_by: str = "archaeology_scan"
+    timestamp: Optional[datetime] = None
+    safe_to_remove: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "id": self.id,
+            "location": self.location,
+            "behavior": self.behavior,
+            "classification": self.classification,
+            "evidence": self.evidence,
+            "discovered_by": self.discovered_by,
+            "safe_to_remove": self.safe_to_remove,
+        }
+        if self.timestamp:
+            result["timestamp"] = _to_utc_isoformat(self.timestamp)
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FrictionPoint":
+        """Create from dictionary."""
+        timestamp = None
+        if data.get("timestamp"):
+            ts = data["timestamp"]
+            if isinstance(ts, str):
+                timestamp = _parse_utc_datetime(ts)
+        return cls(
+            id=data.get("id", ""),
+            location=data.get("location", ""),
+            behavior=data.get("behavior", ""),
+            classification=data.get("classification", "unknown"),
+            evidence=data.get("evidence", ""),
+            discovered_by=data.get("discovered_by", "archaeology_scan"),
+            timestamp=timestamp,
+            safe_to_remove=data.get("safe_to_remove", False),
+        )
+
+    def validate(self) -> List[str]:
+        """Validate the friction point."""
+        errors = []
+        if not self.id:
+            errors.append("FrictionPoint.id is required")
+        if not self.location:
+            errors.append("FrictionPoint.location is required")
+        if not self.behavior:
+            errors.append("FrictionPoint.behavior is required")
+        if self.classification not in ("business_rule", "true_bug", "unknown"):
+            errors.append("FrictionPoint.classification must be business_rule, true_bug, or unknown")
+        return errors
+
+
+@dataclass
+class FailureMode:
+    """
+    A failure mode discovered during healing operations.
+
+    Failure-first learning: each failure teaches about the system's
+    real behavior. Failures are stored and used to build understanding.
+
+    Attributes:
+        mode_id: Unique identifier
+        trigger: What causes the failure
+        behavior: What happens when it fails
+        recovery: How the system currently recovers
+        is_intentional: Whether the failure is by design
+        component: System component where failure occurs
+        characterization_test_id: Test that reproduces this mode
+    """
+    mode_id: str
+    trigger: str
+    behavior: str
+    recovery: str = ""
+    is_intentional: bool = False
+    component: str = ""
+    characterization_test_id: str = ""
+    timestamp: Optional[datetime] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "mode_id": self.mode_id,
+            "trigger": self.trigger,
+            "behavior": self.behavior,
+            "recovery": self.recovery,
+            "is_intentional": self.is_intentional,
+            "component": self.component,
+            "characterization_test_id": self.characterization_test_id,
+        }
+        if self.timestamp:
+            result["timestamp"] = _to_utc_isoformat(self.timestamp)
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FailureMode":
+        """Create from dictionary."""
+        timestamp = None
+        if data.get("timestamp"):
+            ts = data["timestamp"]
+            if isinstance(ts, str):
+                timestamp = _parse_utc_datetime(ts)
+        return cls(
+            mode_id=data.get("mode_id", ""),
+            trigger=data.get("trigger", ""),
+            behavior=data.get("behavior", ""),
+            recovery=data.get("recovery", ""),
+            is_intentional=data.get("is_intentional", False),
+            component=data.get("component", ""),
+            characterization_test_id=data.get("characterization_test_id", ""),
+            timestamp=timestamp,
+        )
+
+    def validate(self) -> List[str]:
+        """Validate the failure mode."""
+        errors = []
+        if not self.mode_id:
+            errors.append("FailureMode.mode_id is required")
+        if not self.trigger:
+            errors.append("FailureMode.trigger is required")
+        if not self.behavior:
+            errors.append("FailureMode.behavior is required")
+        return errors
