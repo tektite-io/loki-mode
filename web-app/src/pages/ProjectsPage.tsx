@@ -1,19 +1,15 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, MoreVertical, Trash2, FolderOpen, Copy, ExternalLink, XCircle, Star } from 'lucide-react';
 import { Search, Plus, MoreVertical, Trash2, FolderOpen, Copy, ExternalLink, XCircle, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
-import { EmptyState } from '../components/EmptyState';
 import { api } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
-import { PageTransition } from '../components/PageTransition';
-import { StaggeredList } from '../components/StaggeredList';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import type { SessionHistoryItem } from '../api/client';
 
-type FilterTab = 'all' | 'running' | 'completed' | 'failed' | 'favorites';
+type FilterTab = 'all' | 'running' | 'completed' | 'failed';
 
 function statusToBadge(status: string): 'completed' | 'running' | 'failed' | 'started' | 'empty' {
   const normalized = normalizeStatus(status);
@@ -52,31 +48,10 @@ function normalizeStatus(s: string): string {
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'favorites', label: 'Favorites' },
   { key: 'running', label: 'Running' },
   { key: 'completed', label: 'Completed' },
   { key: 'failed', label: 'Failed' },
 ];
-
-// D41: Favorites persistence
-const FAVORITES_KEY = 'pl_favorite_projects';
-
-function getFavorites(): Set<string> {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    return new Set(raw ? JSON.parse(raw) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function saveFavorites(favs: Set<string>) {
-  try {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favs]));
-  } catch {
-    // ignore
-  }
-}
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
@@ -85,17 +60,6 @@ export default function ProjectsPage() {
   const [deleteTarget, setDeleteTarget] = useState<SessionHistoryItem | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
-  const [favorites, setFavorites] = useState<Set<string>>(getFavorites);
-
-  const toggleFavorite = (id: string) => {
-    setFavorites(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      saveFavorites(next);
-      return next;
-    });
-  };
 
   const fetchSessions = useCallback(() => api.getSessionsHistory(), []);
   const { data: sessions, refresh } = usePolling(fetchSessions, 15000, true);
@@ -109,25 +73,15 @@ export default function ProjectsPage() {
   const filtered = useMemo(() => {
     if (!sessions) return [];
     let list = sessions;
-
-    // D41: Filter favorites
-    if (filter === 'favorites') {
-      list = list.filter((s) => favorites.has(s.id));
-    } else if (filter !== 'all') {
-      list = list.filter((s) => normalizeStatus(s.status) === filter);
+    if (filter !== 'all') {
+      list = list.filter((s) => s.status === filter);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((s) => s.prd_snippet.toLowerCase().includes(q));
     }
-    // Sort favorites to top
-    list = [...list].sort((a, b) => {
-      const aFav = favorites.has(a.id) ? 0 : 1;
-      const bFav = favorites.has(b.id) ? 0 : 1;
-      return aFav - bFav;
-    });
     return list;
-  }, [sessions, filter, search, favorites]);
+  }, [sessions, filter, search]);
 
   const handleCopyPath = (path: string) => {
     navigator.clipboard.writeText(path);
@@ -153,8 +107,6 @@ export default function ProjectsPage() {
   };
 
   return (
-    <PageTransition>
-    <div className="max-w-[1400px] mx-auto px-6 py-8">
     <div ref={pullRef} className="max-w-[1400px] mx-auto px-6 max-md:px-4 py-8 overflow-auto h-full">
       {/* Pull-to-refresh indicator */}
       {(pulling || pullRefreshing) && (
@@ -198,13 +150,12 @@ export default function ProjectsPage() {
               role="tab"
               aria-selected={filter === tab.key}
               onClick={() => setFilter(tab.key)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-[3px] transition-colors flex items-center gap-1 ${
+              className={`px-3 py-1.5 text-xs font-semibold rounded-[3px] transition-colors ${
                 filter === tab.key
                   ? 'bg-[#553DE9] text-white'
                   : 'text-[#6B6960] hover:text-[#36342E] hover:bg-[#F8F4F0]'
               }`}
             >
-              {tab.key === 'favorites' && <Star size={11} />}
               {tab.label}
             </button>
           ))}
@@ -213,41 +164,24 @@ export default function ProjectsPage() {
 
       {/* Grid */}
       {filtered.length === 0 ? (
-        filter === 'favorites' ? (
-          <EmptyState
-            title="No favorite projects"
-            description="Star a project to pin it here for quick access."
-            illustration="no-projects"
-          />
-        ) : (
-          <EmptyState
-            title="No projects yet"
-            description="Start building something amazing."
-            illustration="no-projects"
-            actionLabel="New Project"
-            actionIcon={Plus}
-            onAction={() => navigate('/')}
-          />
-        )
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <p className="text-[#6B6960] text-sm mb-4">No projects yet. Start building.</p>
+          <Button icon={Plus} onClick={() => navigate('/')}>
+            New Project
+          </Button>
+        </div>
       ) : (
-        <StaggeredList
-          animation="fade-in-up"
-          stagger={50}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
-        >
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((session) => (
             <ProjectCard
               key={session.id}
               session={session}
-              isFavorite={favorites.has(session.id)}
-              onToggleFavorite={() => toggleFavorite(session.id)}
               onOpen={() => navigate(`/project/${session.id}`)}
               onDelete={() => setDeleteTarget(session)}
               onCopyPath={() => handleCopyPath(session.path)}
             />
           ))}
-        </StaggeredList>
+        </div>
       )}
 
       {/* Delete confirmation dialog */}
@@ -283,7 +217,7 @@ export default function ProjectsPage() {
 
       {/* Notification toast */}
       {notification && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 bg-[#36342E] text-white text-sm rounded-[5px] shadow-lg flex items-center gap-2 animate-fade-in-up animation-fill-both">
+        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 bg-[#36342E] text-white text-sm rounded-[5px] shadow-lg flex items-center gap-2">
           {notification}
           <button onClick={() => setNotification(null)} className="text-white/60 hover:text-white">
             <XCircle size={14} />
@@ -291,21 +225,16 @@ export default function ProjectsPage() {
         </div>
       )}
     </div>
-    </PageTransition>
   );
 }
 
 function ProjectCard({
   session,
-  isFavorite,
-  onToggleFavorite,
   onOpen,
   onDelete,
   onCopyPath,
 }: {
   session: SessionHistoryItem;
-  isFavorite: boolean;
-  onToggleFavorite: () => void;
   onOpen: () => void;
   onDelete: () => void;
   onCopyPath: () => void;
@@ -332,20 +261,7 @@ function ProjectCard({
   });
 
   return (
-    <Card hover onClick={onOpen} className="relative card-lift">
-      {/* D41: Favorite star */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-        className={`absolute top-2.5 left-2.5 z-10 p-1 rounded-[3px] transition-colors ${
-          isFavorite
-            ? 'text-[#E5A940]'
-            : 'text-[#B8B5AD] opacity-0 group-hover:opacity-100 hover:text-[#E5A940]'
-        }`}
-        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-      >
-        <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
-      </button>
-
+    <Card hover onClick={onOpen} className="relative">
       {/* 3-dot menu */}
       <div className="absolute top-2.5 right-2.5 z-10" ref={menuRef}>
         <button
@@ -391,14 +307,14 @@ function ProjectCard({
         )}
       </div>
 
-      <div className="flex items-center justify-between mb-2 pr-6 pl-7">
+      <div className="flex items-center justify-between mb-2 pr-6">
         <span className="text-xs text-[#6B6960]">{dateStr}</span>
         <Badge status={statusToBadge(session.status)}>{STATUS_LABELS[session.status] || session.status}</Badge>
       </div>
-      <h3 className="text-sm font-medium text-[#36342E] line-clamp-2 mb-2 pl-7">
+      <h3 className="text-sm font-medium text-[#36342E] line-clamp-2 mb-2">
         {session.prd_snippet || 'Untitled project'}
       </h3>
-      <p className="text-xs text-[#6B6960] truncate pl-7">{session.path}</p>
+      <p className="text-xs text-[#6B6960] truncate">{session.path}</p>
     </Card>
   );
 }

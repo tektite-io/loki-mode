@@ -15,7 +15,6 @@ import {
   RefreshCw, PanelLeftClose, PanelLeftOpen, PanelBottomClose, PanelBottomOpen, Maximize2, Minimize2,
   LayoutDashboard,
   GitBranch as CICDIcon,
-  Smartphone,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -36,9 +35,6 @@ import { CheckpointTimeline } from './CheckpointTimeline';
 import { ChangePreview } from './ChangePreview';
 import type { FileNode, ChangePreviewData } from '../types/api';
 import { CICDPanel } from './CICDPanel';
-import { Celebration } from './Celebration';
-import { Breadcrumb } from './Breadcrumb';
-import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import type { SessionDetail } from '../api/client';
 import { BuildCelebration } from './BuildCelebration';
 import { TokenSparkline, useTokenHistory } from './TokenSparkline';
@@ -49,8 +45,6 @@ import {
   FullscreenButton, PreviewConsole, RefreshButton, PreviewSkeleton,
 } from './PreviewToolbar';
 import type { ConsoleMessage } from './PreviewToolbar';
-import { FeatureDiscoveryDot, markFeatureDiscovered } from './FeatureDiscoveryDot';
-import { ContextualHelp, HELP_TOOLTIPS } from './ContextualHelp';
 
 // Wrapper to avoid inline import complexity
 function CICDPanelLazy({ sessionId }: { sessionId: string }) {
@@ -442,23 +436,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   const dashboardPort = 57374;
   const [dashboardAvailable, setDashboardAvailable] = useState<boolean | null>(null);
 
-  // J96: Swipe gestures to switch workspace tabs on mobile
-  const WORKSPACE_TAB_ORDER: WorkspaceTab[] = ['code', 'preview', 'config', 'secrets', 'prd', 'dashboard', 'deploy', 'git', 'cicd'];
-  const swipeRef = useSwipeGesture<HTMLDivElement>({
-    onSwipeLeft: () => {
-      const idx = WORKSPACE_TAB_ORDER.indexOf(activeWorkspaceTab);
-      if (idx < WORKSPACE_TAB_ORDER.length - 1) setActiveWorkspaceTab(WORKSPACE_TAB_ORDER[idx + 1]);
-    },
-    onSwipeRight: () => {
-      const idx = WORKSPACE_TAB_ORDER.indexOf(activeWorkspaceTab);
-      if (idx > 0) setActiveWorkspaceTab(WORKSPACE_TAB_ORDER[idx - 1]);
-    },
-    threshold: 50,
-  });
-
-  // J102: Mobile preview toggle
-  const [mobilePreview, setMobilePreview] = useState(false);
-
   const toggleZenMode = useCallback(() => {
     setZenMode(prev => {
       const next = !prev;
@@ -483,8 +460,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
   } | null>(null);
   const [isBuilding, setIsBuilding] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [showCelebration, setShowCelebration] = useState(false);
-  const prevBuildPhaseRef = useRef<string>('idle');
   const [buildStatus, setBuildStatus] = useState<{
     phase: string;
     iteration: number;
@@ -1225,20 +1200,8 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
     return 'building';
   }, [isBuilding, buildStatus.phase, sessionData.status]);
 
-  // Trigger celebration when build completes
-  useEffect(() => {
-    if (buildPhase === 'complete' && prevBuildPhaseRef.current !== 'complete') {
-      setShowCelebration(true);
-    }
-    prevBuildPhaseRef.current = buildPhase;
-  }, [buildPhase]);
-
   return (
     <div className="flex flex-col h-full relative">
-      {/* Build completion celebration */}
-      {showCelebration && (
-        <Celebration type="build-complete" onDismiss={() => setShowCelebration(false)} />
-      )}
       {/* Header */}
       <div className="bg-card px-3 py-2 flex items-center gap-3 flex-shrink-0 border-b border-border">
         <button onClick={() => {
@@ -1252,12 +1215,8 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
           Back
         </button>
         <div className="flex-1 min-w-0">
-          <Breadcrumb segments={[
-            { label: 'Projects', href: '/projects' },
-            { label: sessionData.prd?.slice(0, 40) || sessionData.id },
-            { label: activeWorkspaceTab.charAt(0).toUpperCase() + activeWorkspaceTab.slice(1) },
-          ]} />
-          <h2 className="text-sm font-bold text-ink truncate mt-0.5">{sessionData.id}</h2>
+          <h2 className="text-sm font-bold text-ink truncate">{sessionData.id}</h2>
+          <p className="text-xs font-mono text-muted-accessible truncate">{sessionData.path}</p>
         </div>
         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
           sessionData.status === 'completed' || sessionData.status === 'completion_promise_fulfilled'
@@ -1443,20 +1402,13 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
                       { id: 'git' as const, label: 'Git', icon: GitBranch },
                       { id: 'cicd' as const, label: 'CI/CD', icon: CICDIcon },
-                    ]).map(tab => {
-                      const discoveryMap: Record<string, 'deploy_tab' | 'git_tab'> = { deploy: 'deploy_tab', git: 'git_tab' };
-                      const discoveryFeature = discoveryMap[tab.id];
-                      return (
+                    ]).map(tab => (
                       <button
                         key={tab.id}
                         role="tab"
                         aria-selected={activeWorkspaceTab === tab.id}
-                        onClick={() => {
-                          setActiveWorkspaceTab(tab.id);
-                          if (discoveryFeature) markFeatureDiscovered(discoveryFeature);
-                        }}
-                        data-tour={tab.id === 'preview' ? 'preview-tab' : tab.id === 'deploy' ? 'deploy-tab' : undefined}
-                        className={`relative flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                        onClick={() => setActiveWorkspaceTab(tab.id)}
+                        className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
                           activeWorkspaceTab === tab.id
                             ? 'border-primary text-primary'
                             : 'border-transparent text-muted hover:text-ink hover:border-border'
@@ -1464,43 +1416,22 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       >
                         <tab.icon size={14} />
                         {tab.label}
-                        {discoveryFeature && (
-                          <FeatureDiscoveryDot feature={discoveryFeature} className="ml-1" />
-                        )}
                       </button>
-                      );
-                    })}
+                    ))}
                   </div>
 
-                  {/* Tab content -- swipe left/right to switch tabs on mobile */}
-                  <div ref={swipeRef} className="flex-1 min-h-0" role="tabpanel">
+                  {/* Tab content */}
+                  <div className="flex-1 min-h-0" role="tabpanel">
                     {activeWorkspaceTab === 'code' && (
                       <div className="h-full flex flex-col min-w-0">
-                        {/* D39/D40: File tab bar with close buttons, unsaved dot, and drag-to-reorder */}
+                        {/* File tab bar */}
                         {openTabs.length > 0 && (
                           <div className="flex items-center border-b border-border bg-hover overflow-x-auto flex-shrink-0">
-                            {openTabs.map((tab, tabIdx) => (
+                            {openTabs.map(tab => (
                               <button
                                 key={tab.path}
-                                draggable
-                                onDragStart={(e) => {
-                                  e.dataTransfer.effectAllowed = 'move';
-                                  e.dataTransfer.setData('text/plain', String(tabIdx));
-                                }}
-                                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
-                                onDrop={(e) => {
-                                  e.preventDefault();
-                                  const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-                                  if (isNaN(fromIdx) || fromIdx === tabIdx) return;
-                                  setOpenTabs(prev => {
-                                    const next = [...prev];
-                                    const [moved] = next.splice(fromIdx, 1);
-                                    next.splice(tabIdx, 0, moved);
-                                    return next;
-                                  });
-                                }}
                                 onClick={() => handleFileSelect(tab.path, tab.name)}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono border-r border-border whitespace-nowrap transition-colors cursor-grab active:cursor-grabbing ${
+                                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono border-r border-border whitespace-nowrap transition-colors ${
                                   tab.path === selectedFile
                                     ? 'bg-card text-ink'
                                     : 'text-muted hover:text-ink hover:bg-card'
@@ -1510,7 +1441,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                                   {getFileIcon(tab.name, 'file')}
                                 </span>
                                 {tab.name}
-                                {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" title="Unsaved changes" />}
+                                {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
                                 <span
                                   role="button"
                                   tabIndex={-1}
@@ -1665,19 +1596,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                               {/* C30: Fullscreen toggle */}
                               <FullscreenButton isFullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen(f => !f)} />
 
-                              {/* J102: Mobile preview toggle */}
-                              <button
-                                onClick={() => setMobilePreview(v => !v)}
-                                title={mobilePreview ? 'Desktop preview' : 'Mobile preview (375px)'}
-                                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                                  mobilePreview
-                                    ? 'border-primary/40 bg-primary/10 text-primary'
-                                    : 'border-border bg-card text-muted hover:text-ink'
-                                }`}
-                              >
-                                <Smartphone size={12} />
-                                {mobilePreview ? 'Mobile' : ''}
-                              </button>
                               {devServer?.running && (
                                 <button
                                   onClick={handleStopDevServer}
@@ -1789,38 +1707,6 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                               </div>
                             </div>
                             <PreviewConsole messages={consoleMessages} />
-                          <div className="flex-1 bg-white flex items-start justify-center">
-                            {mobilePreview && (
-                              <div className="text-[10px] text-muted bg-hover px-2 py-0.5 rounded absolute top-[88px] left-1/2 -translate-x-1/2 z-10 font-mono">
-                                Mobile Preview -- 375px
-                              </div>
-                            )}
-                            <iframe
-                              key={previewKey}
-                              ref={previewRef}
-                              src={currentPreviewUrl}
-                              title="Project Preview"
-                              className="h-full border-0 transition-[width] duration-300 ease-in-out"
-                              style={{ width: mobilePreview ? '375px' : '100%' }}
-                              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                            />
-                          </div>
-                        ) : previewInfo?.preview_url ? (
-                          <div className="flex-1 bg-white flex items-start justify-center">
-                            {mobilePreview && (
-                              <div className="text-[10px] text-muted bg-hover px-2 py-0.5 rounded absolute top-[88px] left-1/2 -translate-x-1/2 z-10 font-mono">
-                                Mobile Preview -- 375px
-                              </div>
-                            )}
-                            <iframe
-                              key={previewKey}
-                              ref={previewRef}
-                              src={currentPreviewUrl}
-                              title="Project Preview"
-                              className="h-full border-0 transition-[width] duration-300 ease-in-out"
-                              style={{ width: mobilePreview ? '375px' : '100%' }}
-                              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                            />
                           </div>
                         ) : previewInfo ? (
                           <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">

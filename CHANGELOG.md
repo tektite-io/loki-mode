@@ -5,6 +5,27 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.73.0] - 2026-03-24 - 120 Commercial UI Enhancements
+
+### Added
+- **Landing Page**: Hero constellation animation, typing cursor, social proof with animated counters, showcase carousel, how-it-works 3-step guide, gradient text, floating action hints, warm greeting, footer
+- **SVG Chart Library**: 8 pure SVG charts (LineChart, DonutChart, BarChart, HeatMap, GaugeChart, Timeline, RadarChart, Sparkline) + MetricsPage dashboard
+- **Design System**: Glassmorphism cards, gradient borders, AnimatedCounter, ProgressRing, Tooltip, Popover, Avatar, Tag, EmptyState, Divider, AnnouncementBanner
+- **Build Experience**: SkeletonLoader, BuildCelebration confetti, TokenSparkline, StatusBar, DeviceFrameSelector (desktop/tablet/mobile), PreviewToolbar (zoom/QR/screenshot/fullscreen/console)
+- **Navigation**: Breadcrumb, enhanced CommandPalette with fuzzy search, sidebar collapse, tab drag-reorder, project favorites, recent dropdown, page transitions, sticky header
+- **AI Personality**: Loki avatar in chat, warm empty states, CSS confetti celebration, loading messages, achievement system, sound effects, time-based greetings, micro-interactions
+- **Innovation Features**: BuildReplay with playback controls, ConfidenceIndicator, SmartSuggestions, ProjectHealth A-F grading, FileInsights, CostEstimator, CodeTimeline, ProviderRace, NLSearch, BuildInsights
+- **Enterprise**: AdminPage, SystemSettingsPage, UsageAnalytics, APIKeyManager, AuditTrail, UserManagement, ProjectGovernance, ComplianceDashboard
+- **Dashboard Advanced**: Activity stream, provider health matrix, pipeline visualizer, memory network graph, cost waterfall, agent leaderboard, enhanced RARV timeline, notification center with bell/badge
+- **Onboarding**: ProductTour spotlight, WhatsNew modal, GettingStarted checklist, DocsSidebar with video thumbnails, UserMenu, ActivityFeed, ContextualHelp, FeatureDiscoveryDots, ShareProject, @mention, reactions, typing indicator
+- **Mobile**: MobileNav hamburger, MobileBottomNav, swipe gestures, pull-to-refresh, responsive breakpoints, mobile chat overlay, VirtualList, LazyImage, focus trap, escape key stack
+- **Marketing**: ShowcasePage (12 projects), ComparePage (18 features), ROI Calculator, Testimonials, Roadmap, ChangelogWidget, NewsletterSignup, OpenSourceStats
+- **Templates**: Complete gallery redesign with gradient headers, TemplatePreview modal, TemplateCategories, CustomTemplateCreator wizard, FeaturedTemplates Staff Picks
+- **CSS Animations**: 30+ animation classes, useInView hook, AnimateOnScroll, PageTransition, StaggeredList
+- **Settings**: Complete 8-category redesign (General, Appearance, Editor, Build, Providers, Shortcuts, Accessibility, About)
+- **Content**: 6 demo HTML apps, 5 interactive walkthroughs, product marketing website, enhanced README
+- **Homepage**: TrustedBy section, HowItWorks guide, TemplateShowcase, BenefitCards, CTA section, 4-column Footer
+
 ## [6.72.0] - 2026-03-24 - Dark Mode, RBAC/Teams, GitPanel, Template Gallery, CI/CD Pipeline, NotificationSystem
 
 ### Added

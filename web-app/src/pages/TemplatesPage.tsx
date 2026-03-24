@@ -8,8 +8,6 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
-import { PageTransition } from '../components/PageTransition';
-import { StaggeredList } from '../components/StaggeredList';
 import { FeaturedTemplates } from '../components/FeaturedTemplates';
 import { TemplatePreview } from '../components/TemplatePreview';
 import { CustomTemplateCreator } from '../components/CustomTemplateCreator';
@@ -290,7 +288,6 @@ export default function TemplatesPage() {
   };
 
   return (
-    <PageTransition>
     <div className="max-w-[1400px] mx-auto px-6 py-8">
       {/* Hero section */}
       <div className="text-center mb-8">
@@ -303,12 +300,6 @@ export default function TemplatesPage() {
           Choose a starting point and customize with AI. Each template is a complete PRD
           ready to become your next project.
         </p>
-    <div className="max-w-[1400px] mx-auto px-6 max-md:px-4 py-8">
-    <div className="max-w-[1400px] mx-auto px-6 py-8" data-tour="template-gallery">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-heading text-h1 text-[#36342E]">Templates</h1>
-        <span className="text-xs text-muted">{templates?.length || 0} templates available</span>
-      </div>
 
         {/* Centered search bar */}
         <div className="relative max-w-xl mx-auto mb-5">
@@ -406,11 +397,7 @@ export default function TemplatesPage() {
           )}
         </div>
       ) : (
-        <StaggeredList
-          animation="scale-in"
-          stagger={50}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
-        >
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map((t) => {
             const category = t.category || 'Other';
             const gradient = CATEGORY_GRADIENTS[category] || CATEGORY_GRADIENTS.Other;
@@ -518,7 +505,6 @@ export default function TemplatesPage() {
               </div>
             );
           })}
-        </StaggeredList>
 
           {/* "Create Your Own" card at the end of the grid */}
           <div
@@ -556,6 +542,5 @@ export default function TemplatesPage() {
         />
       )}
     </div>
-    </PageTransition>
   );
 }

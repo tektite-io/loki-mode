@@ -11,18 +11,12 @@ import {
   LogOut,
   Monitor,
   ChevronUp,
-  ChevronDown,
   Menu,
   X,
   Moon,
   Sun,
   Users,
-  Sparkles,
-  BarChart3,
   HelpCircle,
-  ShieldCheck,
-  Wrench,
-  Shield,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
@@ -36,7 +30,6 @@ export interface SidebarProps {
 }
 
 const LS_KEY = 'pl_sidebar_collapsed';
-const LS_SECTIONS_KEY = 'pl_sidebar_sections';
 
 interface NavItem {
   to: string;
@@ -50,45 +43,10 @@ const mainNav: NavItem[] = [
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/templates', label: 'Templates', icon: LayoutTemplate, discoveryFeature: 'templates' },
   { to: '/teams', label: 'Teams', icon: Users },
-  { to: '/metrics', label: 'Metrics', icon: BarChart3 },
-  { to: '/showcase', label: 'Showcase', icon: Sparkles },
-  { to: '/compare', label: 'Compare', icon: BarChart3 },
-];
-interface NavSection {
-  key: string;
-  label: string;
-  items: NavItem[];
-}
-
-const navSections: NavSection[] = [
-  {
-    key: 'main',
-    label: 'Navigation',
-    items: [
-      { to: '/', label: 'Home', icon: Home },
-      { to: '/projects', label: 'Projects', icon: FolderKanban },
-      { to: '/templates', label: 'Templates', icon: LayoutTemplate },
-      { to: '/teams', label: 'Teams', icon: Users },
-    ],
-  },
-  {
-    key: 'system',
-    label: 'System',
-    items: [
-      { to: '/settings', label: 'Settings', icon: Settings2 },
-    ],
-  },
-const adminNav: NavItem[] = [
-  { to: '/admin', label: 'Admin', icon: ShieldCheck },
-  { to: '/admin/settings', label: 'System Settings', icon: Wrench },
-  { to: '/showcase', label: 'Showcase', icon: Sparkles },
-  { to: '/metrics', label: 'Metrics', icon: BarChart3 },
 ];
 
 const secondaryNav: NavItem[] = [
   { to: '/settings', label: 'Settings', icon: Settings2 },
-  // Admin link -- TODO: gate on admin role when RBAC is implemented
-  { to: '/admin', label: 'Admin', icon: Shield },
 ];
 
 function useIsMobile() {
@@ -103,29 +61,10 @@ function useIsMobile() {
   return isMobile;
 }
 
-function getSectionState(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(LS_SECTIONS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function setSectionState(state: Record<string, boolean>) {
-  try {
-    localStorage.setItem(LS_SECTIONS_KEY, JSON.stringify(state));
-  } catch {
-    // ignore
-  }
-}
-
-export function Sidebar({ wsConnected, version }: SidebarProps) {
 export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
   const isMobile = useIsMobile();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { user, isLocalMode } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const [collapsed, setCollapsed] = useState(() => {
@@ -135,17 +74,6 @@ export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
       return false;
     }
   });
-
-  // D38: Section collapse state
-  const [sectionCollapsed, setSectionCollapsed] = useState<Record<string, boolean>>(getSectionState);
-
-  const toggleSection = (key: string) => {
-    setSectionCollapsed(prev => {
-      const next = { ...prev, [key]: !prev[key] };
-      setSectionState(next);
-      return next;
-    });
-  };
 
   useEffect(() => {
     try {
@@ -160,7 +88,7 @@ export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
     if (isMobile) setMobileOpen(false);
   }, [location.pathname, isMobile]);
 
-  // D37: Smooth sidebar collapse/expand animation
+  // On mobile: collapsed to icons only, expandable via hamburger
   const showLabels = isMobile ? mobileOpen : !collapsed;
   const sidebarWidth = showLabels ? 240 : 64;
 
@@ -177,7 +105,7 @@ export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
 
   const sidebarContent = (
     <aside
-      className="flex flex-col h-full border-r border-[#ECEAE3] bg-white transition-[width] duration-200 ease-in-out"
+      className="flex flex-col h-full border-r border-[#ECEAE3] bg-white transition-[width] duration-200"
       style={{ width: sidebarWidth, minWidth: sidebarWidth }}
     >
       {/* Logo */}
@@ -213,44 +141,6 @@ export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
         )}
       </div>
 
-      {/* Navigation with collapsible section headers (D38) */}
-      <nav className="flex-1 px-2 py-3 flex flex-col gap-1 overflow-y-auto" aria-label="Main navigation">
-        {navSections.map((section, si) => {
-          const isCollapsed = sectionCollapsed[section.key] ?? false;
-          return (
-            <div key={section.key}>
-              {si > 0 && <div className="my-2 border-t border-[#ECEAE3]" />}
-              {/* D38: Section header with collapse toggle */}
-              {showLabels && (
-                <button
-                  type="button"
-                  onClick={() => toggleSection(section.key)}
-                  className="w-full flex items-center justify-between px-3 py-1 mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#939084] hover:text-[#36342E] transition-colors"
-                >
-                  <span>{section.label}</span>
-                  <ChevronDown
-                    size={12}
-                    className={`transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}
-                  />
-                </button>
-              )}
-              <div className={`sidebar-section-content ${showLabels && isCollapsed ? 'sidebar-section-collapsed' : 'sidebar-section-expanded'}`}>
-                {section.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive }) => linkClasses(isActive)}
-                    title={!showLabels ? item.label : undefined}
-                  >
-                    <item.icon size={18} />
-                    {showLabels && <span>{item.label}</span>}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          );
-        })}
       {/* Main navigation */}
       <nav className="flex-1 px-2 py-3 flex flex-col gap-1" aria-label="Main navigation">
         {mainNav.map((item) => (
@@ -277,29 +167,6 @@ export function Sidebar({ wsConnected, version, onOpenDocs }: SidebarProps) {
             {showLabels && <span>{item.label}</span>}
           </NavLink>
         ))}
-
-        {/* Admin section -- shown for admin role or local mode */}
-        {(isLocalMode || user?.authenticated) && (
-          <>
-            <div className="my-2 border-t border-[#ECEAE3]" />
-            {showLabels && (
-              <span className="px-3 text-[10px] font-semibold text-[#939084] uppercase tracking-wider">
-                Admin
-              </span>
-            )}
-            {adminNav.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => linkClasses(isActive)}
-                title={!showLabels ? item.label : undefined}
-              >
-                <item.icon size={18} />
-                {showLabels && <span>{item.label}</span>}
-              </NavLink>
-            ))}
-          </>
-        )}
 
         {/* Separator */}
         <div className="my-2 border-t border-[#ECEAE3]" />

@@ -16,19 +16,6 @@ import { MemoryViewer } from '../components/MemoryViewer';
 import { ReportPanel } from '../components/ReportPanel';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { SessionHistory } from '../components/SessionHistory';
-import {
-  MessageSquare,
-  Hammer,
-  Rocket,
-  ArrowDown,
-  Heart,
-  ExternalLink,
-} from 'lucide-react';
-import { PageTransition } from '../components/PageTransition';
-import { AnimateOnScroll } from '../components/AnimateOnScroll';
-import { Showcase } from '../components/Showcase';
-import { OpenSourceStats } from '../components/OpenSourceStats';
-import { NewsletterSignup } from '../components/NewsletterSignup';
 import { TrustedBy } from '../components/TrustedBy';
 import { HowItWorks } from '../components/HowItWorks';
 import { TemplateShowcase } from '../components/TemplateShowcase';
@@ -43,72 +30,6 @@ const CYCLING_PROMPTS = [
   "Build a chat app with real-time messaging...",
   "Create an e-commerce store with Stripe...",
 ];
-
-// A7: Rotating suggestion chip sets
-const SUGGESTION_SETS = [
-  [
-    "Build a SaaS dashboard",
-    "Create a REST API",
-    "Design a landing page",
-  ],
-  [
-    "Build a chat application",
-    "Create a CLI tool",
-    "Make a Discord bot",
-  ],
-  [
-    "Build an e-commerce store",
-    "Create a mobile app",
-    "Design a portfolio site",
-  ],
-];
-
-// A4: Showcase projects
-const SHOWCASE_PROJECTS = [
-  { name: 'SaaS Dashboard', stack: ['React', 'Tailwind', 'Chart.js'], gradient: 'showcase-gradient-1', time: '~3 min' },
-  { name: 'REST API', stack: ['Node.js', 'Express', 'PostgreSQL'], gradient: 'showcase-gradient-2', time: '~2 min' },
-  { name: 'Discord Bot', stack: ['Discord.js', 'TypeScript'], gradient: 'showcase-gradient-3', time: '~2 min' },
-  { name: 'CLI Tool', stack: ['Node.js', 'Commander'], gradient: 'showcase-gradient-4', time: '~1 min' },
-  { name: 'Landing Page', stack: ['React', 'Tailwind', 'Framer'], gradient: 'showcase-gradient-5', time: '~2 min' },
-  { name: 'Mobile App', stack: ['React Native', 'Expo'], gradient: 'showcase-gradient-6', time: '~4 min' },
-];
-
-// A3: Animated counter hook
-function useAnimatedCounter(target: number, duration: number = 1200) {
-  const [count, setCount] = useState(0);
-  const [started, setStarted] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!ref.current) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting && !started) setStarted(true); },
-      { threshold: 0.3 }
-    );
-    observer.observe(ref.current);
-    return () => observer.disconnect();
-  }, [started]);
-
-  useEffect(() => {
-    if (!started) return;
-    const start = performance.now();
-    const step = (now: number) => {
-      const progress = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-      setCount(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }, [started, target, duration]);
-
-  return { count, ref };
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12) return 'Good morning! What shall we build today?';
-  if (hour >= 12 && hour < 17) return 'Good afternoon! Ready to create something amazing?';
-  if (hour >= 17 && hour < 22) return 'Good evening! Late night coding session?';
-  return 'Burning the midnight oil? Let\'s build something cool.';
-}
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -136,77 +57,17 @@ export default function HomePage() {
   const quickInputRef = useRef<HTMLInputElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
 
-  // A7: Suggestion chip rotation
-  const [suggestionSetIndex, setSuggestionSetIndex] = useState(0);
-  const [chipsFading, setChipsFading] = useState(false);
-
-  // A4: Showcase scroll ref
-  const showcaseRef = useRef<HTMLDivElement>(null);
-  const showcaseIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // A3: Animated counters
-  const projectsCounter = useAnimatedCounter(500);
-  const templatesCounter = useAnimatedCounter(50);
-  const providersCounter = useAnimatedCounter(5);
-
-  // A11: Showcase section ref for scroll-to
-  const showcaseSectionRef = useRef<HTMLDivElement>(null);
-
-  // Cycling placeholder animation (A2: slower + pause)
+  // Cycling placeholder animation
   useEffect(() => {
     const interval = setInterval(() => {
       setPlaceholderFading(true);
       setTimeout(() => {
         setPromptIndex(i => (i + 1) % CYCLING_PROMPTS.length);
         setPlaceholderFading(false);
-      }, 400);
-    }, 4000); // Slower: 4s between prompts
-    return () => clearInterval(interval);
-  }, []);
-
-  // A7: Rotate suggestion chips every 10 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setChipsFading(true);
-      setTimeout(() => {
-        setSuggestionSetIndex(i => (i + 1) % SUGGESTION_SETS.length);
-        setChipsFading(false);
       }, 300);
-    }, 10000);
+    }, 3000);
     return () => clearInterval(interval);
   }, []);
-
-  // A4: Auto-scroll showcase
-  useEffect(() => {
-    if (!showcaseRef.current) return;
-    const el = showcaseRef.current;
-    let paused = false;
-
-    const startScroll = () => {
-      showcaseIntervalRef.current = setInterval(() => {
-        if (paused) return;
-        const maxScroll = el.scrollWidth - el.clientWidth;
-        if (el.scrollLeft >= maxScroll - 2) {
-          el.scrollTo({ left: 0, behavior: 'smooth' });
-        } else {
-          el.scrollBy({ left: 260, behavior: 'smooth' });
-        }
-      }, 3000);
-    };
-
-    const onEnter = () => { paused = true; };
-    const onLeave = () => { paused = false; };
-
-    el.addEventListener('mouseenter', onEnter);
-    el.addEventListener('mouseleave', onLeave);
-    startScroll();
-
-    return () => {
-      if (showcaseIntervalRef.current) clearInterval(showcaseIntervalRef.current);
-      el.removeEventListener('mouseenter', onEnter);
-      el.removeEventListener('mouseleave', onLeave);
-    };
-  }, [isRunning]); // re-attach when switching views
 
   // Check for template prefill from TemplatesPage navigation
   useEffect(() => {
@@ -223,17 +84,6 @@ export default function HomePage() {
         .catch(() => {
           // Template load failed -- ignore, user can still type manually
         });
-    }
-  }, []);
-
-  // Check for showcase prompt prefill from ShowcasePage navigation
-  useEffect(() => {
-    const showcasePrompt = sessionStorage.getItem('pl_showcase_prompt');
-    if (showcasePrompt) {
-      sessionStorage.removeItem('pl_showcase_prompt');
-      setQuickPrompt(showcasePrompt);
-      // Focus the input after a brief delay so user sees the pre-filled prompt
-      setTimeout(() => quickInputRef.current?.focus(), 100);
     }
   }, []);
 
@@ -369,17 +219,6 @@ export default function HomePage() {
     try { await api.resumeSession(); setIsPaused(false); } catch { /* ignore */ }
   }, []);
 
-  // A7: Handle suggestion chip click
-  const handleChipClick = useCallback((text: string) => {
-    setQuickPrompt(text);
-    quickInputRef.current?.focus();
-  }, []);
-
-  // A11: Scroll to showcase
-  const scrollToShowcase = useCallback(() => {
-    showcaseSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
   const prdSummary = currentPrd
     ? currentPrd.replace(/^#+\s*/gm, '').split('\n').find(l => l.trim().length > 0) || null
     : null;
@@ -388,70 +227,22 @@ export default function HomePage() {
     <div className="min-h-screen bg-[#FAF9F6] relative">
       <div className="pattern-nodes" />
 
-      <div className="max-w-[1920px] mx-auto px-6 max-md:px-4 py-6 relative z-10">
+      <div className="max-w-[1920px] mx-auto px-6 py-6 relative z-10">
         {!isRunning ? (
-          <PageTransition>
           <div className="flex flex-col items-center">
-            {/* A1: Hero section with constellation background */}
-            <div className="hero-bg w-full rounded-3xl pt-8 pb-12 mb-2">
-              <div className="text-center mt-12 mb-10 relative z-10">
-                {/* A8: Warm welcome message */}
-                <p className="text-[#6B6960] text-sm font-medium mb-3 tracking-wide uppercase">
-                  Ready to build something amazing?
-                </p>
             {/* Hero section */}
-            <div className="text-center mt-12 mb-10">
-              <p className="text-sm text-primary font-medium mb-2">{getGreeting()}</p>
-            <AnimateOnScroll animation="fade-in-up" className="text-center mt-12 mb-10">
             <div ref={heroRef} className="text-center mt-12 mb-10">
               <h2 className="font-heading text-h1 text-[#36342E]">
-            <div className="text-center mt-12 max-md:mt-6 mb-10 max-md:mb-6">
-              <h2 className="font-heading text-h1 max-md:text-h2 text-[#36342E]">
                 Describe it. Build it. Ship it.
               </h2>
               <p className="text-[#6B6960] mt-3 text-base max-w-xl mx-auto">
                 Type what you want to build. Purple Lab handles the rest --
                 from code to containers, autonomously.
               </p>
-            </AnimateOnScroll>
+            </div>
 
-                {/* A6: Gradient text on heading */}
-                <h2 className="font-heading text-h1 gradient-text">
-                  What do you want to build?
-                </h2>
-                <p className="text-[#6B6960] mt-3 text-base max-w-xl mx-auto">
-                  Describe it in plain English. Purple Lab writes the code,
-                  runs the tests, and ships it -- autonomously.
-                </p>
-              </div>
-
-              {/* One-line quick-start input */}
-              <div className="w-full max-w-2xl mx-auto relative z-10">
-                <div className="relative">
-                  {/* A9: input-glow class for purple focus shadow */}
-                  <input
-                    ref={quickInputRef}
-                    type="text"
-                    value={quickPrompt}
-                    onChange={(e) => setQuickPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleQuickStart();
-                      }
-                    }}
-                    className="input-glow w-full text-xl px-6 py-4 rounded-2xl bg-white border border-[#ECEAE3] shadow-sm focus:outline-none focus:ring-2 focus:ring-[#553DE9]/30 focus:border-[#553DE9]/40 transition-all placeholder:text-transparent"
-                    disabled={quickSubmitting}
-                    aria-label="Describe what you want to build"
-                  />
-                  {/* A2: Enhanced cycling placeholder with blinking cursor */}
-                  {!quickPrompt && (
-                    <div
-                      className="absolute left-6 top-1/2 -translate-y-1/2 text-xl text-[#6B6960]/50 pointer-events-none select-none"
-                      aria-hidden="true"
             {/* One-line quick-start input */}
-            <AnimateOnScroll animation="fade-in-up" delay={100} className="w-full max-w-2xl">
-            <div className="w-full max-w-2xl" data-tour="input-box">
+            <div className="w-full max-w-2xl">
               <div className="relative">
                 <input
                   ref={quickInputRef}
@@ -478,202 +269,62 @@ export default function HomePage() {
                       key={promptIndex}
                       className={placeholderFading ? 'quick-input-placeholder-exit' : 'quick-input-placeholder'}
                     >
-                      <span
-                        key={promptIndex}
-                        className={placeholderFading ? 'quick-input-placeholder-exit' : 'quick-input-placeholder'}
-                      >
-                        {CYCLING_PROMPTS[promptIndex]}
-                      </span>
-                      <span className="typing-cursor">|</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* A10: Keyboard shortcut hint */}
-                <div className="mt-2 text-center">
-                  <span className="text-xs text-[#6B6960]/60">
-                    Press <kbd className="px-1.5 py-0.5 rounded bg-[#ECEAE3] text-[#36342E] text-xs font-mono">Enter</kbd> to start building
-                  </span>
-                </div>
-
-                {/* Start Building button */}
-                <div className="mt-3 flex items-center justify-center gap-4">
-                  <button
-                    onClick={handleQuickStart}
-                    disabled={!quickPrompt.trim() || quickSubmitting}
-                    className={`px-8 py-3 rounded-xl text-base font-semibold transition-all ${
-                      !quickPrompt.trim() || quickSubmitting
-                        ? 'bg-[#553DE9]/20 text-[#553DE9]/40 cursor-not-allowed'
-                        : 'bg-[#553DE9] text-white hover:bg-[#4832c7] shadow-lg shadow-[#553DE9]/25 hover:shadow-xl hover:shadow-[#553DE9]/30 active:scale-[0.98]'
-                    }`}
-                  >
-                    {quickSubmitting ? 'Starting...' : 'Start Building'}
-                  </button>
-                </div>
-
-                {/* A7: Floating action hints / suggestion chips */}
-                <div className="mt-5 flex items-center justify-center gap-2 flex-wrap min-h-[36px]">
-                  {SUGGESTION_SETS[suggestionSetIndex].map((text) => (
-                    <button
-                      key={text}
-                      onClick={() => handleChipClick(text)}
-                      className={`chip-glow px-4 py-1.5 rounded-full text-sm font-medium border border-[#ECEAE3] bg-white text-[#6B6960] hover:text-[#553DE9] hover:border-[#553DE9]/30 transition-all cursor-pointer ${
-                        chipsFading ? 'opacity-0' : 'opacity-100'
-                      }`}
-                    >
-                      {text}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Error display */}
-                {startError && (
-                  <div className="mt-3 px-4 py-2.5 rounded-xl bg-[#C45B5B]/10 border border-[#C45B5B]/20 text-[#C45B5B] text-sm font-medium text-center">
-                    {startError}
-                  </div>
-                )}
-
-                {/* Advanced (full PRD) toggle + A11: See examples link */}
-                <div className="mt-6 text-center flex items-center justify-center gap-4">
-                  <button
-                    onClick={() => setShowAdvanced(!showAdvanced)}
-                    className="text-sm text-[#553DE9] hover:text-[#4832c7] font-medium transition-colors"
-                  >
-                    {showAdvanced ? 'Hide advanced options' : 'Advanced (write full PRD)'}
-                  </button>
-                  <span className="text-[#ECEAE3]">|</span>
-                  <button
-                    onClick={scrollToShowcase}
-                    className="text-sm text-[#6B6960] hover:text-[#553DE9] font-medium transition-colors flex items-center gap-1"
-                  >
-                    See examples <ArrowDown className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Collapsible advanced PRD section */}
-                {showAdvanced && (
-                  <div className="mt-4">
-                    <PRDInput
-                      onSubmit={handleStartBuild}
-                      running={isRunning}
-                      error={startError}
-                      provider={selectedProvider}
-                      onProviderChange={handleProviderChange}
-                      initialPrd={templatePrd}
-                    />
+                      {CYCLING_PROMPTS[promptIndex]}
+                    </span>
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* A3: Social Proof Section */}
-            <div className="w-full max-w-3xl mt-8">
-              <div className="border-t border-[#ECEAE3] pt-8">
-                <p className="text-center text-sm text-[#6B6960] font-medium tracking-wide uppercase mb-6">
-                  Trusted by developers building the future
-                </p>
-                <div className="flex items-center justify-center gap-12">
-                  <div ref={projectsCounter.ref} className="text-center counter-animate">
-                    <div className="text-3xl font-bold text-[#36342E]">{projectsCounter.count}+</div>
-                    <div className="text-sm text-[#6B6960] mt-1">Projects Built</div>
-                  </div>
-                  <div className="w-px h-10 bg-[#ECEAE3]" />
-                  <div ref={templatesCounter.ref} className="text-center counter-animate">
-                    <div className="text-3xl font-bold text-[#36342E]">{templatesCounter.count}+</div>
-                    <div className="text-sm text-[#6B6960] mt-1">Templates</div>
-                  </div>
-                  <div className="w-px h-10 bg-[#ECEAE3]" />
-                  <div ref={providersCounter.ref} className="text-center counter-animate">
-                    <div className="text-3xl font-bold text-[#36342E]">{providersCounter.count}</div>
-                    <div className="text-sm text-[#6B6960] mt-1">AI Providers</div>
-                  </div>
-                </div>
+              {/* Start Building button */}
+              <div className="mt-4 flex items-center justify-center gap-4">
+                <button
+                  onClick={handleQuickStart}
+                  disabled={!quickPrompt.trim() || quickSubmitting}
+                  className={`px-8 py-3 rounded-xl text-base font-semibold transition-all ${
+                    !quickPrompt.trim() || quickSubmitting
+                      ? 'bg-[#553DE9]/20 text-[#553DE9]/40 cursor-not-allowed'
+                      : 'bg-[#553DE9] text-white hover:bg-[#4832c7] shadow-lg shadow-[#553DE9]/25 hover:shadow-xl hover:shadow-[#553DE9]/30 active:scale-[0.98]'
+                  }`}
+                >
+                  {quickSubmitting ? 'Starting...' : 'Start Building'}
+                </button>
               </div>
-            </div>
 
-            {/* A4: Featured Showcase Carousel */}
-            <div ref={showcaseSectionRef} className="w-full max-w-4xl mt-12">
-              <h3 className="text-lg font-semibold text-[#36342E] mb-4 text-center">
-                What people are building
-              </h3>
-              <div
-                ref={showcaseRef}
-                className="showcase-scroll flex gap-4 overflow-x-auto pb-4 px-2"
-              >
-                {SHOWCASE_PROJECTS.map((project) => (
-                  <div
-                    key={project.name}
-                    className={`showcase-card ${project.gradient} rounded-2xl p-6 min-w-[240px] w-[240px] text-white`}
-                  >
-                    <h4 className="font-bold text-lg mb-2">{project.name}</h4>
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                      {project.stack.map((tech) => (
-                        <span
-                          key={tech}
-                          className="px-2 py-0.5 rounded-full text-xs font-medium bg-white/20 backdrop-blur-sm"
-                        >
-                          {tech}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="text-sm text-white/80">Built in {project.time}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* A5: How It Works Section */}
-            <div className="w-full max-w-3xl mt-14 mb-8">
-              <h3 className="text-lg font-semibold text-[#36342E] mb-8 text-center">
-                How it works
-              </h3>
-              <div className="flex items-start justify-between relative">
-                {/* Dotted connector lines */}
-                <div className="absolute top-6 left-[calc(16.67%+24px)] right-[calc(16.67%+24px)] step-connector" />
-
-                {/* Step 1: Describe */}
-                <div className="flex flex-col items-center text-center flex-1 relative z-10">
-                  <div className="w-12 h-12 rounded-full bg-[#553DE9]/10 flex items-center justify-center mb-3">
-                    <MessageSquare className="w-5 h-5 text-[#553DE9]" />
-                  </div>
-                  <div className="text-xs font-bold text-[#553DE9] mb-1">Step 1</div>
-                  <h4 className="font-semibold text-[#36342E] mb-1">Describe</h4>
-                  <p className="text-sm text-[#6B6960] max-w-[180px]">
-                    Tell Purple Lab what to build in plain English
-                  </p>
+              {/* Error display */}
+              {startError && (
+                <div className="mt-3 px-4 py-2.5 rounded-xl bg-[#C45B5B]/10 border border-[#C45B5B]/20 text-[#C45B5B] text-sm font-medium text-center">
+                  {startError}
                 </div>
-
-                {/* Step 2: Build */}
-                <div className="flex flex-col items-center text-center flex-1 relative z-10">
-                  <div className="w-12 h-12 rounded-full bg-[#553DE9]/10 flex items-center justify-center mb-3">
-                    <Hammer className="w-5 h-5 text-[#553DE9]" />
-                  </div>
-                  <div className="text-xs font-bold text-[#553DE9] mb-1">Step 2</div>
-                  <h4 className="font-semibold text-[#36342E] mb-1">Build</h4>
-                  <p className="text-sm text-[#6B6960] max-w-[180px]">
-                    AI writes code, runs tests, and reviews quality
-                  </p>
-                </div>
-
-                {/* Step 3: Ship */}
-                <div className="flex flex-col items-center text-center flex-1 relative z-10">
-                  <div className="w-12 h-12 rounded-full bg-[#553DE9]/10 flex items-center justify-center mb-3">
-                    <Rocket className="w-5 h-5 text-[#553DE9]" />
-                  </div>
-                  <div className="text-xs font-bold text-[#553DE9] mb-1">Step 3</div>
-                  <h4 className="font-semibold text-[#36342E] mb-1">Ship</h4>
-                  <p className="text-sm text-[#6B6960] max-w-[180px]">
-                    Deploy to Vercel, Netlify, or GitHub in one click
-                  </p>
-                </div>
-              </div>
-            </div>
               )}
-            </AnimateOnScroll>
+
+              {/* Advanced (full PRD) toggle */}
+              <div className="mt-6 text-center">
+                <button
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="text-sm text-[#553DE9] hover:text-[#4832c7] font-medium transition-colors"
+                >
+                  {showAdvanced ? 'Hide advanced options' : 'Advanced (write full PRD)'}
+                </button>
+              </div>
+
+              {/* Collapsible advanced PRD section */}
+              {showAdvanced && (
+                <div className="mt-4">
+                  <PRDInput
+                    onSubmit={handleStartBuild}
+                    running={isRunning}
+                    error={startError}
+                    provider={selectedProvider}
+                    onProviderChange={handleProviderChange}
+                    initialPrd={templatePrd}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* Post-build actions */}
             {wasRunning && !isRunning && (
-              <AnimateOnScroll animation="fade-in-up" delay={200} className="w-full max-w-3xl mt-6 flex flex-col gap-4">
+              <div className="w-full max-w-3xl mt-6 flex flex-col gap-4">
                 <button
                   onClick={async () => {
                     try {
@@ -697,62 +348,18 @@ export default function HomePage() {
                 </div>
                 <ReportPanel visible={showReport} />
                 <MetricsPanel visible={showMetrics} />
-              </AnimateOnScroll>
+              </div>
             )}
 
-            <AnimateOnScroll animation="fade-in" delay={300} className="w-full max-w-3xl mt-6">
+            <div className="w-full max-w-3xl mt-6">
               <SessionHistory onLoadSession={handleLoadSession} />
-            </AnimateOnScroll>
+            </div>
 
-            <div className="mt-6 text-xs text-[#6B6960] flex items-center gap-2 animate-fade-in animation-fill-both animation-delay-400">
+            <div className="mt-6 text-xs text-[#6B6960] flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${connected ? 'bg-[#1FC5A8]' : 'bg-[#C45B5B]'}`} />
               {connected ? 'Connected to Purple Lab backend' : 'Waiting for backend connection...'}
             </div>
 
-            {/* A12: Footer */}
-            <footer className="w-full max-w-4xl mt-16 mb-8 pt-8 border-t border-[#ECEAE3]">
-              <div className="flex items-center justify-between text-sm text-[#6B6960]">
-                <div className="flex items-center gap-1.5">
-                  Built with <Heart className="w-3.5 h-3.5 text-[#D63384]" /> by{' '}
-                  <a
-                    href="https://www.autonomi.dev/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#553DE9] hover:text-[#4832c7] font-medium inline-flex items-center gap-1"
-                  >
-                    Autonomi <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-                <div className="flex items-center gap-4">
-                  <a
-                    href="https://github.com/asklokesh/loki-mode"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:text-[#553DE9] transition-colors"
-                  >
-                    GitHub
-                  </a>
-                  <a
-                    href="https://www.npmjs.com/package/loki-mode"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:text-[#553DE9] transition-colors"
-                  >
-                    npm
-                  </a>
-                </div>
-              </div>
-            </footer>
-            {/* Built with Loki Mode showcase */}
-            <div className="w-full max-w-3xl mt-6">
-              <Showcase />
-            </div>
-
-            {/* Newsletter and open source stats footer */}
-            <div className="w-full max-w-3xl mt-4">
-              <NewsletterSignup />
-              <OpenSourceStats />
-            </div>
             {/* --- Below the fold sections --- */}
 
             {/* 1. Trusted By */}
@@ -796,7 +403,6 @@ export default function HomePage() {
               </div>
             </section>
           </div>
-          </PageTransition>
         ) : (
           <>
             <ErrorBoundary name="ControlBar">
@@ -810,14 +416,14 @@ export default function HomePage() {
               </ErrorBoundary>
             </div>
 
-            <div className="mt-4 grid grid-cols-12 max-md:grid-cols-1 gap-6 max-md:gap-4" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
-              <div className="col-span-3 max-md:col-span-1 flex flex-col gap-6">
+            <div className="mt-4 grid grid-cols-12 gap-6" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+              <div className="col-span-3 flex flex-col gap-6">
                 <ErrorBoundary name="PhaseVisualizer">
                   <PhaseVisualizer currentPhase={status?.phase || 'idle'} iteration={status?.iteration || 0} />
                 </ErrorBoundary>
               </div>
 
-              <div className="col-span-5 max-md:col-span-1 flex flex-col gap-0 min-h-0">
+              <div className="col-span-5 flex flex-col gap-0 min-h-0">
                 <div className="flex items-center gap-1 mb-2 flex-shrink-0">
                   <button onClick={() => setActiveTab('terminal')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${activeTab === 'terminal' ? 'bg-[#553DE9] text-white' : 'text-[#6B6960] hover:text-[#36342E] hover:bg-[#F8F4F0]'}`}>
@@ -839,7 +445,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="col-span-4 max-md:col-span-1 flex flex-col gap-6 overflow-y-auto">
+              <div className="col-span-4 flex flex-col gap-6 overflow-y-auto">
                 <ErrorBoundary name="AgentDashboard">
                   <AgentDashboard agents={agents} loading={agentsLoading} />
                 </ErrorBoundary>
@@ -849,13 +455,13 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div className="mt-6 grid grid-cols-12 max-md:grid-cols-1 gap-6 max-md:gap-4">
-              <div className="col-span-6 max-md:col-span-1">
+            <div className="mt-6 grid grid-cols-12 gap-6">
+              <div className="col-span-6">
                 <ErrorBoundary name="FileBrowser">
                   <FileBrowser files={files} loading={filesLoading} />
                 </ErrorBoundary>
               </div>
-              <div className="col-span-6 max-md:col-span-1">
+              <div className="col-span-6">
                 <ErrorBoundary name="MemoryViewer">
                   <MemoryViewer memory={memory} loading={memoryLoading} />
                 </ErrorBoundary>
