@@ -368,13 +368,39 @@ async def _push_loki_state_loop() -> None:
                     try:
                         raw = _safe_json_read(state_file, {})
                         # Transform to StatusResponse-compatible format
+                        # BUG-NEW-001: Validate agent PIDs (match get_status behavior)
                         agents_list = raw.get("agents", [])
-                        running_agents = len(agents_list) if isinstance(agents_list, list) else 0
+                        running_agents = 0
+                        if isinstance(agents_list, list):
+                            for _agent in agents_list:
+                                _apid = _agent.get("pid") if isinstance(_agent, dict) else None
+                                if _apid:
+                                    try:
+                                        os.kill(int(_apid), 0)
+                                        running_agents += 1
+                                    except (OSError, ValueError, TypeError):
+                                        pass
+                                else:
+                                    running_agents += 1  # No PID field -- count as running (legacy)
                         tasks = raw.get("tasks", {})
                         pending = tasks.get("pending", [])
                         in_prog = tasks.get("inProgress", [])
+                        # BUG-NEW-006: Cross-check PID to avoid broadcasting
+                        # stale "running" status when process has crashed
+                        _pid_alive = False
+                        _ws_pid_file = loki_dir / "loki.pid"
+                        if _ws_pid_file.exists():
+                            try:
+                                _ws_pid = int(_ws_pid_file.read_text().strip())
+                                os.kill(_ws_pid, 0)
+                                _pid_alive = True
+                            except (ValueError, OSError, ProcessLookupError):
+                                pass
+
                         status_str = raw.get("mode", "autonomous")
-                        if status_str == "paused":
+                        if not _pid_alive:
+                            status_str = "stopped"
+                        elif status_str == "paused":
                             status_str = "paused"
                         elif status_str in ("stopped", ""):
                             status_str = "stopped"
@@ -1083,7 +1109,15 @@ async def list_tasks(
             fpath = queue_dir / queue_file
             if fpath.exists():
                 try:
-                    items = json.loads(fpath.read_text())
+                    raw_items = json.loads(fpath.read_text())
+                    # BUG-NEW-002: Support both array [...] and object {"tasks": [...]} formats
+                    # (matches run.sh load_queue_tasks which supports both)
+                    if isinstance(raw_items, dict):
+                        items = raw_items.get("tasks", [])
+                    elif isinstance(raw_items, list):
+                        items = raw_items
+                    else:
+                        items = []
                     if isinstance(items, list):
                         for i, item in enumerate(items):
                             if isinstance(item, dict):
@@ -2908,6 +2942,16 @@ async def stop_session(request: Request):
             atomic_write_json(session_file, sd, use_lock=True)
         except Exception:
             pass
+
+    # BUG-NEW-005: Clean up orphaned per-iteration temp files left by killed process
+    logs_dir = _get_loki_dir() / "logs"
+    if logs_dir.exists():
+        import glob as _glob_mod
+        for orphan in _glob_mod.glob(str(logs_dir / "iter-output-*")):
+            try:
+                os.unlink(orphan)
+            except OSError:
+                pass
 
     return {"success": True, "message": "Stop signal sent"}
 
