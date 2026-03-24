@@ -5639,6 +5639,96 @@ def _pty_read(pty: "pexpect.spawn") -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Teams & RBAC endpoints
+# ---------------------------------------------------------------------------
+
+# In-memory store for teams (production would use database)
+_teams_store: Dict[str, dict] = {}
+_audit_log: list = []
+
+
+class CreateTeamRequest(BaseModel):
+    name: str
+
+
+class AddMemberRequest(BaseModel):
+    email: str
+    role: str = "viewer"
+
+
+def _audit(action: str, user: str = "system", target: str = "", details: str = ""):
+    """Record an audit log entry."""
+    entry = {
+        "id": str(uuid.uuid4()),
+        "action": action,
+        "user": user,
+        "target": target,
+        "timestamp": datetime.now().isoformat(),
+        "details": details,
+    }
+    _audit_log.insert(0, entry)
+    # Keep last 500 entries
+    if len(_audit_log) > 500:
+        _audit_log[:] = _audit_log[:500]
+
+
+@app.get("/api/teams")
+async def list_teams() -> JSONResponse:
+    """List all teams."""
+    teams = list(_teams_store.values())
+    return JSONResponse(content=teams)
+
+
+@app.post("/api/teams")
+async def create_team(req: CreateTeamRequest) -> JSONResponse:
+    """Create a new team."""
+    team_id = f"team-{uuid.uuid4().hex[:8]}"
+    team = {
+        "id": team_id,
+        "name": req.name,
+        "members": [],
+        "created_at": datetime.now().isoformat(),
+    }
+    _teams_store[team_id] = team
+    _audit("team.created", target=req.name)
+    return JSONResponse(content={"id": team_id, "name": req.name, "created": True})
+
+
+@app.get("/api/teams/{team_id}/members")
+async def list_team_members(team_id: str) -> JSONResponse:
+    """List members of a team."""
+    team = _teams_store.get(team_id)
+    if not team:
+        return JSONResponse(status_code=404, content={"error": "Team not found"})
+    return JSONResponse(content=team.get("members", []))
+
+
+@app.post("/api/teams/{team_id}/members")
+async def add_team_member(team_id: str, req: AddMemberRequest) -> JSONResponse:
+    """Add a member to a team."""
+    team = _teams_store.get(team_id)
+    if not team:
+        return JSONResponse(status_code=404, content={"error": "Team not found"})
+    member_id = f"m-{uuid.uuid4().hex[:8]}"
+    member = {
+        "id": member_id,
+        "email": req.email,
+        "name": req.email.split("@")[0],
+        "role": req.role,
+        "joined_at": datetime.now().isoformat(),
+    }
+    team.setdefault("members", []).append(member)
+    _audit("member.added", target=req.email, details=f"Role: {req.role}")
+    return JSONResponse(content={"added": True, "member_id": member_id})
+
+
+@app.get("/api/audit-log")
+async def get_audit_log() -> JSONResponse:
+    """Get audit log entries."""
+    return JSONResponse(content=_audit_log)
+
+
+# ---------------------------------------------------------------------------
 # Static file serving (built React app)
 # ---------------------------------------------------------------------------
 

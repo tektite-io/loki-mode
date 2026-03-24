@@ -14,6 +14,7 @@ import {
   Server, Package, Terminal, Rocket, GitBranch,
   RefreshCw, PanelLeftClose, PanelLeftOpen, PanelBottomClose, PanelBottomOpen, Maximize2, Minimize2,
   LayoutDashboard,
+  GitBranch as CICDIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -27,8 +28,14 @@ import { BuildProgressBar } from './BuildProgressBar';
 import { useKeyboardShortcuts, KeyboardShortcutsModal, ShortcutsHelpButton } from './KeyboardShortcuts';
 import { CommandPalette } from './CommandPalette';
 import type { CommandItem } from './CommandPalette';
+import { CICDPanel } from './CICDPanel';
 import type { FileNode } from '../types/api';
 import type { SessionDetail } from '../api/client';
+
+// Wrapper to avoid inline import complexity
+function CICDPanelLazy({ sessionId }: { sessionId: string }) {
+  return <CICDPanel sessionId={sessionId} />;
+}
 
 interface ProjectWorkspaceProps {
   session: SessionDetail;
@@ -206,7 +213,7 @@ function flattenFiles(nodes: FileNode[], prefix = ''): { path: string; name: str
   return result;
 }
 
-type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard';
+type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'cicd';
 
 function SecretsPanel() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -1210,6 +1217,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       { id: 'secrets' as const, label: 'Secrets', icon: KeyRound },
                       { id: 'prd' as const, label: 'PRD', icon: PrdIcon },
                       { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+                      { id: 'cicd' as const, label: 'CI/CD', icon: CICDIcon },
                     ]).map(tab => (
                       <button
                         key={tab.id}
@@ -1723,6 +1731,12 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                           />
                         </div>
                       )
+                    )}
+
+                    {activeWorkspaceTab === 'cicd' && (
+                      <div className="h-full overflow-y-auto p-4">
+                        <CICDPanelLazy sessionId={session.id} />
+                      </div>
                     )}
                   </div>
                 </div>

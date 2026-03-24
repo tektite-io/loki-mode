@@ -15,6 +15,7 @@ import {
   X,
   Moon,
   Sun,
+  Users,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
@@ -36,6 +37,7 @@ const mainNav: NavItem[] = [
   { to: '/', label: 'Home', icon: Home },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/templates', label: 'Templates', icon: LayoutTemplate },
+  { to: '/teams', label: 'Teams', icon: Users },
 ];
 
 const secondaryNav: NavItem[] = [
