@@ -363,6 +363,29 @@ export const api = {
       primary_port: number;
     }>(`/sessions/${encodeURIComponent(sessionId)}/services`),
 
+  // Teams
+  getTeams: () =>
+    fetchJSON<import('../components/TeamPanel').TeamInfo[]>('/teams'),
+
+  createTeam: (name: string) =>
+    fetchJSON<{ id: string; name: string; created: boolean }>('/teams', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  getTeamMembers: (teamId: string) =>
+    fetchJSON<import('../components/TeamPanel').TeamMember[]>(`/teams/${encodeURIComponent(teamId)}/members`),
+
+  addTeamMember: (teamId: string, email: string, role: string) =>
+    fetchJSON<{ added: boolean; member_id: string }>(`/teams/${encodeURIComponent(teamId)}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+
+  // Audit log
+  getAuditLog: () =>
+    fetchJSON<import('../components/RBACPanel').AuditEntry[]>('/audit-log'),
+
   // Docker service logs
   getServiceLogs: (sessionId: string, service?: string, tail: number = 50) =>
     fetchJSON<{ logs: string[]; service?: string }>(

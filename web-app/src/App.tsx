@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { AuthProvider } from './hooks/useAuth';
+import { NotificationProvider } from './contexts/NotificationContext';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { Skeleton } from './components/ui/Skeleton';
 
@@ -19,6 +20,7 @@ const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
 const TemplatesPage = lazy(() => import('./pages/TemplatesPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const TeamsPage = lazy(() => import('./pages/TeamsPage'));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 function LoadingFallback() {
@@ -33,6 +35,7 @@ function LoadingFallback() {
 export default function App() {
   return (
     <AuthProvider>
+      <NotificationProvider>
       <Routes>
         {/* Login page -- no shell, no onboarding overlay */}
         <Route path="/login" element={
@@ -52,9 +55,11 @@ export default function App() {
           <Route path="/projects" element={<Suspense fallback={<LoadingFallback />}><ProjectsPage /></Suspense>} />
           <Route path="/templates" element={<Suspense fallback={<LoadingFallback />}><TemplatesPage /></Suspense>} />
           <Route path="/settings" element={<Suspense fallback={<LoadingFallback />}><SettingsPage /></Suspense>} />
+          <Route path="/teams" element={<Suspense fallback={<LoadingFallback />}><TeamsPage /></Suspense>} />
           <Route path="*" element={<Suspense fallback={<LoadingFallback />}><NotFoundPage /></Suspense>} />
         </Route>
       </Routes>
+      </NotificationProvider>
     </AuthProvider>
   );
 }

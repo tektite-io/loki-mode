@@ -14,6 +14,7 @@ import {
   Server, Package, Terminal, Rocket, GitBranch,
   RefreshCw, PanelLeftClose, PanelLeftOpen, PanelBottomClose, PanelBottomOpen, Maximize2, Minimize2,
   LayoutDashboard,
+  GitBranch as CICDIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -33,7 +34,14 @@ import type { CommandItem } from './CommandPalette';
 import { CheckpointTimeline } from './CheckpointTimeline';
 import { ChangePreview } from './ChangePreview';
 import type { FileNode, ChangePreviewData } from '../types/api';
+import { CICDPanel } from './CICDPanel';
+import type { FileNode } from '../types/api';
 import type { SessionDetail } from '../api/client';
+
+// Wrapper to avoid inline import complexity
+function CICDPanelLazy({ sessionId }: { sessionId: string }) {
+  return <CICDPanel sessionId={sessionId} />;
+}
 
 interface ProjectWorkspaceProps {
   session: SessionDetail;
@@ -212,6 +220,7 @@ function flattenFiles(nodes: FileNode[], prefix = ''): { path: string; name: str
 }
 
 type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'deploy' | 'git' | 'cicd';
+type WorkspaceTab = 'code' | 'preview' | 'config' | 'secrets' | 'prd' | 'dashboard' | 'cicd';
 
 function SecretsPanel() {
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -1327,6 +1336,7 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
                       { id: 'prd' as const, label: 'PRD', icon: PrdIcon },
                       { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
                       { id: 'git' as const, label: 'Git', icon: GitBranch },
+                      { id: 'cicd' as const, label: 'CI/CD', icon: CICDIcon },
                     ]).map(tab => (
                       <button
                         key={tab.id}
@@ -1848,6 +1858,10 @@ export function ProjectWorkspace({ session, onClose }: ProjectWorkspaceProps) {
 
                     {activeWorkspaceTab === 'git' && (
                       <GitPanel sessionId={sessionData.id} />
+                    {activeWorkspaceTab === 'cicd' && (
+                      <div className="h-full overflow-y-auto p-4">
+                        <CICDPanelLazy sessionId={session.id} />
+                      </div>
                     )}
                   </div>
                 </div>
