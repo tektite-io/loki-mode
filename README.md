@@ -84,52 +84,75 @@ See the full [Installation Guide](docs/INSTALLATION.md).
 
 ## What It Looks Like
 
-```
-+------------------------------------------------------------------+
-|  Purple Lab                                                       |
-|  Powered by Loki                                                  |
-+------------------------------------------------------------------+
-|         |                                                         |
-|  Home   |     Describe it. Build it. Ship it.                     |
-| Projects|                                                         |
-|Templates|  +----------------------------------------------------+ |
-|  Teams  |  |  Build a SaaS dashboard with user analytics...     | |
-|Showcase |  +----------------------------------------------------+ |
-| Compare |                                                         |
-|         |              [ Start Building ]                         |
-|         |                                                         |
-|---------|  +------+  +------+  +------+  +------+                 |
-|         |  |Phase |  |Agent |  |Termi-|  |Quali-|                 |
-| Settings|  |Viewer|  |Dash  |  | nal  |  | ty   |                 |
-|  Docs   |  +------+  +------+  +------+  +------+                |
-|         |                                                         |
-| v6.71.1 |  +------------------+  +------------------+            |
-|         |  |  File Browser    |  |  Memory Viewer   |            |
-|         |  +------------------+  +------------------+            |
-+------------------------------------------------------------------+
+```mermaid
+block-beta
+  columns 5
+  block:header:5
+    columns 5
+    h1["Purple Lab -- Powered by Loki"]:5
+  end
+  block:sidebar:1
+    columns 1
+    s1["Home"]
+    s2["Projects"]
+    s3["Templates"]
+    s4["Teams"]
+    s5["Showcase"]
+    s6["Compare"]
+    s7["Settings"]
+    s8["Docs"]
+  end
+  block:main:4
+    columns 4
+    prompt["Build a SaaS dashboard with user analytics..."]:4
+    start["Start Building"]:4
+    p1["Phase Viewer"]
+    p2["Agent Dashboard"]
+    p3["Terminal"]
+    p4["Quality Gates"]
+    p5["File Browser"]:2
+    p6["Memory Viewer"]:2
+  end
+
+  style header fill:#553DE9,color:#fff
+  style prompt fill:#f5f5f5,stroke:#ccc,color:#333
+  style start fill:#553DE9,color:#fff
+  style sidebar fill:#fafafa,stroke:#ddd
 ```
 
-```
-+------------------------------------------------------------------+
-|  PROJECT WORKSPACE                                                |
-+------------------------------------------------------------------+
-|  File Tree  |  Monaco Editor          |  AI Chat Panel            |
-|             |                         |                           |
-|  > src/     |  import { useState }    |  You: Add a search bar    |
-|    App.tsx  |  from 'react';          |                           |
-|    index.ts |                         |  AI: I will add a search  |
-|  > public/  |  export default         |  component with filtering |
-|  > tests/   |  function App() {       |  and debounced input...   |
-|             |    return (              |                           |
-|  package.json  <div>...</div>         |  [Send message]           |
-|             |    );                   |                           |
-|             |  }                      |  Activity | Quality Gates |
-|             |                         |  [Build Log]              |
-|             |  +--Live Preview------+ |  [Agent Status]           |
-|             |  | localhost:3000     | |  [Phase: Development]     |
-|             |  |                    | |                           |
-|             |  +--------------------+ |                           |
-+------------------------------------------------------------------+
+```mermaid
+block-beta
+  columns 6
+  block:wsheader:6
+    columns 6
+    wh["Project Workspace"]:6
+  end
+  block:filetree:1
+    columns 1
+    ft1["src/"]
+    ft2["App.tsx"]
+    ft3["index.ts"]
+    ft4["public/"]
+    ft5["tests/"]
+    ft6["package.json"]
+  end
+  block:editor:3
+    columns 1
+    code["Monaco Editor"]:1
+    preview["Live Preview -- localhost:3000"]:1
+  end
+  block:chat:2
+    columns 1
+    ai["AI Chat Panel"]
+    status["Agent Status / Quality Gates"]
+    phase["Phase: Development"]
+  end
+
+  style wsheader fill:#553DE9,color:#fff
+  style code fill:#1e1e1e,color:#d4d4d4
+  style preview fill:#fff,stroke:#553DE9,color:#333
+  style ai fill:#f5f5f5,stroke:#ccc,color:#333
+  style phase fill:#1FC5A8,color:#fff
 ```
 
 ---
