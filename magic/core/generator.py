@@ -725,8 +725,11 @@ def generate_component(
     return written
 
 
-def update_components(name: str = "", force: bool = False, project_dir: str = ".") -> list:
-    """Re-run generate_component for any spec whose generated output is stale."""
+def update_components(name: str = "", force: bool = False, project_dir: str = ".", **extra) -> list:
+    """Re-run generate_component for any spec whose generated output is stale.
+
+    Extra kwargs (registry_path, etc.) are accepted for CLI compatibility.
+    """
     from pathlib import Path as _P
     from magic.core.freshness import needs_regen
     specs_dir = _P(project_dir) / ".loki" / "magic" / "specs"

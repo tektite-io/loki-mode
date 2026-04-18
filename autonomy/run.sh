@@ -5785,6 +5785,53 @@ run_doc_quality_gate() {
 }
 
 # ============================================================================
+# Magic Modules Debate Gate - Gate 12 (v6.77.0)
+# Runs when any .loki/magic/specs/*.md changed since last iteration.
+# Blocks iteration completion if debate flags any block severity.
+# ============================================================================
+
+run_magic_debate_gate() {
+    local specs_dir="$TARGET_DIR/.loki/magic/specs"
+    if [ ! -d "$specs_dir" ]; then
+        return 0
+    fi
+
+    local has_specs
+    has_specs=$(find "$specs_dir" -maxdepth 1 -name "*.md" 2>/dev/null | head -1)
+    if [ -z "$has_specs" ]; then
+        return 0
+    fi
+
+    # Auto-run update to catch stale generated files
+    log_info "Magic Modules: running incremental update"
+    (cd "$TARGET_DIR" && PYTHONPATH="$PROJECT_DIR" LOKI_PROVIDER="${PROVIDER_NAME:-claude}" \
+        "$PROJECT_DIR/autonomy/loki" magic update 2>&1 | tail -10) || true
+
+    # Run debate on most recently modified component
+    local latest_spec
+    latest_spec=$(find "$specs_dir" -maxdepth 1 -name "*.md" -type f -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
+    if [ -z "$latest_spec" ]; then
+        return 0
+    fi
+    local latest_name
+    latest_name=$(basename "$latest_spec" .md)
+
+    log_info "Magic Modules: running debate on '$latest_name'"
+    local debate_out
+    debate_out=$(cd "$TARGET_DIR" && PYTHONPATH="$PROJECT_DIR" LOKI_PROVIDER="${PROVIDER_NAME:-claude}" \
+        timeout 300 "$PROJECT_DIR/autonomy/loki" magic debate "$latest_name" --rounds 2 2>&1 || true)
+
+    # Parse debate outcome; block if any persona set severity=block
+    if echo "$debate_out" | grep -qi '"severity"[[:space:]]*:[[:space:]]*"block"'; then
+        log_warn "Magic Modules Gate 12: debate returned BLOCK severity for '$latest_name'"
+        return 1
+    fi
+
+    log_info "Magic Modules Gate 12: PASS"
+    return 0
+}
+
+# ============================================================================
 # 3-Reviewer Parallel Code Review (v5.35.0)
 # Specialist pool from skills/quality-gates.md with blind review
 # architecture-strategist always included, 2 more selected by keyword scoring
@@ -7905,6 +7952,24 @@ except Exception as e:
 PYEOF
 }
 
+# Magic Modules COMPOUND: record successful component patterns (v6.77.0)
+# Called at end of each iteration to capture generated/updated components
+# as semantic memory patterns via magic.core.memory_bridge.
+_magic_compound_capture() {
+    local registry="$TARGET_DIR/.loki/magic/registry.json"
+    if [ ! -f "$registry" ]; then
+        return 0
+    fi
+    # Delegate to memory_bridge (built by agent 3)
+    PYTHONPATH="$PROJECT_DIR" python3 -c "
+try:
+    from magic.core.memory_bridge import capture_iteration_compound
+    capture_iteration_compound('${TARGET_DIR}', iteration=${ITERATION_COUNT:-0})
+except Exception as exc:
+    pass
+" 2>/dev/null || true
+}
+
 # Automatic episode capture with enriched context (v6.15.0)
 # Captures git changes, files modified, and RARV phase automatically
 # after every iteration -- no manual invocation needed.
@@ -8583,6 +8648,21 @@ except Exception:
 " 2>/dev/null || true)
     fi
 
+    # Magic Modules context injection
+    local magic_context=""
+    local magic_specs_dir="$TARGET_DIR/.loki/magic/specs"
+    if [ -d "$magic_specs_dir" ]; then
+        local spec_count
+        spec_count=$(find "$magic_specs_dir" -maxdepth 1 -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$spec_count" -gt 0 ]; then
+            local spec_list
+            spec_list=$(find "$magic_specs_dir" -maxdepth 1 -name "*.md" -exec basename {} .md \; 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+            magic_context="MAGIC_MODULES: ${spec_count} component specs exist: ${spec_list}. To add or update a component: write markdown to ${magic_specs_dir}/<Name>.md and run 'loki magic update'. The spec becomes source of truth; implementation regenerates automatically. Debate runs in VERIFY phase -- if accessibility or performance blocks, refine the spec and re-run."
+        else
+            magic_context="MAGIC_MODULES: available. To create UI components, write spec at ${magic_specs_dir}/<Name>.md and run 'loki magic update'. Spec-driven generation produces React + Web Component variants with auto-generated tests. Debate gate runs in VERIFY."
+        fi
+    fi
+
     # Degraded providers with small models need simplified prompts
     # Full RARV/SDLC instructions overwhelm models < 30B parameters
     if [ "${PROVIDER_DEGRADED:-false}" = "true" ]; then
@@ -8607,15 +8687,15 @@ except Exception:
     else
         if [ $retry -eq 0 ]; then
             if [ -n "$prd" ]; then
-                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         else
             if [ -n "$prd" ]; then
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             else
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
+                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $compaction_reminder $completion_instruction $sdlc_instruction $autonomous_suffix"
             fi
         fi
     fi
@@ -9475,6 +9555,22 @@ run_autonomous() {
     # Populate task queue from PRD (if no adapters already populated, runs once)
     populate_prd_queue "$prd_path"
 
+    # Magic Modules BOOTSTRAP: extract design tokens from project so component
+    # generation matches the codebase design language from iteration 1.
+    if [ -x "${PROJECT_DIR}/autonomy/loki" ]; then
+        PYTHONPATH="${PROJECT_DIR}" python3 -c "
+try:
+    from magic.core.design_tokens import DesignTokens
+    dt = DesignTokens('${TARGET_DIR}')
+    observed = dt.extract_from_codebase(save=True)
+    print(f'[magic] Extracted design tokens: '
+          f'{len(observed.get(\"colors\",{}))} colors, '
+          f'{len(observed.get(\"spacing\",{}))} spacing')
+except Exception as exc:
+    print(f'[magic] Token extraction skipped: {exc}')
+" 2>&1 | grep -E '\[magic\]' || true
+    fi
+
     # Check max iterations before starting
     if check_max_iterations; then
         log_error "Max iterations already reached. Reset with: rm .loki/autonomy-state.json"
@@ -10087,6 +10183,18 @@ if __name__ == "__main__":
                     log_warn "Documentation coverage gate: Score below threshold ($dc_count consecutive)"
                 fi
             fi
+            # Magic Modules debate gate - Gate 12 (v6.77.0)
+            if [ "${LOKI_GATE_MAGIC_DEBATE:-true}" = "true" ] && [ "$ITERATION_COUNT" -gt 0 ]; then
+                log_info "Quality gate: magic modules debate..."
+                if run_magic_debate_gate; then
+                    clear_gate_failure "magic_debate"
+                else
+                    local md_count
+                    md_count=$(track_gate_failure "magic_debate")
+                    gate_failures="${gate_failures}magic_debate,"
+                    log_warn "Magic Modules debate gate: BLOCK severity detected ($md_count consecutive)"
+                fi
+            fi
             # Store gate failures for prompt injection
             if [ -n "$gate_failures" ]; then
                 echo "$gate_failures" > "${TARGET_DIR:-.}/.loki/quality/gate-failures.txt"
@@ -10105,6 +10213,9 @@ if __name__ == "__main__":
         # Captures RARV phase, git changes, and iteration context automatically
         auto_capture_episode "$ITERATION_COUNT" "$exit_code" "${rarv_phase:-iteration}" \
             "${prd_path:-codebase-analysis}" "$duration" "$log_file"
+
+        # Magic Modules COMPOUND capture (v6.77.0): record component patterns
+        _magic_compound_capture
 
         # BUG-QG-008: Track iteration for convergence regardless of exit code
         if type council_track_iteration &>/dev/null; then

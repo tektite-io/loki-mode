@@ -5,6 +5,41 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.76.1] - Magic Modules embedded in RARV-C (autonomous, no CLI invocation needed)
+
+Magic Modules is now woven into the autonomous orchestrator. Users do not run
+`loki magic` commands explicitly. Agents generate, debate, and compound
+components during normal RARV-C phases.
+
+### Added
+- **BOOTSTRAP hook** (`autonomy/run.sh`): design tokens auto-extracted from
+  project at iteration 0; saved to `.loki/magic/tokens.json`.
+- **REASON phase** (`magic/core/prd_scanner.py`): PRD scanner detects UI
+  component mentions (42-keyword vocab + 7 intent markers) and pre-seeds
+  stub specs at `.loki/magic/specs/<Name>.md`.
+- **ACT phase** (`autonomy/run.sh build_prompt`): magic context block
+  injected into agent prompts listing existing specs and the
+  edit-spec-to-regenerate workflow.
+- **VERIFY phase** Gate 12 (`autonomy/run.sh run_magic_debate_gate`): auto
+  runs `magic update` + `magic debate` on most recently changed spec.
+  Blocks iteration if any persona returns severity=block. Controllable
+  via `LOKI_GATE_MAGIC_DEBATE=false`.
+- **COMPOUND phase** (`magic/core/memory_bridge.py`): component generation
+  events captured as episodes; tag clusters with >=80% debate pass rate
+  become semantic patterns; refined tokens become procedural skills.
+  Degrades gracefully when memory package unavailable.
+- **Skill auto-load**: `skills/00-index.md` routes UI-component / design-
+  token / Gate-12 tasks to `skills/magic-modules.md` automatically.
+- **Reference doc**: `references/magic-rarv-integration.md` explains the
+  autonomous flow phase by phase with an end-to-end example.
+- **Integration tests** (`tests/test-magic-rarv.sh`): 8 tests covering PRD
+  scanner, design token extraction, memory bridge degradation, end-to-end
+  magic update from seeded spec.
+
+### Fixed
+- `update_components()` accepts arbitrary kwargs (registry_path etc.) for
+  CLI-call compatibility.
+
 ## [6.76.0] - Magic Modules: spec-driven component generation with multi-persona debate
 
 Inspired by [MagicModules](https://github.com/romannurik/MagicModules-Experiment)
