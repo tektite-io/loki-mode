@@ -5,6 +5,46 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.78.0] - CI hardening: pre-push hook, Release gated on tests, claude-review scoped to internal PRs, Pydantic v2 config migration
+
+After v6.77.1 shipped a test-suite-red commit to main (caught only because I
+happened to be watching CI), it's clear the release pipeline needed two
+reinforcements: a local guard that runs the tests before `git push`, and a
+server-side gate that blocks the Release workflow from running until tests
+pass. Both land in this release.
+
+### Added
+- **Pre-push git hook** (`.githooks/pre-push`): runs `bash -n` on
+  `autonomy/run.sh` and `autonomy/loki`, then `python3 -m pytest -q`.
+  Aborts the push if anything fails. Bypass with `PRE_PUSH_SKIP=1 git push`
+  (intentionally inconvenient).
+- **`scripts/install-hooks.sh`**: one-shot installer that sets
+  `git config core.hooksPath .githooks`. Idempotent.
+
+### Changed
+- **`.github/workflows/release.yml`**: new `gate` job runs `bash -n` and
+  `pytest` before any publish job. All downstream jobs (`release`,
+  `publish-npm`, `publish-docker`, `publish-vscode`, `publish-ts-sdk`,
+  `publish-python-sdk`, `update-homebrew`, `notify-slack`) cannot start
+  until the gate passes. This is why v6.77.1's in-flight Release was
+  manually cancelled; v6.78.0 makes the cancellation automatic.
+- **`.github/workflows/claude-code-review.yml`**: guarded with
+  `if: github.event.pull_request.head.repo.fork == false`. Fork PRs no
+  longer show a perpetually-red claude-review check they cannot fix
+  (GitHub does not expose secrets or OIDC tokens to fork-triggered
+  workflows). Internal PRs still get the AI review.
+- **`collab/api.py`**: migrated `class Config: from_attributes = True`
+  on `UserResponse` to the Pydantic v2 `model_config = ConfigDict(...)`
+  idiom, removing the `PydanticDeprecatedSince20` warning from CI logs.
+
+### Verification
+- `.githooks/pre-push` executes locally: bash syntax clean, 567/567
+  pytest green.
+- `python3 -m pytest -W error::DeprecationWarning tests/test_api_v2.py`
+  passes (was emitting the Pydantic v2 warning previously).
+- `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"`:
+  YAML valid; `release` job declares `needs: gate`.
+
 ## [6.77.2] - Test fix: update test_task_ids_hierarchical for scoped IDs
 
 v6.77.1 added change-scoping to OpenSpec task IDs (`openspec-<change>-N.M`),
