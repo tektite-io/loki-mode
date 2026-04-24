@@ -3763,9 +3763,12 @@ track_iteration_complete() {
     [ -z "$phase" ] && phase=$(python3 -c "import json; print(json.load(open('.loki/state/orchestrator.json')).get('currentPhase', 'unknown'))" 2>/dev/null || echo "unknown")
 
     # Read token data from context tracker output (v5.42.0)
+    # v6.82.0: also capture cache_read_tokens / cache_creation_tokens for
+    # prompt-cache hit-rate analysis (S1.1 prompt restructure).
     local iter_input=0 iter_output=0 iter_cost=0
+    local iter_cache_read=0 iter_cache_creation=0
     if [ -f ".loki/context/tracking.json" ]; then
-        read iter_input iter_output iter_cost < <(python3 -c "
+        read iter_input iter_output iter_cost iter_cache_read iter_cache_creation < <(python3 -c "
 import json
 try:
     t = json.load(open('.loki/context/tracking.json'))
@@ -3773,11 +3776,17 @@ try:
     match = [i for i in iters if i.get('iteration') == $iteration]
     if match:
         m = match[-1]
-        print(m.get('input_tokens', 0), m.get('output_tokens', 0), m.get('cost_usd', 0))
+        print(
+            m.get('input_tokens', 0),
+            m.get('output_tokens', 0),
+            m.get('cost_usd', 0),
+            m.get('cache_read_tokens', 0),
+            m.get('cache_creation_tokens', 0),
+        )
     else:
-        print(0, 0, 0)
-except: print(0, 0, 0)
-" 2>/dev/null || echo "0 0 0")
+        print(0, 0, 0, 0, 0)
+except: print(0, 0, 0, 0, 0)
+" 2>/dev/null || echo "0 0 0 0 0")
     fi
 
     cat > ".loki/metrics/efficiency/iteration-${iteration}.json" << EFF_EOF
@@ -3790,6 +3799,8 @@ except: print(0, 0, 0)
   "status": "$status_str",
   "input_tokens": ${iter_input:-0},
   "output_tokens": ${iter_output:-0},
+  "cache_read_tokens": ${iter_cache_read:-0},
+  "cache_creation_tokens": ${iter_cache_creation:-0},
   "cost_usd": ${iter_cost:-0},
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -7596,18 +7607,87 @@ except Exception:
     return 0
 }
 
-# Check if completion promise is fulfilled in log output
+# Check if the loki_complete_task MCP tool was invoked in this iteration.
+# The tool writes a payload to .loki/signals/TASK_COMPLETION_CLAIMED with the
+# structured completion claim. When the signal exists, we read it, log the
+# structured event, and consume (remove) the file. Returns 0 on detection.
+#
+# Output on stdout: the JSON payload (for callers that want to log it).
+check_task_completion_signal() {
+    local signal_file=".loki/signals/TASK_COMPLETION_CLAIMED"
+    if [ ! -f "$signal_file" ]; then
+        return 1
+    fi
+
+    local payload
+    payload=$(cat "$signal_file" 2>/dev/null || echo "")
+    if [ -z "$payload" ]; then
+        # Empty signal -- treat as noise and clean up
+        rm -f "$signal_file" 2>/dev/null
+        return 1
+    fi
+
+    # Emit a structured event for observability (best-effort).
+    local statement evidence confidence
+    statement=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('statement',''))
+except Exception:
+    pass
+" <<< "$payload" 2>/dev/null || echo "")
+    evidence=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('evidence',''))
+except Exception:
+    pass
+" <<< "$payload" 2>/dev/null || echo "")
+    confidence=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('confidence','medium'))
+except Exception:
+    print('medium')
+" <<< "$payload" 2>/dev/null || echo "medium")
+
+    emit_event_json "task_completion_claim" \
+        "statement=${statement:0:500}" \
+        "confidence=${confidence}" \
+        "evidence_length=${#evidence}"
+
+    # Return the payload on stdout
+    printf '%s\n' "$payload"
+
+    # Consume the signal (next iteration would otherwise re-trigger)
+    rm -f "$signal_file" 2>/dev/null
+    return 0
+}
+
+# Check if completion promise is fulfilled in log output.
+#
+# As of v6.82.0, the default path is the MCP tool `loki_complete_task`
+# (detected via check_task_completion_signal above). The legacy grep-based
+# detection is retained behind LOKI_LEGACY_COMPLETION_MATCH=true for rollback.
 check_completion_promise() {
     local log_file="$1"
 
-    # Check for the completion promise phrase in recent log output
-    if grep -q "COMPLETION PROMISE FULFILLED" "$log_file" 2>/dev/null; then
+    # New default: structured signal from the loki_complete_task MCP tool.
+    if check_task_completion_signal >/dev/null 2>&1; then
         return 0
     fi
 
-    # Check for custom completion promise text
-    if [ -n "$COMPLETION_PROMISE" ] && grep -qF "$COMPLETION_PROMISE" "$log_file" 2>/dev/null; then
-        return 0
+    # Legacy grep fallback (opt-in via env flag for rollback).
+    if [ "${LOKI_LEGACY_COMPLETION_MATCH:-false}" = "true" ]; then
+        if grep -q "COMPLETION PROMISE FULFILLED" "$log_file" 2>/dev/null; then
+            return 0
+        fi
+        if [ -n "$COMPLETION_PROMISE" ] && grep -qF "$COMPLETION_PROMISE" "$log_file" 2>/dev/null; then
+            return 0
+        fi
     fi
 
     return 1
@@ -8360,12 +8440,16 @@ build_prompt() {
     # Ralph Wiggum Mode - Reason-Act-Reflect-VERIFY cycle with self-verification loop (Boris Cherny pattern)
     local rarv_instruction="RALPH WIGGUM MODE ACTIVE. Use Reason-Act-Reflect-VERIFY cycle: 1) REASON - READ .loki/CONTINUITY.md including 'Mistakes & Learnings' section to avoid past errors. CHECK .loki/state/relevant-learnings.json for cross-project learnings from previous projects (mistakes to avoid, patterns to apply). Check .loki/state/ and .loki/queue/, identify next task. CHECK .loki/state/resources.json for system resource warnings - if CPU or memory is high, reduce parallel agent spawning or pause non-critical tasks. Limit to MAX_PARALLEL_AGENTS=${MAX_PARALLEL_AGENTS}. If queue empty, find new improvements. 2) ACT - Execute task, write code, commit changes atomically (git checkpoint). 3) REFLECT - Update .loki/CONTINUITY.md with progress, update state, identify NEXT improvement. Save valuable learnings for future projects. 4) VERIFY - Run automated tests (unit, integration, E2E), check compilation/build, verify against spec. IF VERIFICATION FAILS: a) Capture error details (stack trace, logs), b) Analyze root cause, c) UPDATE 'Mistakes & Learnings' in CONTINUITY.md with what failed, why, and how to prevent, d) Rollback to last good git checkpoint if needed, e) Apply learning and RETRY from REASON. If verification passes, mark task complete and continue. This self-verification loop achieves 2-3x quality improvement. CRITICAL: There is NEVER a 'finished' state - always find the next improvement, optimization, test, or feature."
 
-    # Completion promise instruction (only if set)
+    # Completion instruction (S0.2 -- structured tool call).
+    # When PRD requirements are implemented, tests pass, and the checklist is
+    # at or near 100%, the agent MUST invoke the `loki_complete_task` MCP tool
+    # (defined in mcp/server.py) with completion_statement + evidence fields,
+    # instead of emitting a prose completion string.
     local completion_instruction=""
     if [ -n "$COMPLETION_PROMISE" ]; then
-        completion_instruction="COMPLETION_PROMISE: [$COMPLETION_PROMISE]. ONLY output 'COMPLETION PROMISE FULFILLED: $COMPLETION_PROMISE' when this EXACT condition is met."
+        completion_instruction="COMPLETION_PROMISE: [$COMPLETION_PROMISE]. When all PRD requirements are implemented, tests pass, and the PRD checklist is at or near 100%, invoke the loki_complete_task MCP tool with your completion_statement and evidence (cite tests that passed, checklist items verified, files created/modified). Do NOT emit a completion string in prose -- use the tool call."
     else
-        completion_instruction="NO COMPLETION PROMISE SET. Continue finding improvements. The Completion Council will evaluate your progress periodically. Iteration $iteration of max $MAX_ITERATIONS."
+        completion_instruction="NO COMPLETION PROMISE SET. Continue finding improvements. The Completion Council will evaluate your progress periodically. Iteration $iteration of max $MAX_ITERATIONS. If you do decide the task is complete, invoke the loki_complete_task MCP tool with a structured statement and evidence rather than emitting prose."
     fi
 
     # Core autonomous instructions - NO questions, NO waiting, NEVER say done
@@ -8373,7 +8457,7 @@ build_prompt() {
     if [ "$AUTONOMY_MODE" = "perpetual" ] || [ "$PERPETUAL_MODE" = "true" ]; then
         autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) NEVER say 'done' or 'complete' - there's always more to improve. 4) NEVER stop voluntarily - if out of tasks, create new ones (add tests, optimize, refactor, add features). 5) Work continues PERPETUALLY. Even if PRD is implemented, find bugs, add tests, improve UX, optimize performance."
     else
-        autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) When all PRD requirements are implemented and tests pass, output the completion promise text EXACTLY: '$COMPLETION_PROMISE'. 4) If out of tasks but PRD is not fully implemented, continue working on remaining requirements. 5) Focus on completing PRD scope, not endless improvements."
+        autonomous_suffix="CRITICAL AUTONOMY RULES: 1) NEVER ask questions - just decide. 2) NEVER wait for confirmation - just act. 3) When all PRD requirements are implemented and tests pass, invoke the loki_complete_task MCP tool (completion_statement='$COMPLETION_PROMISE' plus evidence + confidence). Do not emit completion prose. 4) If out of tasks but PRD is not fully implemented, continue working on remaining requirements. 5) Focus on completing PRD scope, not endless improvements."
     fi
 
     # Skill files are always copied to .loki/skills/ for all providers
@@ -8655,42 +8739,154 @@ except Exception:
         fi
     fi
 
-    # Degraded providers with small models need simplified prompts
-    # Full RARV/SDLC instructions overwhelm models < 30B parameters
+    # S1.1 -- Static-first prompt assembly with cache-breakpoint marker.
+    #
+    # The prior shape (v<=6.81.x) concatenated ~13 dynamic blobs BEFORE the
+    # 4-5 static instruction blobs, which destroyed Claude's prefix cache on
+    # every iteration. The new layout places the stable instruction set first
+    # (prd_anchor + RARV/SDLC/autonomy/memory instructions), emits a literal
+    # [CACHE_BREAKPOINT] marker, then appends the volatile per-iteration
+    # context inside a <dynamic_context> tag.
+    #
+    # The [CACHE_BREAKPOINT] marker is a documentation anchor today. When the
+    # Claude CLI migration exposes cache_control, the orchestrator can split
+    # the prompt at this marker and set cache_control on the prefix half.
+    #
+    # Rollback: set LOKI_LEGACY_PROMPT_ORDERING=true to restore the previous
+    # dynamic-first concatenation order.
+
+    if [ "${LOKI_LEGACY_PROMPT_ORDERING:-false}" = "true" ]; then
+        # Legacy dynamic-first ordering (pre-v6.82.0). Retained for rollback.
+        if [ "${PROVIDER_DEGRADED:-false}" = "true" ]; then
+            local _legacy_prd_content=""
+            if [ -n "$prd" ] && [ -f "$prd" ]; then
+                _legacy_prd_content=$(head -c 4000 "$prd")
+            fi
+            if [ $retry -eq 0 ]; then
+                if [ -n "$prd" ]; then
+                    echo "You are a coding assistant. Read and implement the requirements from the PRD below. Write working code, run tests if possible, and commit changes. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks} PRD contents: $_legacy_prd_content"
+                else
+                    echo "You are a coding assistant. Analyze this codebase and suggest improvements. Write working code and commit changes. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks}"
+                fi
+            else
+                if [ -n "$prd" ]; then
+                    echo "You are a coding assistant. Continue working on iteration $iteration. Review what exists, implement remaining PRD requirements, fix any issues, add tests. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks} PRD contents: $_legacy_prd_content"
+                else
+                    echo "You are a coding assistant. Continue working on iteration $iteration. Review what exists, improve code, fix bugs, add tests. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks}"
+                fi
+            fi
+        else
+            if [ $retry -eq 0 ]; then
+                if [ -n "$prd" ]; then
+                    echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
+                else
+                    echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
+                fi
+            else
+                if [ -n "$prd" ]; then
+                    echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
+                else
+                    echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
+                fi
+            fi
+        fi
+        return 0
+    fi
+
+    # --- New static-first layout (v6.82.0+) ---
+    #
+    # assemble_prompt_static outputs the cache-stable prefix:
+    #   <loki_system>
+    #   {prd_anchor}
+    #   {rarv_instruction + sdlc_instruction + autonomous_suffix + memory_instruction}
+    #   </loki_system>
+    #   [CACHE_BREAKPOINT]
+    #
+    # assemble_prompt_dynamic outputs the volatile tail wrapped in
+    # <dynamic_context iteration=".." retry=".."> ... </dynamic_context>.
+    #
+    # Keeping these as inline local helpers (nested functions via eval are
+    # awkward in bash) -- we emit them as two contiguous printf blocks so the
+    # logic is self-documenting and byte-reproducible.
+
     if [ "${PROVIDER_DEGRADED:-false}" = "true" ]; then
+        # Degraded providers: simpler wording, but still static-first.
         local prd_content=""
         if [ -n "$prd" ] && [ -f "$prd" ]; then
             prd_content=$(head -c 4000 "$prd")
         fi
 
-        if [ $retry -eq 0 ]; then
-            if [ -n "$prd" ]; then
-                echo "You are a coding assistant. Read and implement the requirements from the PRD below. Write working code, run tests if possible, and commit changes. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks} PRD contents: $prd_content"
-            else
-                echo "You are a coding assistant. Analyze this codebase and suggest improvements. Write working code and commit changes. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks}"
-            fi
+        local degraded_prd_anchor="Loki Mode"
+        [ -n "$prd" ] && degraded_prd_anchor="Loki Mode with PRD"
+
+        # STATIC PREFIX (cache-stable across iterations)
+        printf '<loki_system>\n'
+        printf '%s\n' "$degraded_prd_anchor"
+        if [ -n "$prd" ]; then
+            printf 'You are a coding assistant. Read and implement the requirements from the PRD. Write working code, run tests if possible, and commit changes.\n'
         else
-            if [ -n "$prd" ]; then
-                echo "You are a coding assistant. Continue working on iteration $iteration. Review what exists, implement remaining PRD requirements, fix any issues, add tests. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks} PRD contents: $prd_content"
-            else
-                echo "You are a coding assistant. Continue working on iteration $iteration. Review what exists, improve code, fix bugs, add tests. ${human_directive:+Priority: $human_directive} ${queue_tasks:+Tasks: $queue_tasks}"
-            fi
+            printf 'You are a coding assistant. Analyze this codebase and suggest improvements. Write working code and commit changes.\n'
         fi
+        printf '</loki_system>\n'
+        printf '[CACHE_BREAKPOINT]\n'
+
+        # DYNAMIC TAIL (changes every iteration)
+        printf '<dynamic_context iteration="%s" retry="%s">\n' "$iteration" "$retry"
+        [ -n "$human_directive" ] && printf 'Priority: %s\n' "$human_directive"
+        [ -n "$queue_tasks" ] && printf 'Tasks: %s\n' "$queue_tasks"
+        if [ -n "$prd" ]; then
+            printf 'PRD contents: %s\n' "$prd_content"
+        fi
+        printf '</dynamic_context>\n'
+        return 0
+    fi
+
+    # Full-featured providers (Claude, etc.)
+    local prd_anchor
+    if [ -n "$prd" ]; then
+        prd_anchor="Loki Mode with PRD at $prd"
     else
-        if [ $retry -eq 0 ]; then
-            if [ -n "$prd" ]; then
-                echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
-            else
-                echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
-            fi
+        prd_anchor="Loki Mode"
+    fi
+
+    # STATIC PREFIX (cache-stable across iterations).
+    # Order is deterministic so the prefix is byte-identical for iter N and N+1.
+    printf '<loki_system>\n'
+    printf '%s\n' "$prd_anchor"
+    printf '%s\n' "$rarv_instruction"
+    printf '%s\n' "$sdlc_instruction"
+    printf '%s\n' "$autonomous_suffix"
+    printf '%s\n' "$memory_instruction"
+    # For codebase-analysis mode (no PRD), analysis_instruction is part of the
+    # static prefix so it remains cache-stable.
+    if [ -z "$prd" ]; then
+        printf '%s\n' "$analysis_instruction"
+    fi
+    printf '</loki_system>\n'
+    printf '[CACHE_BREAKPOINT]\n'
+
+    # DYNAMIC TAIL -- all per-iteration context goes here.
+    printf '<dynamic_context iteration="%s" retry="%s">\n' "$iteration" "$retry"
+    if [ $retry -gt 0 ]; then
+        if [ -n "$prd" ]; then
+            printf 'Resume iteration #%s (retry #%s). PRD: %s\n' "$iteration" "$retry" "$prd"
         else
-            if [ -n "$prd" ]; then
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). PRD: $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
-            else
-                echo "Loki Mode - Resume iteration #$iteration (retry #$retry). $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section Use .loki/generated-prd.md if exists. $rarv_instruction $memory_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
-            fi
+            printf 'Resume iteration #%s (retry #%s). Use .loki/generated-prd.md if exists.\n' "$iteration" "$retry"
         fi
     fi
+    [ -n "$human_directive" ] && printf '%s\n' "$human_directive"
+    [ -n "$gate_failure_context" ] && printf '%s\n' "$gate_failure_context"
+    [ -n "$queue_tasks" ] && printf '%s\n' "$queue_tasks"
+    [ -n "$bmad_context" ] && printf '%s\n' "$bmad_context"
+    [ -n "$openspec_context" ] && printf '%s\n' "$openspec_context"
+    [ -n "$mirofish_context" ] && printf '%s\n' "$mirofish_context"
+    [ -n "$magic_context" ] && printf '%s\n' "$magic_context"
+    [ -n "$checklist_status" ] && printf '%s\n' "$checklist_status"
+    [ -n "$app_runner_info" ] && printf '%s\n' "$app_runner_info"
+    [ -n "$playwright_info" ] && printf '%s\n' "$playwright_info"
+    [ -n "$memory_context_section" ] && printf '%s\n' "$memory_context_section"
+    printf '%s\n' "$completion_instruction"
+    printf '</dynamic_context>\n'
 }
 
 #===============================================================================
@@ -10317,12 +10513,21 @@ if __name__ == "__main__":
                 return 0
             fi
 
-            # Only stop if EXPLICIT completion promise text was output
-            # BUG-RUN-001: Use per-iteration output, not stale daily log
-            if [ -n "$COMPLETION_PROMISE" ] && check_completion_promise "$iter_output"; then
+            # Stop if either:
+            #   (a) the agent invoked the loki_complete_task MCP tool
+            #       (detected via .loki/signals/TASK_COMPLETION_CLAIMED), OR
+            #   (b) LOKI_LEGACY_COMPLETION_MATCH=true AND the completion
+            #       promise text appears in the iteration output.
+            # The check_completion_promise() helper encapsulates both.
+            # BUG-RUN-001: Use per-iteration output, not stale daily log.
+            if check_completion_promise "$iter_output"; then
                 echo ""
-                log_header "COMPLETION PROMISE FULFILLED: $COMPLETION_PROMISE"
-                log_info "Explicit completion promise detected in output."
+                if [ -n "$COMPLETION_PROMISE" ]; then
+                    log_header "COMPLETION PROMISE FULFILLED: $COMPLETION_PROMISE"
+                else
+                    log_header "TASK COMPLETION CLAIMED (via loki_complete_task)"
+                fi
+                log_info "Explicit completion signal detected."
                 # Run memory consolidation on successful completion
                 log_info "Running memory consolidation..."
                 run_memory_consolidation

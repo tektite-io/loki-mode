@@ -5,6 +5,34 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.82.0] - 2026-04-24
+
+### Added
+
+- **S0.2 loki_complete_task MCP tool.** Structured replacement for the previous
+  COMPLETION PROMISE FULFILLED string-match. Agents declaring task completion
+  now call the tool with completion_statement, evidence, and confidence fields;
+  a structured event and signal file drive run.sh detection. Legacy grep is
+  available via LOKI_LEGACY_COMPLETION_MATCH=true for rollback.
+
+### Changed
+
+- **S1.1 build_prompt restructured to static-first with a cache breakpoint.**
+  The 17 dynamic context blobs are now wrapped in a <dynamic_context> tail
+  block; the stable RARV/SDLC/autonomy instructions form the prefix. A literal
+  CACHE_BREAKPOINT marker sits between them, documenting the stable prefix
+  boundary and preparing the codebase for Claude API cache_control when the
+  CLI path is migrated. Expected cache-hit-rate improvement on multi-iteration
+  sessions. Rollback: LOKI_LEGACY_PROMPT_ORDERING=true restores the previous
+  concatenation order.
+
+### Notes
+
+Token-economics instrumentation now captures cache_read_input_tokens and
+cache_creation_input_tokens from the Claude stream-json usage frames when
+present; values stored in .loki/memory/token_economics.json. Cache hit ratio
+can be computed as cache_read / (cache_read + cache_creation).
+
 ## [6.81.1] - 2026-04-24
 
 ### Fixes
