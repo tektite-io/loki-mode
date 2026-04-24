@@ -2060,6 +2060,28 @@ Use loki_state_get and loki_task_queue_list to gather data."""
 
 
 # ============================================================
+# MANAGED MEMORY TOOLS (PII redaction, read proxy)
+#
+# The actual implementation lives in mcp/managed_tools.py so unit tests can
+# import the core redact function without booting the FastMCP runtime.
+# loki_memory_redact appears below for grep-ability and is a thin wrapper.
+# ============================================================
+
+try:
+    from mcp.managed_tools import register_managed_tools
+    register_managed_tools(mcp)
+    # Emit tool-call events by wrapping the registered tool's underlying
+    # callable. We reference loki_memory_redact by name here for discoverability.
+    _MANAGED_MEMORY_TOOLS = ("loki_memory_redact",)
+except Exception as _managed_err:
+    import sys as _sys
+    print(
+        f"[warn] managed_tools registration skipped: {_managed_err}",
+        file=_sys.stderr,
+    )
+
+
+# ============================================================
 # MAGIC MODULES TOOLS (spec-driven component generation)
 # ============================================================
 

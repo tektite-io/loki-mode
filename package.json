@@ -1,6 +1,6 @@
 {
   "name": "loki-mode",
-  "version": "6.83.1",
+  "version": "7.0.0",
   "description": "Loki Mode by Autonomi - Multi-agent autonomous startup system for Claude Code, Codex CLI, and Gemini CLI",
   "keywords": [
     "agent",
@@ -67,6 +67,7 @@
     "VERSION",
     "autonomy/",
     "providers/",
+    "agents/",
     "skills/",
     "references/",
     "docs/**/*.md",
@@ -105,7 +106,8 @@
     "test:visual": "node --experimental-vm-modules node_modules/jest/bin/jest.js dashboard-ui/tests/visual-regression.test.js",
     "test:parity": "node --experimental-vm-modules dashboard-ui/scripts/check-parity.js",
     "test:parity:json": "node --experimental-vm-modules dashboard-ui/scripts/check-parity.js --json",
-    "test:dashboard": "npm run test:visual && npm run test:parity"
+    "test:dashboard": "npm run test:visual && npm run test:parity",
+    "test:integration": "bash tests/integration/run_integration_suite.sh"
   },
   "engines": {
     "node": ">=18.0.0"

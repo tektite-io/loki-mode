@@ -5,6 +5,98 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.0] - 2026-04-24
+
+MAJOR release: full Claude Managed Agents integration, `loki start`/`run`
+unification, enterprise-grade observability. Every new feature is opt-in
+behind a flag; default behavior is identical to v6.83.1.
+
+### Added (all opt-in; default off)
+
+- **Phase 2 - Session-boot memory hydrate.** `LOKI_MANAGED_MEMORY_HYDRATE=true`
+  pulls semantic patterns + procedural skills from the managed store into
+  `.loki/memory/` once at `init_loki_dir` time. 10s hard timeout.
+  Idempotent via `.loki/managed/hydrate.lock` sentinel. Local wins on
+  conflict.
+- **Phase 3 - Managed code-review council (EXPERIMENTAL, research preview).**
+  `LOKI_EXPERIMENTAL_MANAGED_REVIEW=true` routes `run_code_review` through
+  `providers/managed.py::run_council` with `callable_agents`. Tool-confirmation
+  payloads replace file-polling. Legacy `.loki/quality/reviews/$id/*.txt`
+  layout preserved for dashboard compatibility (single-writer invariant).
+- **Phase 4 - Managed completion council (EXPERIMENTAL, research preview).**
+  `LOKI_EXPERIMENTAL_MANAGED_COUNCIL=true` routes `council_should_stop` through
+  `providers/managed.py::run_completion_council`. Severity budget + unanimous+DA
+  override + circuit breaker + hard checklist gate all untouched.
+- **Phase 5 - Dashboard + PII redact.** New endpoints:
+  `GET /api/managed/events`, `GET /api/managed/status`,
+  `GET /api/managed/memory_versions/:memory_id`. New MCP tool
+  `loki_memory_redact(pattern, scope)` wraps `memory_versions.redact`.
+- **`providers/managed.py` foundation (789 lines).** `ManagedClient`,
+  `run_council`, `run_completion_council`, `resolve_agent_ids`, typed
+  `ManagedUnavailable`. 8 distinct fallback modes each emit structured
+  `managed_agents_fallback` events.
+- **`agents/managed_registry.py`.** Lazy materialization of callable agents
+  from `agents/types.json`; cache at `.loki/managed/agent_ids.json`.
+- **`skills/memory.md`** (new). Comprehensive integration guide with flag
+  hierarchy, schema mapping, rollback, troubleshooting.
+- **Integration test suite `tests/integration/`** (7 scripts). Flag matrix,
+  SDK isolation, kill-switches, RARV-C memory flow, dashboard API smoke,
+  default-behavior parity, start/run unified.
+
+### Changed (UX improvements)
+
+- **`loki start` and `loki run` unified.** `loki start` is the single entry
+  point. Auto-detects input type: `.md/.json/.txt/.yaml/.yml` -> PRD mode;
+  GitHub/GitLab/Jira/Azure DevOps URLs or bare issue numbers -> issue mode.
+  `--prd FILE` / `--issue REF` explicit flags override detection. Backward
+  compat: `loki run <issue>` still works and prints a deprecation notice.
+  Help text marks `run` as `(deprecated)`.
+- **PRD path fail-fast.** `loki start /path/to/missing.md` now exits 1 with
+  a clear "Error: PRD file not found" message instead of silently falling
+  through to the no-PRD case. (R8 gap from Wave 1 review.)
+
+### Security / Safety
+
+- **SDK isolation invariant.** `anthropic` SDK is imported ONLY from
+  `memory/managed_memory/client.py` and `providers/managed.py`. CI grep
+  enforces this.
+- **Flag hierarchy + fail-fast.** Every new flag has a parent; child-on +
+  parent-off exits 2 with a clear error. No silent downgrades.
+- **Path-traversal safe.** `council_verdicts_to_txt_files` sanitizes
+  reviewer names before writing to `.loki/quality/reviews/$id/$name.txt`.
+  `memory_id` path-traversal guard on dashboard endpoints.
+- **15s timeout on background shadow-writes.** Prevents zombie processes
+  under network partitions.
+
+### Rollback
+
+- `LOKI_MANAGED_AGENTS=false` (default) restores identical v6.83.1 behavior.
+- Every child flag can be toggled independently.
+- API unreachable: automatic fallback to local with a `managed_agents_fallback`
+  event to `.loki/managed/events.ndjson`.
+
+### NOT tested (honest disclosure)
+
+- **Live Anthropic Managed Agents API.** All automated CI uses
+  `memory/managed_memory/fakes.py` and `FakeMultiagentSession`. A real
+  ANTHROPIC_API_KEY + beta access roundtrip has NOT been run. Architecture
+  contains all plausible SDK shape mismatches via defense-in-depth
+  (getattr guards + outer `except Exception` + subprocess timeout +
+  background `timeout 15` + kill-switch test).
+- **Multiagent `callable_agents` happy path.** Research preview. Beta
+  header `managed-agents-2026-04-01` will rotate; centralized in
+  `memory/managed_memory/_beta.py` for single-point update.
+- **`loki_memory_redact` against a real store.** Fake client only.
+- **Cross-project org-store distribution at scale.** Manually seeded
+  stores work; auto-promotion heuristic is future work.
+- **Long-horizon (multi-hour) citation quality.** Requires real API usage.
+
+### Statistics
+
+~5,000 lines added. 14 version locations bumped. 20 new test files. 6
+new rollback flags. 3 new dashboard endpoints. 1 new MCP tool. Zero
+breaking changes for users with all flags off.
+
 ## [6.83.1] - 2026-04-24
 
 ### Fixes

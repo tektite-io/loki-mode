@@ -100,10 +100,19 @@ def hydrate_patterns(local_mtime_floor: float):
     return _r.hydrate_patterns(local_mtime_floor)
 
 
+def hydrate(namespace: Optional[str] = None, mtime_floor: Optional[float] = None):
+    """Session-boot hydrate (patterns + skills). No-op when disabled."""
+    if not is_enabled():
+        return {"patterns": 0, "skills": 0, "skipped": True}
+    from . import retrieve as _r
+    return _r.hydrate(namespace=namespace, mtime_floor=mtime_floor)
+
+
 __all__ = [
     "BETA_HEADER",
     "ManagedDisabled",
     "emit_managed_event",
+    "hydrate",
     "hydrate_patterns",
     "is_enabled",
     "probe_beta_header",

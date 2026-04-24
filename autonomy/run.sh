@@ -649,12 +649,69 @@ export LOKI_SESSION_MODEL LOKI_LEGACY_TIER_SWITCHING
 # Both off (default) => zero behavior change from v6.82.0.
 LOKI_MANAGED_AGENTS="${LOKI_MANAGED_AGENTS:-false}"
 LOKI_MANAGED_MEMORY="${LOKI_MANAGED_MEMORY:-false}"
-export LOKI_MANAGED_AGENTS LOKI_MANAGED_MEMORY
+# v7.0.0 Phase 2: remote->local hydrate on session boot (grandchild of MEMORY).
+# Pulls semantic patterns + procedural skills once at init_loki_dir time.
+LOKI_MANAGED_MEMORY_HYDRATE="${LOKI_MANAGED_MEMORY_HYDRATE:-false}"
+# v7.0.0 Phase 3+4 foundation: umbrella flag for the multiagent-session path.
+# Gates every providers/managed.py entry point (run_council,
+# run_completion_council). Off by default because the Managed Agents
+# multiagent surface is a research preview.
+LOKI_EXPERIMENTAL_MANAGED_AGENTS="${LOKI_EXPERIMENTAL_MANAGED_AGENTS:-false}"
+# v7.0.0 Phase 3 (T5): managed code-review council. Routes run_code_review
+# through providers/managed.py::run_council when true. Requires parent +
+# umbrella.
+LOKI_EXPERIMENTAL_MANAGED_REVIEW="${LOKI_EXPERIMENTAL_MANAGED_REVIEW:-false}"
+# v7.0.0 Phase 4 (T6): managed completion council. Routes council_should_stop
+# through providers/managed.py::run_completion_council when true. Requires
+# parent + umbrella.
+LOKI_EXPERIMENTAL_MANAGED_COUNCIL="${LOKI_EXPERIMENTAL_MANAGED_COUNCIL:-false}"
+export LOKI_MANAGED_AGENTS LOKI_MANAGED_MEMORY LOKI_MANAGED_MEMORY_HYDRATE LOKI_EXPERIMENTAL_MANAGED_AGENTS LOKI_EXPERIMENTAL_MANAGED_REVIEW LOKI_EXPERIMENTAL_MANAGED_COUNCIL
 
 # Fail-fast: child on with parent off is a misconfiguration.
 if [ "$LOKI_MANAGED_MEMORY" = "true" ] && [ "$LOKI_MANAGED_AGENTS" != "true" ]; then
     echo "ERROR: LOKI_MANAGED_MEMORY=true requires LOKI_MANAGED_AGENTS=true" >&2
     exit 2
+fi
+
+# Phase 2 fail-fast: HYDRATE is a grandchild of MEMORY.
+if [ "$LOKI_MANAGED_MEMORY_HYDRATE" = "true" ] && [ "$LOKI_MANAGED_MEMORY" != "true" ]; then
+    echo "ERROR: LOKI_MANAGED_MEMORY_HYDRATE=true requires LOKI_MANAGED_MEMORY=true" >&2
+    exit 2
+fi
+
+# Same fail-fast for the experimental multiagent session path.
+if [ "$LOKI_EXPERIMENTAL_MANAGED_AGENTS" = "true" ] && [ "$LOKI_MANAGED_AGENTS" != "true" ]; then
+    echo "ERROR: LOKI_EXPERIMENTAL_MANAGED_AGENTS=true requires LOKI_MANAGED_AGENTS=true" >&2
+    exit 2
+fi
+
+# Phase 3 fail-fast: REVIEW requires parent AND umbrella.
+if [ "$LOKI_EXPERIMENTAL_MANAGED_REVIEW" = "true" ]; then
+    if [ "$LOKI_MANAGED_AGENTS" != "true" ]; then
+        echo "ERROR: LOKI_EXPERIMENTAL_MANAGED_REVIEW=true requires LOKI_MANAGED_AGENTS=true" >&2
+        exit 2
+    fi
+    if [ "$LOKI_EXPERIMENTAL_MANAGED_AGENTS" != "true" ]; then
+        echo "ERROR: LOKI_EXPERIMENTAL_MANAGED_REVIEW=true requires LOKI_EXPERIMENTAL_MANAGED_AGENTS=true" >&2
+        exit 2
+    fi
+fi
+
+# Phase 4 fail-fast: COUNCIL requires parent AND umbrella.
+if [ "$LOKI_EXPERIMENTAL_MANAGED_COUNCIL" = "true" ]; then
+    if [ "$LOKI_MANAGED_AGENTS" != "true" ]; then
+        echo "ERROR: LOKI_EXPERIMENTAL_MANAGED_COUNCIL=true requires LOKI_MANAGED_AGENTS=true" >&2
+        exit 2
+    fi
+    if [ "$LOKI_EXPERIMENTAL_MANAGED_AGENTS" != "true" ]; then
+        echo "ERROR: LOKI_EXPERIMENTAL_MANAGED_COUNCIL=true requires LOKI_EXPERIMENTAL_MANAGED_AGENTS=true" >&2
+        exit 2
+    fi
+fi
+
+# Research-preview warning banner.
+if [ "$LOKI_EXPERIMENTAL_MANAGED_AGENTS" = "true" ]; then
+    echo "WARN: LOKI_EXPERIMENTAL_MANAGED_AGENTS uses Managed Agents research preview; expect beta churn." >&2
 fi
 
 # Parallel Workflows (Git Worktrees)
@@ -3019,6 +3076,30 @@ EOF
 }
 BUDGET_EOF
         log_info "Budget limit set: \$$BUDGET_LIMIT"
+    fi
+
+    # v7.0.0 Phase 2: remote->local hydrate. Runs ONCE at session boot (not
+    # per iteration) to pull semantic patterns + procedural skills from the
+    # managed store into .loki/memory/semantic/patterns.json and
+    # .loki/memory/skills/*.json. Gated on parent + MEMORY + HYDRATE; all
+    # three must be "true". 10s hard timeout so a slow remote never blocks
+    # startup. Idempotent (sentinel: .loki/managed/hydrate.lock).
+    if [ "$LOKI_MANAGED_AGENTS" = "true" ] \
+        && [ "$LOKI_MANAGED_MEMORY" = "true" ] \
+        && [ "$LOKI_MANAGED_MEMORY_HYDRATE" = "true" ]; then
+        local _hydrate_target="${TARGET_DIR:-$(pwd)}"
+        local _hydrate_out
+        _hydrate_out=$(
+            cd "$PROJECT_DIR" 2>/dev/null && \
+            LOKI_TARGET_DIR="$_hydrate_target" \
+            timeout 10 python3 -m memory.managed_memory.retrieve --hydrate 2>/dev/null || true
+        )
+        if [ -n "$_hydrate_out" ]; then
+            log_info "Managed hydrate: $_hydrate_out"
+        else
+            LOKI_TARGET_DIR="$_hydrate_target" \
+            python3 -c "from memory.managed_memory.events import emit_managed_event; emit_managed_event('managed_memory_hydrate_timeout', {'phase': 'init'})" 2>/dev/null || true
+        fi
     fi
 
     log_info "Loki directory initialized: .loki/"
@@ -5869,6 +5950,236 @@ run_magic_debate_gate() {
 # architecture-strategist always included, 2 more selected by keyword scoring
 # ============================================================================
 
+# Write managed-council verdicts into the legacy per-reviewer .txt layout so
+# the dashboard quality panel (which only reads .loki/quality/reviews/$id/*.txt)
+# stays functional. Called from the managed branch of run_code_review().
+# Single-writer invariant: either this helper writes the files, or the legacy
+# CLI fan-out does -- never both for the same review_id.
+council_verdicts_to_txt_files() {
+    local review_id="$1"
+    local verdicts_json="$2"
+    local loki_dir="${TARGET_DIR:-.}/.loki"
+    local review_dir="$loki_dir/quality/reviews/$review_id"
+    mkdir -p "$review_dir"
+
+    # Use python3 to fan the JSON verdict list out to individual .txt files
+    # in the same VERDICT/FINDINGS format the legacy parser expects.
+    local out_dir_env="$review_dir"
+    export LOKI_COUNCIL_OUT_DIR="$out_dir_env"
+    export LOKI_COUNCIL_VERDICTS_JSON="$verdicts_json"
+    python3 << 'COUNCIL_WRITE'
+import json
+import os
+import re
+
+out_dir = os.environ["LOKI_COUNCIL_OUT_DIR"]
+raw = os.environ.get("LOKI_COUNCIL_VERDICTS_JSON", "").strip()
+if not raw:
+    raise SystemExit(0)
+
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError:
+    raise SystemExit("council_verdicts_to_txt_files: invalid JSON")
+
+if isinstance(payload, dict):
+    verdicts = payload.get("verdicts") or []
+else:
+    verdicts = payload or []
+
+SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+DOT_RUN = re.compile(r"\.{2,}")
+
+def _pool_name(v):
+    name = v.get("pool_name") or v.get("name") or v.get("agent_id") or "reviewer"
+    cleaned = SAFE_NAME.sub("-", str(name))
+    # Defend against path-traversal via ".." in pool names.
+    cleaned = DOT_RUN.sub("-", cleaned).strip("-.")
+    return cleaned[:80] or "reviewer"
+
+def _verdict_token(v):
+    token = str(v.get("verdict") or "").strip().upper()
+    if token in ("APPROVE", "PASS"):
+        return "PASS"
+    if token in ("REQUEST_CHANGES", "REJECT", "FAIL"):
+        return "FAIL"
+    return "PASS"  # ABSTAIN => PASS per legacy behavior
+
+def _findings(v):
+    rationale = (v.get("rationale") or "").strip()
+    sev = v.get("severity")
+    if not rationale:
+        return "- None"
+    lines = []
+    for line in rationale.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.lstrip().startswith("- ["):
+            lines.append(line)
+        else:
+            tag = f"[{sev.capitalize()}]" if sev else "[Medium]"
+            lines.append(f"- {tag} {line}")
+    return "\n".join(lines) if lines else "- None"
+
+for v in verdicts:
+    if not isinstance(v, dict):
+        continue
+    name = _pool_name(v)
+    path = os.path.join(out_dir, f"{name}.txt")
+    body = f"VERDICT: {_verdict_token(v)}\nFINDINGS:\n{_findings(v)}\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body)
+COUNCIL_WRITE
+    local rc=$?
+    unset LOKI_COUNCIL_OUT_DIR LOKI_COUNCIL_VERDICTS_JSON
+    return $rc
+}
+
+# Execute the managed-agents multiagent council path. Writes legacy .txt
+# files via council_verdicts_to_txt_files() on success so the existing
+# aggregation loop below can read them exactly like the CLI path.
+# Returns 0 on success, 1 on ManagedUnavailable (caller should fall back).
+_run_managed_review_council() {
+    local review_id="$1"
+    local diff_file="$2"
+    local files_file="$3"
+    local review_dir="${TARGET_DIR:-.}/.loki/quality/reviews/$review_id"
+    mkdir -p "$review_dir"
+
+    export LOKI_MANAGED_REVIEW_ID="$review_id"
+    export LOKI_MANAGED_REVIEW_DIFF_FILE="$diff_file"
+    export LOKI_MANAGED_REVIEW_FILES_FILE="$files_file"
+    export LOKI_MANAGED_REVIEW_OUT_JSON="$review_dir/managed_result.json"
+    local project_dir_env="${PROJECT_DIR:-.}"
+    export LOKI_MANAGED_REVIEW_PROJECT_DIR="$project_dir_env"
+
+    local result_json
+    result_json=$(python3 << 'MANAGED_REVIEW' 2>&1
+import json
+import os
+import sys
+
+project_dir = os.environ.get("LOKI_MANAGED_REVIEW_PROJECT_DIR", ".")
+if project_dir and project_dir not in sys.path:
+    sys.path.insert(0, project_dir)
+
+try:
+    from providers import managed as managed_mod
+except Exception as e:
+    print(json.dumps({"status": "unavailable", "reason": f"import_failed: {e}"}))
+    sys.exit(0)
+
+# Test hook: allow tests to inject a fake run_council by setting
+# LOKI_MANAGED_REVIEW_FAKE_MODULE to a dotted path exposing run_council.
+fake_mod = os.environ.get("LOKI_MANAGED_REVIEW_FAKE_MODULE", "").strip()
+if fake_mod:
+    try:
+        import importlib
+        fm = importlib.import_module(fake_mod)
+        if hasattr(fm, "install"):
+            fm.install(managed_mod)
+    except Exception as e:
+        print(json.dumps({"status": "unavailable", "reason": f"fake_install_failed: {e}"}))
+        sys.exit(0)
+
+if not managed_mod.is_enabled():
+    print(json.dumps({"status": "unavailable", "reason": "is_enabled_false"}))
+    sys.exit(0)
+
+diff_path = os.environ.get("LOKI_MANAGED_REVIEW_DIFF_FILE", "")
+files_path = os.environ.get("LOKI_MANAGED_REVIEW_FILES_FILE", "")
+diff_text = ""
+files_text = ""
+if diff_path and os.path.exists(diff_path):
+    with open(diff_path, "r", encoding="utf-8", errors="replace") as f:
+        diff_text = f.read()
+if files_path and os.path.exists(files_path):
+    with open(files_path, "r", encoding="utf-8", errors="replace") as f:
+        files_text = f.read()
+
+target_paths = [p.strip() for p in files_text.splitlines() if p.strip()]
+
+pool = ["security-sentinel", "test-coverage-auditor", "performance-oracle"]
+context = {
+    "diff": diff_text,
+    "files": target_paths,
+    "target_paths": target_paths,
+}
+
+try:
+    result = managed_mod.run_council(pool, context, timeout_s=300)
+except managed_mod.ManagedUnavailable as e:
+    print(json.dumps({"status": "unavailable", "reason": str(e)}))
+    sys.exit(0)
+except Exception as e:
+    # Anything else is unexpected; bubble up as unavailable so the caller
+    # falls back rather than aborting the iteration.
+    print(json.dumps({"status": "unavailable", "reason": f"unexpected: {e}"}))
+    sys.exit(0)
+
+verdicts_out = []
+for v in (result.verdicts or []):
+    verdicts_out.append({
+        "agent_id": getattr(v, "agent_id", ""),
+        "pool_name": getattr(v, "pool_name", ""),
+        "verdict": getattr(v, "verdict", ""),
+        "rationale": getattr(v, "rationale", ""),
+        "severity": getattr(v, "severity", None),
+    })
+out = {
+    "status": "ok",
+    "verdicts": verdicts_out,
+    "session_id": getattr(result, "session_id", None),
+    "elapsed_ms": getattr(result, "elapsed_ms", 0),
+    "partial": getattr(result, "partial", False),
+}
+print(json.dumps(out))
+MANAGED_REVIEW
+)
+    local py_rc=$?
+    unset LOKI_MANAGED_REVIEW_ID LOKI_MANAGED_REVIEW_DIFF_FILE LOKI_MANAGED_REVIEW_FILES_FILE
+    unset LOKI_MANAGED_REVIEW_OUT_JSON LOKI_MANAGED_REVIEW_PROJECT_DIR
+
+    if [ $py_rc -ne 0 ] || [ -z "$result_json" ]; then
+        emit_event_json "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=subprocess_failed" \
+            "review_id=$review_id"
+        return 1
+    fi
+
+    local status
+    status=$(printf '%s' "$result_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read() or '{}'); print(d.get('status',''))" 2>/dev/null || echo "")
+
+    if [ "$status" != "ok" ]; then
+        local reason
+        reason=$(printf '%s' "$result_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read() or '{}'); print(d.get('reason',''))" 2>/dev/null || echo "")
+        emit_event_json "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=managed_unavailable" \
+            "detail=${reason//\"/}" \
+            "review_id=$review_id"
+        return 1
+    fi
+
+    # Persist the raw managed result for observability and write legacy .txt
+    # files for the dashboard panel / aggregation loop.
+    printf '%s\n' "$result_json" > "$review_dir/managed_result.json"
+    if ! council_verdicts_to_txt_files "$review_id" "$result_json"; then
+        emit_event_json "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=verdict_write_failed" \
+            "review_id=$review_id"
+        return 1
+    fi
+
+    emit_event_json "managed_review_council_ok" \
+        "review_id=$review_id" \
+        "iteration=${ITERATION_COUNT:-0}"
+    return 0
+}
+
 run_code_review() {
     local loki_dir="${TARGET_DIR:-.}/.loki"
     local review_dir="$loki_dir/quality/reviews"
@@ -5888,6 +6199,51 @@ run_code_review() {
     changed_files=$(git -C "${TARGET_DIR:-.}" diff --name-only HEAD~1 2>/dev/null || git -C "${TARGET_DIR:-.}" diff --name-only --cached 2>/dev/null || echo "")
 
     log_header "CODE REVIEW: $review_id"
+
+    # Phase 3 (v7.0.0): managed code-review council. When the flag is on,
+    # route to providers/managed.py::run_council. On ManagedUnavailable,
+    # emit a fallback event and drop through to the legacy CLI fan-out
+    # below -- the existing v6.83.1 behavior is preserved.
+    if [ "${LOKI_EXPERIMENTAL_MANAGED_REVIEW:-false}" = "true" ]; then
+        local managed_diff_file="$review_dir/$review_id/diff.txt"
+        local managed_files_file="$review_dir/$review_id/files.txt"
+        printf '%s\n' "$diff_content" > "$managed_diff_file"
+        printf '%s\n' "$changed_files" > "$managed_files_file"
+        log_info "Managed review council: attempting multiagent session (Phase 3)"
+        if _run_managed_review_council "$review_id" "$managed_diff_file" "$managed_files_file"; then
+            log_info "Managed review council: verdicts written, skipping CLI fan-out"
+            # Managed path wrote legacy .txt files; skip CLI fan-out but let
+            # the aggregation step run by setting a minimal selection.json
+            # the downstream loop can read.
+            emit_event_json "code_review_complete" \
+                "review_id=$review_id" \
+                "source=managed" \
+                "iteration=${ITERATION_COUNT:-0}"
+            # Build a selection.json so any downstream consumer can find the
+            # reviewer list. Mirrors the shape the CLI path writes below.
+            python3 - "$review_dir/$review_id/selection.json" << 'MANAGED_SELECTION'
+import json
+import sys
+
+path = sys.argv[1]
+selection = {
+    "reviewers": [
+        {"name": "security-sentinel", "focus": "managed", "checks": "managed council"},
+        {"name": "test-coverage-auditor", "focus": "managed", "checks": "managed council"},
+        {"name": "performance-oracle", "focus": "managed", "checks": "managed council"},
+    ],
+    "scores": {},
+    "pool_size": 3,
+    "source": "managed",
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(selection, f)
+MANAGED_SELECTION
+            return 0
+        fi
+        log_warn "Managed review council unavailable; falling back to CLI fan-out"
+    fi
+
     log_info "Selecting 3 specialist reviewers from pool..."
 
     # Write diff/files to temp files for python to read (avoid env var size limits)

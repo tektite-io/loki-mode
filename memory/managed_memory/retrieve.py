@@ -285,6 +285,234 @@ def hydrate_patterns(
 
 
 # ---------------------------------------------------------------------------
+# Hydrate procedural skills
+# ---------------------------------------------------------------------------
+
+
+def hydrate_skills(
+    local_mtime_floor: float,
+    target_dir: Optional[str] = None,
+) -> int:
+    """
+    Pull procedural skills from the managed store and merge them into
+    .loki/memory/skills/{name}.json (one file per skill). Returns the number
+    of skill files written. Returns 0 on disabled / error.
+
+    Only skills whose remote timestamp is newer than `local_mtime_floor` are
+    merged. Local wins on conflict: a skill whose filename already exists is
+    NOT overwritten.
+    """
+    if not is_enabled():
+        return 0
+
+    try:
+        client = _get_client()
+    except ManagedDisabled as e:
+        emit_managed_event(
+            "managed_agents_fallback",
+            {"reason": "client_unavailable", "detail": str(e), "op": "hydrate_skills"},
+        )
+        return 0
+    except Exception as e:  # pragma: no cover
+        emit_managed_event(
+            "managed_agents_fallback",
+            {"reason": "client_error", "detail": str(e), "op": "hydrate_skills"},
+        )
+        return 0
+
+    try:
+        store = client.stores_get_or_create(
+            name=_store_name(),
+            description="Loki Mode RARV-C shadow-write store (v6.83.0)",
+            scope="project",
+        )
+        store_id = store.get("id") or store.get("store_id")
+        if not store_id:
+            return 0
+        entries = client.memories_list(store_id=store_id, path_prefix="skills/")
+    except Exception as e:
+        emit_managed_event(
+            "managed_agents_fallback",
+            {"reason": "list_error", "detail": str(e), "op": "hydrate_skills"},
+        )
+        return 0
+
+    target_dir = target_dir or os.environ.get("LOKI_TARGET_DIR") or os.getcwd()
+    skills_dir = Path(target_dir) / ".loki" / "memory" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    merged = 0
+    for e in entries:
+        content = e.get("content")
+        if not content:
+            continue
+        try:
+            skill = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        sid = skill.get("id") or skill.get("skill_id")
+        name = skill.get("name") or sid
+        if not name:
+            continue
+
+        # Sanitize filename (mirror MemoryStorage.save_skill).
+        safe_name = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in str(name)
+        )
+        skill_path = skills_dir / f"{safe_name}.json"
+        if skill_path.exists():
+            # Local wins on conflict.
+            continue
+
+        # Optional mtime gate.
+        ts = skill.get("updated_at") or skill.get("created_at")
+        if ts and local_mtime_floor:
+            try:
+                if isinstance(ts, (int, float)) and float(ts) < local_mtime_floor:
+                    continue
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            from memory.storage import MemoryStorage  # type: ignore
+
+            storage = MemoryStorage(str(skills_dir.parent))
+            storage._atomic_write(skill_path, skill)
+        except Exception:
+            import tempfile
+
+            fd, tmp = tempfile.mkstemp(
+                dir=str(skills_dir), prefix=".tmp_", suffix=".json"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(skill, f, indent=2, default=str)
+                os.replace(tmp, skill_path)
+            except Exception as ex:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                emit_managed_event(
+                    "managed_agents_fallback",
+                    {"reason": "atomic_write_failed", "detail": str(ex), "op": "hydrate_skills"},
+                )
+                continue
+        merged += 1
+
+    emit_managed_event(
+        "managed_memory_hydrate_skills",
+        {"merged": merged, "candidates": len(entries)},
+    )
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Session hydrate (patterns + skills) with idempotency guard
+# ---------------------------------------------------------------------------
+
+
+_HYDRATE_SENTINEL = ".loki/managed/hydrate.lock"
+
+
+def _already_hydrated_this_session(target_dir: str) -> bool:
+    """Idempotent: once we write the sentinel file, a second hydrate is no-op."""
+    sentinel = Path(target_dir) / _HYDRATE_SENTINEL
+    return sentinel.exists()
+
+
+def _mark_hydrated(target_dir: str) -> None:
+    sentinel = Path(target_dir) / _HYDRATE_SENTINEL
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sentinel.write_text(str(int(time.time())), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def hydrate(
+    namespace: Optional[str] = None,
+    mtime_floor: Optional[float] = None,
+    target_dir: Optional[str] = None,
+) -> Dict[str, int]:
+    """
+    Session-boot hydrate: pull semantic patterns AND procedural skills from
+    the managed store and merge them into local .loki/memory/. Emits a single
+    `managed_memory_hydrate` event with counts.
+
+    Args:
+        namespace: Optional logical namespace label; reserved for multi-tenant
+            stores (not yet used by the backend). Included in the event for
+            observability.
+        mtime_floor: Only merge remote entries updated after this epoch
+            timestamp. Defaults to 0.0 (pull everything not already local).
+        target_dir: Override .loki root; defaults to LOKI_TARGET_DIR or cwd.
+
+    Returns:
+        {"patterns": N, "skills": M, "skipped": bool}. Disabled flags / errors
+        return {"patterns": 0, "skills": 0, "skipped": True/False}.
+
+    Idempotent: a second call within the same session (while the lock file
+    exists) short-circuits and returns zero counts with skipped=True.
+    """
+    target_dir = target_dir or os.environ.get("LOKI_TARGET_DIR") or os.getcwd()
+
+    if not is_enabled():
+        return {"patterns": 0, "skills": 0, "skipped": True}
+
+    if _already_hydrated_this_session(target_dir):
+        emit_managed_event(
+            "managed_memory_hydrate",
+            {
+                "patterns": 0,
+                "skills": 0,
+                "skipped": True,
+                "reason": "already_hydrated_this_session",
+                "namespace": namespace or "",
+            },
+        )
+        return {"patterns": 0, "skills": 0, "skipped": True}
+
+    floor = float(mtime_floor) if mtime_floor is not None else 0.0
+
+    patterns_merged = 0
+    skills_merged = 0
+    try:
+        patterns_merged = hydrate_patterns(
+            local_mtime_floor=floor, target_dir=target_dir
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        emit_managed_event(
+            "managed_agents_fallback",
+            {"reason": "hydrate_patterns_error", "detail": str(e), "op": "hydrate"},
+        )
+    try:
+        skills_merged = hydrate_skills(
+            local_mtime_floor=floor, target_dir=target_dir
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        emit_managed_event(
+            "managed_agents_fallback",
+            {"reason": "hydrate_skills_error", "detail": str(e), "op": "hydrate"},
+        )
+
+    _mark_hydrated(target_dir)
+
+    emit_managed_event(
+        "managed_memory_hydrate",
+        {
+            "patterns": patterns_merged,
+            "skills": skills_merged,
+            "skipped": False,
+            "namespace": namespace or "",
+        },
+    )
+    return {
+        "patterns": patterns_merged,
+        "skills": skills_merged,
+        "skipped": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Module CLI
 # ---------------------------------------------------------------------------
 
@@ -319,7 +547,15 @@ def _main(argv: Optional[list] = None) -> int:
             floor = 0.0
             if args.since_seconds and args.since_seconds > 0:
                 floor = time.time() - args.since_seconds
-            hydrate_patterns(local_mtime_floor=floor)
+            # Phase 2: session-boot hydrate covers patterns + skills and is
+            # idempotent (sentinel-guarded). Prints a one-line summary to
+            # stdout so callers can log counts without parsing JSON.
+            result = hydrate(mtime_floor=floor)
+            print(
+                f"[managed] hydrate patterns={result.get('patterns', 0)} "
+                f"skills={result.get('skills', 0)} "
+                f"skipped={result.get('skipped', False)}"
+            )
             return 0
 
         query = args.query or ""

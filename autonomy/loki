@@ -396,13 +396,13 @@ show_help() {
     echo "Usage: loki <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  run <issue>      Issue-driven engineering (v6.0.0) - GitHub/GitLab/Jira/Azure DevOps"
-    echo "  start [PRD]      Start Loki Mode (optionally with PRD file)"
+    echo "  start [PRD|ISSUE] Start Loki Mode (PRD file, issue ref, or no arg)"
+    echo "  run <issue>      (deprecated) Alias for 'loki start <issue-ref>'"
     echo "  quick \"task\"     Quick single-task mode (lightweight, 3 iterations max)"
     echo "  monitor [path]   Monitor Docker Compose services with auto-fix (v6.67.0)"
     echo "  demo             Run interactive demo (~60s simulated session)"
     echo "  init [name]      Project scaffolding with 21 PRD templates"
-    echo "  issue <url|num>  [DEPRECATED] Use 'loki run' instead"
+    echo "  issue <url|num>  (deprecated) Use 'loki start <issue-ref>' instead"
     echo "  watch [prd]      Auto-rerun on PRD file changes (v6.33.0)"
     echo "  export <format>  Export session data: json|markdown|csv|timeline (v6.0.0)"
     echo "  stop             Stop execution immediately"
@@ -511,6 +511,96 @@ show_help() {
     echo "  See: $RUN_SH (header comments)"
 }
 
+# Detect argument type for unified `loki start` (v6.84.0)
+# Returns one of: prd | issue | empty | unknown
+# Logic:
+#   - empty arg -> "empty"
+#   - file path ending in .md/.json/.txt AND exists on disk -> "prd"
+#   - file path ending in .md/.json/.txt (doesn't exist) -> "prd" (let downstream handle)
+#   - URL matching github.com/gitlab.com/atlassian.net/dev.azure.com/visualstudio.com issues -> "issue"
+#   - PROJ-123 style Jira key -> "issue"
+#   - owner/repo#123 -> "issue"
+#   - #NUM or bare NUM -> "issue" (GitHub issue in current repo)
+#   - Anything else that looks like a filesystem path -> "prd"
+#   - Fallback -> "unknown" (caller treats as PRD path for back-compat)
+detect_arg_type() {
+    local arg="${1:-}"
+
+    # Empty arg
+    if [ -z "$arg" ]; then
+        echo "empty"
+        return 0
+    fi
+
+    # Known PRD extensions - treat as PRD first (highest priority).
+    # This handles edge case where a file is literally named "123.md" or
+    # sits in a dir that matches another pattern.
+    case "$arg" in
+        *.md|*.json|*.txt|*.yaml|*.yml)
+            echo "prd"
+            return 0
+            ;;
+    esac
+
+    # Issue URLs -- order matters: check explicit tracker hosts first
+    if [[ "$arg" =~ github\.com/[^/]+/[^/]+/issues/[0-9]+ ]]; then
+        echo "issue"
+        return 0
+    fi
+    if [[ "$arg" =~ gitlab\.com/.+/-/issues/[0-9]+ ]] || [[ "$arg" =~ gitlab\..+/-/issues/[0-9]+ ]]; then
+        echo "issue"
+        return 0
+    fi
+    if [[ "$arg" =~ \.atlassian\.net/browse/[A-Z]+-[0-9]+ ]] || [[ "$arg" =~ jira\..+/browse/[A-Z]+-[0-9]+ ]]; then
+        echo "issue"
+        return 0
+    fi
+    if [[ "$arg" =~ dev\.azure\.com/.+/_workitems/edit/[0-9]+ ]] || [[ "$arg" =~ visualstudio\.com/.+/_workitems/edit/[0-9]+ ]]; then
+        echo "issue"
+        return 0
+    fi
+
+    # owner/repo#123
+    if [[ "$arg" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$ ]]; then
+        echo "issue"
+        return 0
+    fi
+
+    # Jira project key: PROJ-123
+    if [[ "$arg" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+        echo "issue"
+        return 0
+    fi
+
+    # #123 or bare number -- treat as GitHub issue in current repo,
+    # BUT only if a file with that literal name does NOT exist on disk
+    # (ambiguity resolution: files-on-disk win over issue-number heuristic).
+    if [[ "$arg" =~ ^#?[0-9]+$ ]]; then
+        if [ -e "$arg" ]; then
+            # File on disk wins -- treat as PRD
+            echo "prd"
+        else
+            echo "issue"
+        fi
+        return 0
+    fi
+
+    # Path-like (contains / or starts with . or /) -> treat as PRD
+    if [[ "$arg" == */* ]] || [[ "$arg" == .* ]] || [[ "$arg" == /* ]]; then
+        echo "prd"
+        return 0
+    fi
+
+    # Existing file on disk -> PRD
+    if [ -e "$arg" ]; then
+        echo "prd"
+        return 0
+    fi
+
+    # Fallback: unknown. Caller treats as PRD for backward compat.
+    echo "unknown"
+}
+
 # Start Loki Mode
 cmd_start() {
     local args=()
@@ -524,15 +614,39 @@ cmd_start() {
     local mirofish_disabled=false
     local no_plan=false  # v6.81.1: --no-plan opts out of auto-plan display
 
+    # v6.84.0: unified entry point -- explicit mode overrides + issue-mode args
+    local explicit_mode=""            # "prd" | "issue" | "" (auto-detect)
+    local positional_arg=""           # raw positional arg for mode detection
+    local issue_ref_explicit=""       # --issue value (when explicit_mode=issue)
+    local issue_mode_args=()          # captured issue-mode flags (--dry-run, --pr, etc.)
+    local issue_dry_run=false
+    local issue_no_start=false
+    local issue_output_file=""
+    local issue_use_worktree=false
+    local issue_create_pr=false
+    local issue_auto_merge=false
+    local issue_run_detached=false
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --help|-h)
-                echo -e "${BOLD}loki start${NC} - Start Loki Mode autonomous execution"
+                echo -e "${BOLD}loki start${NC} - Unified entry point for Loki Mode (v6.84.0)"
                 echo ""
-                echo "Usage: loki start [PRD] [options]"
+                echo "Usage: loki start [PRD|ISSUE-REF] [options]"
+                echo ""
+                echo "Modes (auto-detected from input):"
+                echo "  PRD mode    - path ending in .md/.json/.txt/.yaml -> build from PRD"
+                echo "  ISSUE mode  - GitHub/GitLab/Jira/Azure DevOps URL, owner/repo#N,"
+                echo "                PROJ-123, #123, or bare number -> generate PRD from issue"
+                echo "  no input    - analyze current directory, auto-generate PRD"
                 echo ""
                 echo "Arguments:"
-                echo "  PRD                   Path to PRD file (optional)"
+                echo "  PRD                   Path to PRD file (.md/.json/.txt/.yaml)"
+                echo "  ISSUE-REF             Issue URL, number, or tracker key (see above)"
+                echo ""
+                echo "Explicit mode flags (override auto-detection):"
+                echo "  --prd FILE            Force PRD mode with FILE"
+                echo "  --issue URL|NUM       Force issue mode with URL or number"
                 echo ""
                 echo "Options:"
                 echo "  --provider NAME       AI provider: claude (default), codex, gemini, cline, aider"
@@ -558,6 +672,15 @@ cmd_start() {
                 echo "  --no-plan             Skip auto-shown PRD analysis at startup"
                 echo "  --yes, -y             Skip confirmation prompts (auto-confirm)"
                 echo ""
+                echo "Issue-mode options (only used when input is an ISSUE-REF):"
+                echo "  --dry-run             Preview generated PRD without starting"
+                echo "  --no-start            Generate PRD but don't start execution"
+                echo "  --output FILE         Save generated PRD to custom path"
+                echo "  --worktree, -w        Git worktree isolation (separate branch)"
+                echo "  --pr                  Worktree + auto-create PR"
+                echo "  --ship                Worktree + PR + auto-merge"
+                echo "  --detach, -d          Run in background"
+                echo ""
                 echo "Environment Variables:"
                 echo "  LOKI_PRD_FILE         Path to PRD file (alternative to positional arg)"
                 echo "  LOKI_AUTO_CONFIRM     Set to 'true'/'false' to control prompts (takes precedence over CI)"
@@ -566,14 +689,21 @@ cmd_start() {
                 echo "  LOKI_BUDGET_LIMIT     Cost budget limit in USD"
                 echo ""
                 echo "Examples:"
-                echo "  loki start                      # Interactive or resume existing"
-                echo "  loki start ./prd.md             # Start with PRD file"
-                echo "  loki start ./prd.md --parallel  # Parallel mode with worktrees"
-                echo "  loki start --provider codex     # Use OpenAI Codex CLI"
+                echo "  loki start                              # Interactive, analyze current dir"
+                echo "  loki start ./prd.md                     # PRD mode"
+                echo "  loki start https://github.com/o/r/issues/42  # ISSUE mode (GitHub)"
+                echo "  loki start 123                          # ISSUE mode (current repo GitHub issue)"
+                echo "  loki start PROJ-456                     # ISSUE mode (Jira)"
+                echo "  loki start owner/repo#789               # ISSUE mode (GitHub specific repo)"
+                echo "  loki start --prd ./prd.md --parallel    # Explicit PRD, parallel mode"
+                echo "  loki start --issue 123 --ship           # Explicit issue, full automation"
+                echo "  loki start --provider codex             # Use OpenAI Codex CLI"
                 echo "  loki start --bmad-project ./my-project  # Start from BMAD artifacts"
-                echo "  loki start --openspec ./openspec/changes/my-feature  # Start from OpenSpec change"
-                echo "  loki start --yes                # Skip confirmation prompt"
-                echo "  LOKI_PRD_FILE=./prd.md loki start  # PRD via env var"
+                echo "  loki start --openspec ./openspec/changes/my-feature  # From OpenSpec change"
+                echo "  loki start --yes                        # Skip confirmation prompt"
+                echo "  LOKI_PRD_FILE=./prd.md loki start       # PRD via env var"
+                echo ""
+                echo "Note: 'loki run' is a deprecated alias for 'loki start' with an issue ref."
                 exit 0
                 ;;
             --provider)
@@ -804,20 +934,194 @@ cmd_start() {
                 export LOKI_BUDGET_LIMIT="$budget_val"
                 shift
                 ;;
+            # v6.84.0: explicit mode flags (override auto-detection)
+            --prd)
+                if [[ -n "${2:-}" ]] && [[ "${2:-}" != --* ]]; then
+                    explicit_mode="prd"
+                    prd_file="$2"
+                    shift 2
+                else
+                    echo -e "${RED}--prd requires a file path${NC}"
+                    exit 1
+                fi
+                ;;
+            --prd=*)
+                explicit_mode="prd"
+                prd_file="${1#*=}"
+                shift
+                ;;
+            --issue)
+                if [[ -n "${2:-}" ]] && [[ "${2:-}" != --* ]]; then
+                    explicit_mode="issue"
+                    issue_ref_explicit="$2"
+                    shift 2
+                else
+                    echo -e "${RED}--issue requires a URL, number, or issue key${NC}"
+                    exit 1
+                fi
+                ;;
+            --issue=*)
+                explicit_mode="issue"
+                issue_ref_explicit="${1#*=}"
+                shift
+                ;;
+            # v6.84.0: issue-mode flags (only meaningful when input is an issue)
+            --dry-run)
+                issue_dry_run=true
+                issue_mode_args+=("--dry-run")
+                shift
+                ;;
+            --no-start)
+                issue_no_start=true
+                issue_mode_args+=("--no-start")
+                shift
+                ;;
+            --output)
+                if [[ -n "${2:-}" ]]; then
+                    issue_output_file="$2"
+                    issue_mode_args+=("--output" "$2")
+                    shift 2
+                else
+                    echo -e "${RED}--output requires a file path${NC}"
+                    exit 1
+                fi
+                ;;
+            --output=*)
+                issue_output_file="${1#*=}"
+                issue_mode_args+=("--output=${1#*=}")
+                shift
+                ;;
+            --worktree|-w)
+                issue_use_worktree=true
+                issue_mode_args+=("--worktree")
+                shift
+                ;;
+            --pr)
+                issue_use_worktree=true
+                issue_create_pr=true
+                issue_mode_args+=("--pr")
+                shift
+                ;;
+            --ship)
+                issue_use_worktree=true
+                issue_create_pr=true
+                issue_auto_merge=true
+                issue_mode_args+=("--ship")
+                shift
+                ;;
+            --detach|-d)
+                issue_use_worktree=true
+                issue_run_detached=true
+                issue_mode_args+=("--detach")
+                shift
+                ;;
             -*)
                 echo -e "${RED}Unknown option: $1${NC}"
                 exit 1
                 ;;
             *)
-                prd_file="$1"
+                # Capture first positional arg for unified mode detection.
+                # Additional positional args are ignored (same as prior behavior).
+                if [ -z "$positional_arg" ]; then
+                    positional_arg="$1"
+                fi
                 shift
                 ;;
         esac
     done
 
+    # v6.84.0: Unified dispatch based on explicit flags or auto-detection
+    # Precedence: --issue > --prd > positional auto-detect > LOKI_PRD_FILE env
+    local detected_type=""
+    if [ -n "$explicit_mode" ]; then
+        detected_type="$explicit_mode"
+    elif [ -n "$positional_arg" ]; then
+        detected_type=$(detect_arg_type "$positional_arg")
+    elif [ -n "${LOKI_PRD_FILE:-}" ]; then
+        detected_type="prd"
+        prd_file="$LOKI_PRD_FILE"
+    else
+        detected_type="empty"
+    fi
+
+    # ISSUE mode: delegate to cmd_run's code path. To avoid duplicating ~450
+    # lines of issue-fetching + PR-creation logic, we re-dispatch through
+    # cmd_run with reconstructed args. cmd_run then calls cmd_start again
+    # with the generated PRD file and --no-plan (see line ~4431).
+    if [ "$detected_type" = "issue" ]; then
+        local issue_ref
+        if [ "$explicit_mode" = "issue" ]; then
+            issue_ref="$issue_ref_explicit"
+        else
+            issue_ref="$positional_arg"
+        fi
+        # Reconstruct args for cmd_run: issue ref + all options we captured.
+        # args[] already has --provider, --parallel, --bg, etc.
+        local run_args=("$issue_ref")
+        # Pass through issue-mode flags
+        for a in "${issue_mode_args[@]+"${issue_mode_args[@]}"}"; do
+            run_args+=("$a")
+        done
+        # Pass through generic options that cmd_run understands
+        for a in "${args[@]+"${args[@]}"}"; do
+            run_args+=("$a")
+        done
+        # Pass through --no-plan if set
+        if [ "$no_plan" = "true" ]; then
+            run_args+=("--no-plan")
+        fi
+        # Mark this invocation as unified (so cmd_run skips deprecation notice)
+        export LOKI_UNIFIED_START=1
+        cmd_run "${run_args[@]}"
+        return $?
+    fi
+
+    # PRD mode: positional arg is the PRD file (if not already set via --prd)
+    if [ "$detected_type" = "prd" ] && [ -z "$prd_file" ]; then
+        prd_file="$positional_arg"
+    fi
+    # Unknown type: fall back to PRD (legacy back-compat)
+    if [ "$detected_type" = "unknown" ] && [ -z "$prd_file" ]; then
+        prd_file="$positional_arg"
+    fi
+
+    # R8 fix (v7.0.0): if a PRD path was specified (positional or --prd) and
+    # the file does NOT exist, fail fast with a clear error. This prevents the
+    # "silently accepted, then run as no-PRD" failure mode.
+    if [ -n "$prd_file" ] && [ "$detected_type" != "empty" ]; then
+        case "$prd_file" in
+            *.md|*.json|*.txt|*.yaml|*.yml)
+                if [ ! -f "$prd_file" ]; then
+                    echo "Error: PRD file not found: $prd_file" >&2
+                    echo "Hint: provide a path to an existing .md/.json/.txt/.yaml/.yml file, or run 'loki start' with no args to analyze the current directory." >&2
+                    exit 1
+                fi
+                ;;
+        esac
+    fi
+
     # Support LOKI_PRD_FILE environment variable as fallback
     if [ -z "$prd_file" ] && [ -n "${LOKI_PRD_FILE:-}" ]; then
         prd_file="$LOKI_PRD_FILE"
+    fi
+
+    # v6.84.1 (R8 Gap 1): fail fast if a PRD-like path was provided but the file
+    # does not exist on disk. Previously we silently fell through and let the
+    # "no PRD specified" branch take over, which misled users who typo'd a path.
+    # Only applies when an explicit path was given (positional, --prd, or env);
+    # the no-arg "generate from codebase" path is still supported below.
+    # BMAD/OpenSpec adapters run later and may set prd_file to a normalized
+    # output that doesn't exist yet -- they're guarded by bmad_project_path /
+    # openspec_change_path, so skip this check when either is set.
+    if [ -n "$prd_file" ] && [ -z "$bmad_project_path" ] && [ -z "$openspec_change_path" ]; then
+        case "$prd_file" in
+            *.md|*.json|*.txt|*.yaml|*.yml)
+                if [ ! -f "$prd_file" ]; then
+                    echo -e "${RED}Error: PRD file not found: $prd_file${NC}" >&2
+                    exit 1
+                fi
+                ;;
+        esac
     fi
 
     # Mutual exclusivity: --openspec and --bmad-project cannot be used together
@@ -4054,6 +4358,33 @@ cmd_issue_view() {
 #===============================================================================
 
 cmd_run() {
+    # v6.84.0: `loki run` is now a deprecated alias for `loki start <issue-ref>`.
+    # When invoked directly (not via the unified start dispatcher), emit a
+    # deprecation notice and a telemetry event so we can track adoption of the
+    # unified command. Skip when LOKI_UNIFIED_START=1 (cmd_start -> cmd_run).
+    if [ "${LOKI_UNIFIED_START:-0}" != "1" ]; then
+        # Only warn for real invocations, not --help (help is still useful)
+        local _show_warn=true
+        for _a in "$@"; do
+            if [ "$_a" = "--help" ] || [ "$_a" = "-h" ]; then
+                _show_warn=false
+                break
+            fi
+        done
+        if [ "$_show_warn" = "true" ]; then
+            echo -e "${YELLOW}Notice: 'loki run' is deprecated. Use 'loki start <issue-ref>' instead.${NC}" >&2
+            echo -e "${DIM}  All features (--worktree, --pr, --ship, --dry-run) work on 'loki start'.${NC}" >&2
+            echo "" >&2
+            # Emit telemetry event so we can measure adoption of the unified command.
+            # Signature: emit_event <type> <source> <action> [key=value ...]
+            emit_event cli_command_deprecated cli run_to_start \
+                "old_command=run" \
+                "new_command=start" \
+                "version=6.84.0" \
+                "argv=${*:-}"
+        fi
+    fi
+
     require_jq || return 1
 
     local issue_ref=""
@@ -4071,7 +4402,7 @@ cmd_run() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --help|-h)
-                echo -e "${BOLD}loki run${NC} - Issue-driven engineering (v6.0.0)"
+                echo -e "${BOLD}loki run${NC} - Issue-driven engineering (DEPRECATED: use 'loki start')"
                 echo ""
                 echo "Usage: loki run <issue-ref> [options]"
                 echo "       loki run <url-or-key> [options]"
