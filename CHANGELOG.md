@@ -5,6 +5,21 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.1] - 2026-04-24
+
+### Fixes
+
+- **`tests/managed/test_providers_managed_mock.py` flag-reassert in setUp.**
+  v7.0.0 Python 3.10-3.13 matrix test jobs failed on 3 tests because
+  sibling test modules mutated `os.environ` and pytest's class-level
+  ordering left `LOKI_EXPERIMENTAL_MANAGED_AGENTS` flipped to false for
+  later tests. `setUp` now unconditionally re-asserts both flags to
+  "true" so `providers.managed.is_enabled()` returns True inside the
+  test body regardless of prior state. Shell tests, integration tests,
+  and all other test suites were green on v7.0.0; only this one class
+  needed isolation.
+- No runtime behavior change.
+
 ## [7.0.0] - 2026-04-24
 
 MAJOR release: full Claude Managed Agents integration, `loki start`/`run`

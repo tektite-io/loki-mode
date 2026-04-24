@@ -88,6 +88,10 @@ class ProvidersManagedTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="loki-managed-providers-")
         os.environ["LOKI_TARGET_DIR"] = self.tmp
+        # Re-assert env vars in setUp in case a prior test module stripped them.
+        # providers.managed._flags_on() reads env fresh on every is_enabled() call.
+        os.environ["LOKI_MANAGED_AGENTS"] = "true"
+        os.environ["LOKI_EXPERIMENTAL_MANAGED_AGENTS"] = "true"
 
         # Seed the agent ID cache so resolve_agent_ids does not call the
         # real materialization path (which would require anthropic).
