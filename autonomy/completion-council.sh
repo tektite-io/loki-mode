@@ -73,6 +73,38 @@ COUNCIL_TOTAL_DONE_SIGNALS=0
 COUNCIL_LAST_DIFF_HASH=""
 
 #===============================================================================
+# v6.83.0 Phase 1: Managed Agents memory augmentation (opt-in).
+#
+# When LOKI_MANAGED_AGENTS=true AND LOKI_MANAGED_MEMORY=true, this function
+# pulls up to 3 related prior verdicts from the Claude Managed Agents store
+# and writes them to a file the council prompt-assembly step appends as
+# "RELATED PRIOR VERDICTS". 5s hard timeout so a slow/unreachable API can
+# never block the council. Silent no-op when the flags are off.
+#===============================================================================
+council_augment_from_managed_memory() {
+    if [ "${LOKI_MANAGED_AGENTS:-false}" != "true" ] || \
+       [ "${LOKI_MANAGED_MEMORY:-false}" != "true" ]; then
+        return 0
+    fi
+    local target_dir="${TARGET_DIR:-.}"
+    local project_dir="${PROJECT_DIR:-$(pwd)}"
+    local out_file="$target_dir/.loki/managed/council-augment.txt"
+    mkdir -p "$target_dir/.loki/managed" 2>/dev/null || true
+    (
+        cd "$project_dir" 2>/dev/null && \
+        LOKI_TARGET_DIR="$target_dir" \
+        timeout 5 python3 -m memory.managed_memory.retrieve \
+            --query "completion-council verdict context" --top-k 3 \
+            > "$out_file" 2>/dev/null || true
+    ) || true
+    if [ -s "$out_file" ]; then
+        echo "RELATED PRIOR VERDICTS:"
+        cat "$out_file"
+    fi
+    return 0
+}
+
+#===============================================================================
 # Initialization
 #===============================================================================
 
@@ -1366,6 +1398,11 @@ council_should_stop() {
         return 1
     fi
 
+    # v6.83.0 Phase 1: silent no-op unless both managed flags are on.
+    # Writes related prior verdicts into $TARGET_DIR/.loki/managed/council-augment.txt
+    # which the council prompt assembly step can read and append to its prompt.
+    council_augment_from_managed_memory >/dev/null 2>&1 || true
+
     # Check circuit breaker first (stagnation detection)
     local circuit_triggered=false
     if council_circuit_breaker_triggered; then
@@ -1395,6 +1432,27 @@ council_should_stop() {
 
         # Store final council report
         council_write_report
+
+        # v6.83.0 Phase 1: shadow-write the final council verdict to the
+        # managed memory store. Backgrounded + silent; flags gate the work
+        # inside the Python module so no-op when off.
+        if [ "${LOKI_MANAGED_AGENTS:-false}" = "true" ] && \
+           [ "${LOKI_MANAGED_MEMORY:-false}" = "true" ]; then
+            local _verdict_file="$loki_dir/council/verdicts/iteration-$ITERATION_COUNT.json"
+            if [ ! -f "$_verdict_file" ]; then
+                # Fall back to the round vote file as the verdict payload.
+                _verdict_file="$COUNCIL_STATE_DIR/votes/round-${ITERATION_COUNT}.json"
+            fi
+            if [ -f "$_verdict_file" ]; then
+                (
+                    cd "${PROJECT_DIR:-$(pwd)}" 2>/dev/null && \
+                    LOKI_TARGET_DIR="$loki_dir/.." \
+                    timeout 15 python3 -m memory.managed_memory.shadow_write \
+                        --verdict "$_verdict_file" >/dev/null 2>&1 || true
+                ) &
+                disown 2>/dev/null || true
+            fi
+        fi
 
         return 0  # STOP
     fi

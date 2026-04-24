@@ -5,6 +5,45 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.83.0] - 2026-04-24
+
+### Added
+
+- **Managed Agents Memory integration -- Phase 1 MVP (opt-in).** Loki can now
+  mirror a whitelisted subset of RARV-C learnings to a Claude Managed Agents
+  memory store, giving cross-project audited history. Fully embedded in the
+  RARV-C cycle; no new commands. REASON phase augments context with related
+  prior patterns/verdicts pulled from the managed store; REFLECT/VERIFY phase
+  shadow-writes high-importance episodes and completion-council verdicts.
+- Parent flag: LOKI_MANAGED_AGENTS=false (default). Child: LOKI_MANAGED_MEMORY=false
+  (default). Both must be true for any managed path to activate. Child on with
+  parent off fails fast at startup with a clear error and exit code 2.
+- New package memory/managed_memory/ contains the single anthropic SDK import
+  in the codebase. CI invariant: grep -r "^import anthropic" autonomy/
+  providers/ mcp/ dashboard/ must remain empty.
+- API unreachable falls back to local path with a managed_agents_fallback event
+  to .loki/managed/events.ndjson (single-writer convention). No retry-storm;
+  one WARN line per failure.
+- Beta header pinned: managed-agents-2026-04-01. Centralized in
+  memory/managed_memory/_beta.py::BETA_HEADER.
+- FakeManagedClient (memory/managed_memory/fakes.py) for deterministic CI
+  tests. Five new tests under tests/managed_memory/ cover the flag matrix,
+  SDK isolation invariant, kill-switch fallback, shadow-write envelope + 409
+  retry path, and retrieve/hydrate semantics.
+
+### Not tested (honest disclosure)
+
+- End-to-end roundtrip against a real ANTHROPIC_API_KEY + beta access
+  (requires live API). Automated CI uses FakeManagedClient. The client module
+  is validated only through the kill-switch test (unreachable URL + invalid
+  key) which proves graceful fallback -- not successful round-trip.
+- Long-horizon cross-project citation quality.
+- Multiagent callable_agents (scheduled for Phase 3+, EXPERIMENTAL).
+
+### Rollback
+
+- LOKI_MANAGED_AGENTS=false (default) restores identical v6.82.0 behavior.
+
 ## [6.82.0] - 2026-04-24
 
 ### Added

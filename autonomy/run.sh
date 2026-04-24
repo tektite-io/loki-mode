@@ -644,6 +644,19 @@ LOKI_SESSION_MODEL="${LOKI_SESSION_MODEL:-sonnet}"
 LOKI_LEGACY_TIER_SWITCHING="${LOKI_LEGACY_TIER_SWITCHING:-false}"
 export LOKI_SESSION_MODEL LOKI_LEGACY_TIER_SWITCHING
 
+# Managed Agents (v6.83.0 Phase 1): opt-in integration with Claude Managed Agents
+# Memory store backend. Parent flag gates everything; child flags gate features.
+# Both off (default) => zero behavior change from v6.82.0.
+LOKI_MANAGED_AGENTS="${LOKI_MANAGED_AGENTS:-false}"
+LOKI_MANAGED_MEMORY="${LOKI_MANAGED_MEMORY:-false}"
+export LOKI_MANAGED_AGENTS LOKI_MANAGED_MEMORY
+
+# Fail-fast: child on with parent off is a misconfiguration.
+if [ "$LOKI_MANAGED_MEMORY" = "true" ] && [ "$LOKI_MANAGED_AGENTS" != "true" ]; then
+    echo "ERROR: LOKI_MANAGED_MEMORY=true requires LOKI_MANAGED_AGENTS=true" >&2
+    exit 2
+fi
+
 # Parallel Workflows (Git Worktrees)
 PARALLEL_MODE=${LOKI_PARALLEL_MODE:-false}
 MAX_WORKTREES=${LOKI_MAX_WORKTREES:-5}
@@ -7977,6 +7990,32 @@ try:
 except Exception as e:
     pass  # Silently fail if memory not available
 PYEOF
+
+    # v6.83.0 Phase 1: RARV-C REASON augment. When both managed flags are on,
+    # pull related prior verdicts from the Claude Managed Agents store and
+    # append them AFTER local results. 5s hard timeout so a slow remote never
+    # blocks the loop. On timeout or error, emit a fallback event and continue.
+    if [ "$LOKI_MANAGED_AGENTS" = "true" ] && [ "$LOKI_MANAGED_MEMORY" = "true" ]; then
+        local managed_start_ms
+        managed_start_ms=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || echo "0")
+        local managed_out
+        managed_out=$(
+            cd "$PROJECT_DIR" 2>/dev/null && \
+            LOKI_TARGET_DIR="$target_dir" \
+            timeout 5 python3 -m memory.managed_memory.retrieve \
+                --query "$goal" --top-k 3 2>/dev/null || true
+        )
+        if [ -n "$managed_out" ]; then
+            echo ""
+            echo "RELATED PRIOR LEARNINGS (managed store):"
+            echo "$managed_out"
+        else
+            # No output could mean: flags off (unreachable here), timeout, or
+            # zero hits. Emit a fallback event only if a timeout likely occurred.
+            LOKI_TARGET_DIR="$target_dir" \
+            python3 -c "from memory.managed_memory.events import emit_managed_event; emit_managed_event('managed_memory_retrieve_empty', {'phase': '$phase'})" 2>/dev/null || true
+        fi
+    fi
 }
 
 # Store episode trace after task completion
@@ -8080,14 +8119,21 @@ auto_capture_episode() {
     fi
 
     # Pass all context via environment variables (prevents injection)
+    # v6.83.0: also stash the resolved episode path so the bash caller can
+    # optionally shadow-write it to the managed store if importance >= 0.6.
+    local episode_path_file="/tmp/loki-episode-path-$$"
+    : > "$episode_path_file"
     _LOKI_PROJECT_DIR="$PROJECT_DIR" _LOKI_TARGET_DIR="$target_dir" \
     _LOKI_ITERATION="$iteration" _LOKI_EXIT_CODE="$exit_code" \
     _LOKI_RARV_PHASE="$rarv_phase" _LOKI_GOAL="$goal" \
     _LOKI_DURATION="$duration" _LOKI_OUTCOME="$outcome" \
     _LOKI_FILES_MODIFIED="$files_modified" _LOKI_GIT_COMMIT="$git_commit" \
+    _LOKI_EPISODE_PATH_FILE="$episode_path_file" \
     python3 << 'PYEOF' 2>/dev/null || true
 import sys
 import os
+import json
+from pathlib import Path
 
 project_dir = os.environ.get('_LOKI_PROJECT_DIR', '')
 target_dir = os.environ.get('_LOKI_TARGET_DIR', '.')
@@ -8098,6 +8144,7 @@ duration = os.environ.get('_LOKI_DURATION', '0')
 outcome = os.environ.get('_LOKI_OUTCOME', 'success')
 files_modified = os.environ.get('_LOKI_FILES_MODIFIED', '')
 git_commit = os.environ.get('_LOKI_GIT_COMMIT', '')
+path_out_file = os.environ.get('_LOKI_EPISODE_PATH_FILE', '')
 
 sys.path.insert(0, project_dir)
 try:
@@ -8120,9 +8167,47 @@ try:
     trace.files_modified = [f for f in files_modified.split('|') if f] if files_modified else []
 
     engine.store_episode(trace)
+
+    # v6.83.0: surface the on-disk episode path + importance so bash can
+    # decide whether to shadow-write. Writing to a known file (not stdout)
+    # keeps the existing stdout contract intact.
+    try:
+        importance = float(getattr(trace, 'importance', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        importance = 0.0
+    episode_file = Path(f'{target_dir}/.loki/memory/episodic') / f'{trace.id}.json'
+    if path_out_file:
+        try:
+            with open(path_out_file, 'w', encoding='utf-8') as f:
+                json.dump({'path': str(episode_file), 'importance': importance}, f)
+        except OSError:
+            pass
 except Exception:
     pass  # Silently fail -- memory capture must never break the loop
 PYEOF
+
+    # v6.83.0 Phase 1: RARV-C REFLECT/VERIFY shadow-write. Only when both
+    # managed flags are on AND the episode meets the consolidation importance
+    # threshold (>= 0.6). Fully non-blocking (backgrounded subprocess).
+    if [ "$LOKI_MANAGED_AGENTS" = "true" ] && [ "$LOKI_MANAGED_MEMORY" = "true" ] \
+        && [ -s "$episode_path_file" ]; then
+        local _ep_path _ep_imp
+        _ep_path=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('path',''))" "$episode_path_file" 2>/dev/null || echo "")
+        _ep_imp=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('importance',0.0))" "$episode_path_file" 2>/dev/null || echo "0")
+        if [ -n "$_ep_path" ] && [ -f "$_ep_path" ]; then
+            local _above_threshold
+            _above_threshold=$(python3 -c "print('yes' if float('$_ep_imp') >= 0.6 else 'no')" 2>/dev/null || echo "no")
+            if [ "$_above_threshold" = "yes" ]; then
+                (
+                    cd "$PROJECT_DIR" 2>/dev/null && \
+                    LOKI_TARGET_DIR="$target_dir" \
+                    timeout 15 python3 -m memory.managed_memory.shadow_write --path "$_ep_path" >/dev/null 2>&1 || true
+                ) &
+                disown 2>/dev/null || true
+            fi
+        fi
+    fi
+    rm -f "$episode_path_file" 2>/dev/null || true
 }
 
 # Run memory consolidation pipeline
