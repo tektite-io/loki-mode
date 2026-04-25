@@ -156,9 +156,14 @@ class HydrateTests(unittest.TestCase):
         try:
             result = hydrate(target_dir=self.tmp)
         finally:
-            if old_p is not None:
+            # v7.0.2: unconditional restore (None -> pop, value -> set).
+            if old_p is None:
+                os.environ.pop("LOKI_MANAGED_AGENTS", None)
+            else:
                 os.environ["LOKI_MANAGED_AGENTS"] = old_p
-            if old_c is not None:
+            if old_c is None:
+                os.environ.pop("LOKI_MANAGED_MEMORY", None)
+            else:
                 os.environ["LOKI_MANAGED_MEMORY"] = old_c
 
         self.assertTrue(result["skipped"])

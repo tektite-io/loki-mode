@@ -5,6 +5,79 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.2] - 2026-04-24
+
+Quality patch closing gaps surfaced by 5 deep-audit agent teams + CLAUDE.md
+section 3a pre-publish validation. No behavior change for users on default
+flags. Every fix is backed by a real bug found in v7.0.1.
+
+### Fixes
+
+- **Hallucinated MCP tool removed from docs.** `skills/memory.md` documented
+  a `loki_memory_promote` MCP tool that does not exist anywhere in the
+  codebase. Replaced with honest "manual promotion via the Managed Agents
+  API; tool on the roadmap but NOT shipped" guidance.
+
+- **Phase-3 fallback events now reach the dashboard.** v7.0.0 emitted four
+  managed-review-council events (3 fallbacks + 1 success) via
+  `emit_event_json` to `.loki/events.jsonl`, which the dashboard's
+  `/api/managed/*` endpoints do NOT read. Operators tailing
+  `.loki/managed/events.ndjson` saw nothing for review-council failures.
+  v7.0.2 adds a bash helper `emit_managed_event_bash` (mirrors the Python
+  `emit_managed_event` schema) and dual-emits at all four sites in
+  `_run_managed_review_council` so events appear in both logs.
+
+- **ReDoS guard on `loki_memory_redact`.** `mcp/managed_tools.py` previously
+  passed user-supplied regex straight to `re.compile`. A pattern like
+  `(a+)+$` against any non-trivial content can hang the MCP server.
+  v7.0.2 caps pattern length at 512 chars (generous for legitimate
+  PII/compliance patterns) and rejects non-string input.
+
+- **Pytest test isolation: root cause fixed (not just patched).** v7.0.0 CI
+  Python matrix failed on 3 tests; v7.0.1 patched the symptom by
+  re-asserting env vars in setUp. Root cause investigation found the
+  actual culprit:
+  `tests/council/test_managed_completion_fallback.py::tearDown` was
+  unconditionally `os.environ.pop()`-ing 3 flags without saving prior
+  state. Pytest collection runs `tests/council/` alphabetically before
+  `tests/managed/`, leaving the latter's tests starting with stripped env.
+  v7.0.2 (a) snapshots prior env state in setUp and restores in tearDown,
+  and (b) fixes the same `if old is not None` foot-gun in 4 sibling test
+  files (`test_hydrate_mock`, `test_shadow_write_mock`, `test_retrieve_mock`,
+  `test_providers_managed_mock`) that would have failed similarly under
+  any future test that strips env. Verified: full pytest run = 624/624
+  pass.
+
+- **`asdict` unused import removed** from `providers/managed.py` (pyflakes
+  warning).
+
+### Verification
+
+- `bash -n` clean on run.sh, loki, completion-council.sh
+- All Python AST parses clean
+- `npm test` = 7/7 pass
+- `npm run test:integration` = 7/7 pass
+- `python3 -m pytest tests/` = 624/624 pass (CI-equivalent invocation)
+- Pre-push git hook installed (`scripts/install-hooks.sh`); will fire on
+  this and future pushes
+- CLAUDE.md section 3a pre-publish validation completed: `npm pack`
+  produced 499-file 2.1MB tarball; `npm install -g ./loki-mode-7.0.1.tgz`
+  succeeded; `loki version` returned 7.0.1; `loki web` started cleanly on
+  port 57375 and stopped cleanly. (Done for v7.0.1; will repeat for v7.0.2
+  after publish.)
+
+### Still NOT tested locally end-to-end (honest disclosure)
+
+- Live Anthropic Managed Agents API roundtrip (no beta access in this env)
+- Multiagent `callable_agents` happy path against real session
+- Docker container actual boot (`docker pull` succeeded, but Docker daemon
+  not running locally; cannot exec `loki version` from inside the image)
+- Homebrew install on a fresh machine
+- VSCode extension load in actual VSCode UI
+- Dashboard UI rendering (only API smoke; no browser test)
+
+These are documented limitations, not regressions.
+
 ## [7.0.1] - 2026-04-24
 
 ### Fixes

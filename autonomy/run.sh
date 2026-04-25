@@ -1040,6 +1040,41 @@ emit_event_json() {
     log_debug "Event: $event_type - $json_data"
 }
 
+# v7.0.2: Bash helper to emit a managed-agents event to the dashboard's
+# managed event log (.loki/managed/events.ndjson). Mirrors the Python
+# emit_managed_event helper so bash callers can land events in the same
+# stream the dashboard reads. Schema: {ts, type, payload}.
+emit_managed_event_bash() {
+    local event_type="$1"
+    shift
+    local target_dir="${TARGET_DIR:-.}"
+    local events_file="$target_dir/.loki/managed/events.ndjson"
+    mkdir -p "$target_dir/.loki/managed"
+
+    local timestamp
+    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Build payload JSON from key=value args (same convention as emit_event_json)
+    local payload="{"
+    local first=true
+    while [ $# -gt 0 ]; do
+        local key="${1%%=*}"
+        local value="${1#*=}"
+        if [ "$first" = true ]; then first=false; else payload+=","; fi
+        if [[ "$value" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ "$value" =~ ^(true|false|null)$ ]]; then
+            payload+="\"$key\":$value"
+        else
+            value=$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
+            payload+="\"$key\":\"$value\""
+        fi
+        shift
+    done
+    payload+="}"
+
+    local json_event="{\"ts\":\"$timestamp\",\"type\":\"$event_type\",\"payload\":$payload}"
+    echo "$json_event" >> "$events_file"
+}
+
 # Emit event to .loki/events/pending/ directory (for event bus subscribers)
 # Used by OTEL bridge and other enterprise services that watch the pending dir.
 # Usage: emit_event_pending <type> [key=value ...]
@@ -6146,6 +6181,10 @@ MANAGED_REVIEW
             "op=run_code_review" \
             "reason=subprocess_failed" \
             "review_id=$review_id"
+        emit_managed_event_bash "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=subprocess_failed" \
+            "review_id=$review_id"
         return 1
     fi
 
@@ -6156,6 +6195,11 @@ MANAGED_REVIEW
         local reason
         reason=$(printf '%s' "$result_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read() or '{}'); print(d.get('reason',''))" 2>/dev/null || echo "")
         emit_event_json "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=managed_unavailable" \
+            "detail=${reason//\"/}" \
+            "review_id=$review_id"
+        emit_managed_event_bash "managed_agents_fallback" \
             "op=run_code_review" \
             "reason=managed_unavailable" \
             "detail=${reason//\"/}" \
@@ -6171,10 +6215,17 @@ MANAGED_REVIEW
             "op=run_code_review" \
             "reason=verdict_write_failed" \
             "review_id=$review_id"
+        emit_managed_event_bash "managed_agents_fallback" \
+            "op=run_code_review" \
+            "reason=verdict_write_failed" \
+            "review_id=$review_id"
         return 1
     fi
 
     emit_event_json "managed_review_council_ok" \
+        "review_id=$review_id" \
+        "iteration=${ITERATION_COUNT:-0}"
+    emit_managed_event_bash "managed_review_council_ok" \
         "review_id=$review_id" \
         "iteration=${ITERATION_COUNT:-0}"
     return 0

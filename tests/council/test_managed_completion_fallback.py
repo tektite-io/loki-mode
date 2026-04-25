@@ -65,6 +65,20 @@ class FallbackTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        # v7.0.2: snapshot prior env state so tearDown restores cleanly
+        # instead of unconditionally stripping (the v7.0.0 CI failure was
+        # caused by this class wiping flags that downstream test classes
+        # depended on).
+        self._env_snapshot = {
+            k: os.environ.get(k)
+            for k in (
+                "LOKI_MANAGED_AGENTS",
+                "LOKI_EXPERIMENTAL_MANAGED_AGENTS",
+                "LOKI_EXPERIMENTAL_MANAGED_COUNCIL",
+                "LOKI_TARGET_DIR",
+            )
+        }
+
         # Enable the full flag stack so is_enabled() returns True (we probe
         # via importlib.util.find_spec; anthropic may or may not be installed
         # in CI -- the factory override bypasses the real SDK either way).
@@ -94,13 +108,13 @@ class FallbackTests(unittest.TestCase):
             self.managed._sdk_available = self._orig_sdk_available  # type: ignore[assignment]
         except AttributeError:
             pass
-        for k in (
-            "LOKI_MANAGED_AGENTS",
-            "LOKI_EXPERIMENTAL_MANAGED_AGENTS",
-            "LOKI_EXPERIMENTAL_MANAGED_COUNCIL",
-        ):
-            os.environ.pop(k, None)
-        os.environ.pop("LOKI_TARGET_DIR", None)
+        # v7.0.2: restore env vars from setUp snapshot rather than blind pop.
+        # If a key was unset on entry, pop it; if it had a value, restore.
+        for k, prior in self._env_snapshot.items():
+            if prior is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prior
 
     def _flags_off(self):
         for k in (

@@ -98,6 +98,17 @@ def redact_memory_versions(
             "scanned": 0,
         }
 
+    # v7.0.2: bound pattern length to mitigate ReDoS. Catastrophic-backtracking
+    # patterns like (a+)+$ can hang the MCP server. 512 chars is generous for
+    # legitimate compliance/PII patterns.
+    if not isinstance(pattern, str) or len(pattern) > 512:
+        return {
+            "error": "pattern must be a string of <=512 characters (ReDoS guard)",
+            "redacted_count": 0,
+            "errors": [],
+            "scanned": 0,
+        }
+
     try:
         compiled = re.compile(pattern)
     except re.error as e:

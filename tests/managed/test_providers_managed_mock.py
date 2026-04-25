@@ -260,7 +260,12 @@ class ProvidersManagedTests(unittest.TestCase):
         try:
             self.assertFalse(self.managed.is_enabled())
         finally:
-            if old is not None:
+            # v7.0.2: unconditional restore. If old was None (var unset),
+            # pop it back out; otherwise restore prior value. The previous
+            # `if old is not None` left "false" lingering for later tests.
+            if old is None:
+                os.environ.pop("LOKI_MANAGED_AGENTS", None)
+            else:
                 os.environ["LOKI_MANAGED_AGENTS"] = old
 
     def test_is_enabled_off_when_umbrella_flag_off(self):
@@ -269,7 +274,9 @@ class ProvidersManagedTests(unittest.TestCase):
         try:
             self.assertFalse(self.managed.is_enabled())
         finally:
-            if old is not None:
+            if old is None:
+                os.environ.pop("LOKI_EXPERIMENTAL_MANAGED_AGENTS", None)
+            else:
                 os.environ["LOKI_EXPERIMENTAL_MANAGED_AGENTS"] = old
 
     # ---------- helpers -----------------------------------------------------

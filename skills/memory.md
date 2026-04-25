@@ -1,4 +1,4 @@
-# Memory Integration (v7.0.0+)
+# Memory Integration (v7.0.2+)
 
 Loki Mode ships two memory layers:
 
@@ -109,8 +109,10 @@ With managed memory on, a new project gets access to:
 - `.loki/memory/skills/*.json` (org store, RO)
 - `.loki/memory/anti_patterns/*.json` (org store, RO)
 
-Promotions from user-RW to org-RO go through an explicit
-`loki_memory_promote` MCP tool that requires human approval. Never
+Promotions from user-RW to org-RO are MANUAL only at v7.0.x. Use the
+Managed Agents API directly (`memory_stores.memories.create` against the
+org store) with human review. An MCP `loki_memory_promote` tool is on
+the roadmap but NOT shipped in v7.0.x; do not depend on it. Never
 auto-promote.
 
 ## PII redaction
@@ -182,4 +184,4 @@ Dashboard endpoints (read-only, view-layer merge):
 
 ---
 
-**v7.0.0** | Opt-in, additive, rollback-safe. Default behavior unchanged.
+**v7.0.2** | Opt-in, additive, rollback-safe. Default behavior unchanged.
