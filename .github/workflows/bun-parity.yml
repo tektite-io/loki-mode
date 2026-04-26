@@ -162,10 +162,14 @@ jobs:
           echo "================================================================"
           printf '%-20s %s\n' "COMMAND" "RESULT"
           printf '%-20s %s\n' "-------" "------"
-          for p in "${PASSED[@]}"; do
+          # bash 3.2 on macos triggers `unbound variable` under `set -u` when
+          # iterating an empty array, so guard with the :- expansion.
+          for p in "${PASSED[@]:-}"; do
+            [ -z "$p" ] && continue
             printf '%-20s %s\n' "$p" "PASS"
           done
-          for f in "${FAILED[@]}"; do
+          for f in "${FAILED[@]:-}"; do
+            [ -z "$f" ] && continue
             printf '%-20s %s\n' "$f" "FAIL"
           done
           echo "================================================================"
