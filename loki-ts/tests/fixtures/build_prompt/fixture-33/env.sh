@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2148
 # fixture-33 env (degraded mode so unicode PRD body is actually read)
 export RETRY=0
 export PRD="./prd.md"

@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2148
 # fixture-41 env
 export RETRY=3
 export PRD="./prd.md"

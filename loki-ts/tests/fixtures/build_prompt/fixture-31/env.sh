@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2148
 # fixture-31 env (degraded mode so empty PRD body is actually read)
 export RETRY=0
 export PRD="./prd.md"
