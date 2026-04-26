@@ -26,9 +26,13 @@ concurrency:
 
 jobs:
   bun-parity:
-    name: bun-parity
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
+    name: bun-parity on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,11 +47,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install jq
+      - name: Install jq (Linux)
+        if: runner.os == 'Linux'
         run: |
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y jq
+          fi
+          jq --version
+
+      - name: Install jq (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            brew install jq
           fi
           jq --version
 

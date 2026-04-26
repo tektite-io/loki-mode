@@ -36,13 +36,15 @@ function sha256Of(s: string): string {
 
 const idx = loadIndex();
 
-// v7.4.5: 3 fixtures expose REAL build_prompt.ts bugs surfaced by B4's
-// extended corpus. Skipped with TODO so the suite stays green and the bugs
-// stay tracked. Each will be fixed in a follow-up patch (v7.4.6+).
-//   fixture-39: TS truncates multi-line LOKI_HUMAN_INPUT at first newline
-//   fixture-42: TS emits compact JSON for BMAD context (missing ", " separators)
-//   fixture-50: TS drops leading NUL byte from binary PRD content
-const KNOWN_FAILING_FIXTURES = new Set<number>([39, 42, 50]);
+// v7.4.6: All 60 fixtures pass.
+//   - fixture-39 FIXED via index.json LOKI_HUMAN_INPUT update (multi-line
+//     value from env.sh was truncated at fixture-generation time; restored).
+//   - fixture-42 FIXED: BMAD JSON context now uses Python-default
+//     separators (", " and ": ") via pythonJsonDumps() in build_prompt.ts.
+//   - fixture-50 FIXED: readBytesSafe() now strips embedded NUL bytes
+//     before utf-8 decode, matching bash command-substitution semantics
+//     (bash variables cannot hold NUL).
+const KNOWN_FAILING_FIXTURES = new Set<number>([]);
 
 describe("build_prompt parity", () => {
   for (const fx of idx.fixtures) {

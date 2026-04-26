@@ -67,8 +67,11 @@ jobs:
       - name: Push to wiki
         run: |
           cd wiki-repo
-          # CLAUDE.md hard rule: never `git add -A`. Stage every .md file by name.
-          git add -- $(ls *.md 2>/dev/null || true)
+          # CLAUDE.md hard rule: never `git add -A` / `git add .`. Add the
+          # specific files this job writes (above) explicitly, then any
+          # remaining .md files by name pattern.
+          git add -- Home.md _Sidebar.md Changelog.md
+          git add -- $(ls *.md 2>/dev/null | grep -vE '^(Home|_Sidebar|Changelog)\.md$' || true)
           if git diff --staged --quiet; then
             echo "No changes to push"
           else
@@ -202,7 +205,8 @@ jobs:
       - name: Push enhanced wiki
         run: |
           cd wiki-repo
-          # CLAUDE.md hard rule: never `git add -A`. Stage every .md file by name.
+          # CLAUDE.md hard rule: never `git add -A`. Stage every .md file the
+          # enhance step may have rewritten by name pattern.
           git add -- $(ls *.md 2>/dev/null || true)
           if ! git diff --staged --quiet; then
             git commit -m "AI-enhanced wiki for v${{ steps.version.outputs.version }}"

@@ -196,15 +196,81 @@ export function claudeProvider(): ProviderInvoker {
 // at the call site and never silently no-op.
 // ---------------------------------------------------------------------------
 
-// STUB: Phase 5 next iteration -- port codex.sh:113-189 (exec --full-auto,
-// CODEX_MODEL_REASONING_EFFORT env, effort-based tier mapping).
+// ---------------------------------------------------------------------------
+// Codex provider (codex.sh:1-190)
+//
+// Maps to provider_invoke_with_tier() at codex.sh:181-189:
+//   LOKI_CODEX_REASONING_EFFORT=$effort \
+//   CODEX_MODEL_REASONING_EFFORT=$effort \
+//   codex exec --full-auto "<prompt>"
+//
+// Codex uses a single model with varying reasoning effort (xhigh/high/low)
+// rather than tier->model mapping. Both env vars are set for forward and
+// backward compatibility (codex.sh:178-180).
+// ---------------------------------------------------------------------------
+
+// Tier -> effort. Mirrors codex.sh:127-134 (provider_get_tier_param).
+function codexTierToEffort(tier: SessionTier): string {
+  switch (tier) {
+    case "planning":
+      return "xhigh";
+    case "development":
+      return "high";
+    case "fast":
+      return "low";
+    default:
+      return "high";
+  }
+}
+
+// Apply LOKI_MAX_TIER ceiling. Mirrors codex.sh:163-171
+// (resolve_model_for_tier maxTier branch).
+function applyCodexMaxTier(effort: string): string {
+  const maxTier = process.env["LOKI_MAX_TIER"];
+  if (!maxTier) return effort;
+  switch (maxTier) {
+    case "haiku":
+    case "low":
+      return "low";
+    case "sonnet":
+    case "high":
+      return effort === "xhigh" ? "high" : effort;
+    case "opus":
+    case "xhigh":
+    default:
+      return effort;
+  }
+}
+
 export function codexProvider(): ProviderInvoker {
+  const cli = resolveCli("LOKI_CODEX_CLI", "codex");
   return {
-    async invoke(_call: ProviderInvocation): Promise<ProviderResult> {
-      // STUB: Phase 5 -- codex.sh:119 provider_invoke not yet ported.
-      throw new Error(
-        "codex provider not yet implemented -- STUB: Phase 5 next iteration (codex.sh:119)",
-      );
+    async invoke(call: ProviderInvocation): Promise<ProviderResult> {
+      const baseEffort = codexTierToEffort(call.tier);
+      const effort = applyCodexMaxTier(baseEffort);
+
+      const argv: string[] = [
+        cli,
+        "exec",
+        "--full-auto",
+        call.prompt,
+      ];
+
+      // Both env vars: LOKI_-namespaced (canonical, v6.37.1+) and
+      // CODEX_MODEL_REASONING_EFFORT (legacy, deprecated but supported).
+      const r = await shellRun(argv, {
+        cwd: call.cwd,
+        env: {
+          LOKI_CODEX_REASONING_EFFORT: effort,
+          CODEX_MODEL_REASONING_EFFORT: effort,
+        },
+      });
+      await writeCaptured(call.iterationOutputPath, r.stdout, r.stderr);
+
+      return {
+        exitCode: r.exitCode,
+        capturedOutputPath: call.iterationOutputPath,
+      };
     },
   };
 }

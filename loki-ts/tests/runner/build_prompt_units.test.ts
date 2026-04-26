@@ -315,7 +315,10 @@ describe("buildBmadContext", () => {
     const out = _internals.buildBmadContext(workDir);
     expect(out).toContain("BMAD_CONTEXT:");
     expect(out).toContain("ARCHITECTURE DECISIONS: ARCH-X");
-    expect(out).toContain('EPIC/STORY TASKS (from BMAD): [{"id":"T1"}]');
+    // v7.4.6: bash uses python json.dumps default separators (", " and ": "),
+    // not JS JSON.stringify's compact `,` `:`. The TS port matches via
+    // pythonJsonDumps(); see fixture-42 in parity tests.
+    expect(out).toContain('EPIC/STORY TASKS (from BMAD): [{"id": "T1"}]');
     expect(out).toContain("ARTIFACT VALIDATION: VAL-Y");
   });
 });

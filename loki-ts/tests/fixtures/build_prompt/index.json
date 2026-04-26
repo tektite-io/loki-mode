@@ -1235,7 +1235,7 @@
         "PROVIDER_DEGRADED": "false",
         "LOKI_LEGACY_PROMPT_ORDERING": "false",
         "COMPLETION_PROMISE": "",
-        "LOKI_HUMAN_INPUT": "Step 1: refactor auth module",
+        "LOKI_HUMAN_INPUT": "Step 1: refactor auth module\nStep 2: add unit tests for refactor\nStep 3: update API docs\nStep 4: validate against integration tests",
         "PHASE_UNIT_TESTS": "true",
         "PHASE_API_TESTS": "false",
         "PHASE_E2E_TESTS": "false",

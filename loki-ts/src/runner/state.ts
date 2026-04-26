@@ -17,8 +17,11 @@
 // bash treats absent state as "fresh start", we mirror that).
 
 import {
+  closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -26,8 +29,39 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
 import { lokiDir } from "../util/paths.ts";
+
+// --- injectable fs primitives (test-only) ----------------------------------
+//
+// atomicWriteFileSync historically used the destructured renameSync/copyFileSync
+// imports directly, which meant tests could not simulate cross-device EXDEV
+// failures without process-wide module mocking. We capture the imports in
+// module-local mutable bindings so a test helper can swap them in to drive
+// the EXDEV branch deterministically. Production code paths are unchanged.
+let _renameSync: typeof renameSync = renameSync;
+let _copyFileSync: typeof copyFileSync = copyFileSync;
+let _writeFileSync: typeof writeFileSync = writeFileSync;
+let _unlinkSync: typeof unlinkSync = unlinkSync;
+
+/**
+ * @internal Test-only helper. Swap the rename/copy/write/unlink syscalls used
+ * by atomicWriteFileSync. Pass an empty object or omit fields to restore the
+ * defaults selectively. Not part of the public API; the `__` prefix and this
+ * tag exist to keep API surface scanners from picking it up.
+ */
+export function __setFsForTesting(overrides: {
+  renameSync?: typeof renameSync;
+  copyFileSync?: typeof copyFileSync;
+  writeFileSync?: typeof writeFileSync;
+  unlinkSync?: typeof unlinkSync;
+}): void {
+  _renameSync = overrides.renameSync ?? renameSync;
+  _copyFileSync = overrides.copyFileSync ?? copyFileSync;
+  _writeFileSync = overrides.writeFileSync ?? writeFileSync;
+  _unlinkSync = overrides.unlinkSync ?? unlinkSync;
+}
 
 // --- public types ----------------------------------------------------------
 
@@ -114,22 +148,127 @@ function statusTxtPath(dir: string): string {
 // write leaves only the tmp file, which load_state's orphan sweep collects.
 //
 // Source: autonomy/run.sh:8740 ("$$" -> process.pid here).
-export function atomicWriteFileSync(targetPath: string, contents: string): void {
-  const tmpPath = `${targetPath}.tmp.${process.pid}`;
-  // Node's writeFileSync replaces the file atomically *only* via rename; the
-  // initial write to tmp may interleave on crash, which is exactly what
-  // load_state's orphan sweep is designed to clean up.
-  writeFileSync(tmpPath, contents);
+//
+// Cross-device fallback (EXDEV): renameSync fails when tmpPath and targetPath
+// span different filesystems (bind mounts, tmpfs overlays in containers,
+// docker volume on a different device). We mirror coreutils `mv` and fall
+// back to copy + unlink. The copy is no longer atomic at the filesystem
+// level but the visibility window is small and the orphan tmp sweep on next
+// load_state cleans up partial writes.
+//
+// Multi-process safety (advisory lock): if two loki processes write the same
+// target concurrently, one writer's `${path}.tmp.${pid}` could race with the
+// other's rename. We acquire a per-target lockfile via O_EXCL|O_CREAT before
+// the write and release it after the rename, mirroring the flock pattern in
+// autonomy/run.sh:11729-11748. Stale locks (process crashed mid-write) are
+// detected by mtime > LOCK_STALE_MS and stolen.
+const LOCK_TTL_MS = 30_000;          // mtime threshold for declaring a lock stale
+const LOCK_MAX_WAIT_MS = 5_000;      // total time we'll wait for a contended lock
+const LOCK_BACKOFF_INITIAL_MS = 5;   // first sleep on contention
+const LOCK_BACKOFF_MAX_MS = 100;     // cap exponential backoff
+
+function sleepSyncMs(ms: number): void {
+  // Bun and Node both expose Atomics.wait via SharedArrayBuffer; use it for
+  // a real (interrupt-friendly) sync sleep that doesn't burn CPU. Fallback
+  // to a busy loop if SAB is unavailable (shouldn't happen on Bun >=1.0).
   try {
-    renameSync(tmpPath, targetPath);
-  } catch (err) {
-    // Best-effort cleanup of the tmp file if rename fails (e.g. cross-device).
+    const sab = new SharedArrayBuffer(4);
+    const view = new Int32Array(sab);
+    Atomics.wait(view, 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { /* spin */ }
+  }
+}
+
+function acquireLock(lockPath: string): number {
+  // Returns the open fd of the lockfile (caller closes + unlinks). Throws
+  // if we exhaust LOCK_MAX_WAIT_MS without acquiring.
+  const start = Date.now();
+  let backoff = LOCK_BACKOFF_INITIAL_MS;
+  // We retry on EEXIST. Stale-lock detection runs each loop so a long-dead
+  // writer's lock is reaped within one backoff cycle of detection.
+  // O_EXCL|O_CREAT|O_WRONLY is the canonical "create-if-missing" atomic op.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Ignore -- the orphan sweep will handle it on next load.
+      const fd = openSync(
+        lockPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+        0o600,
+      );
+      return fd;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "EEXIST") throw err;
+      // Stale-lock check: if the lockfile is older than LOCK_TTL_MS the
+      // owning writer is presumed dead. unlinkSync is racy under concurrent
+      // stealers -- we tolerate ENOENT (someone else stole first) and let
+      // the next loop iteration retry the open.
+      try {
+        const st = statSync(lockPath);
+        if (Date.now() - st.mtimeMs > LOCK_TTL_MS) {
+          try { unlinkSync(lockPath); } catch { /* raced */ }
+          continue; // retry immediately after stealing
+        }
+      } catch {
+        // Lockfile vanished between EEXIST and statSync -- retry.
+        continue;
+      }
+      if (Date.now() - start >= LOCK_MAX_WAIT_MS) {
+        throw new Error(
+          `atomicWriteFileSync: could not acquire ${lockPath} within ${LOCK_MAX_WAIT_MS}ms`,
+        );
+      }
+      sleepSyncMs(backoff);
+      backoff = Math.min(backoff * 2, LOCK_BACKOFF_MAX_MS);
     }
-    throw err;
+  }
+}
+
+function releaseLock(lockPath: string, fd: number): void {
+  try { closeSync(fd); } catch { /* already closed */ }
+  try { unlinkSync(lockPath); } catch { /* may have been stolen */ }
+}
+
+export function atomicWriteFileSync(targetPath: string, contents: string): void {
+  // Per-process tmp suffix prevents a same-process double-write from clobbering
+  // its own tmp; per-target lockfile prevents cross-process races.
+  const tmpPath = `${targetPath}.tmp.${process.pid}`;
+  const lockPath = `${targetPath}.lock`;
+
+  const lockFd = acquireLock(lockPath);
+  try {
+    // Node's writeFileSync replaces the file atomically *only* via rename; the
+    // initial write to tmp may interleave on crash, which is exactly what
+    // load_state's orphan sweep is designed to clean up.
+    _writeFileSync(tmpPath, contents);
+    try {
+      _renameSync(tmpPath, targetPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "EXDEV") {
+        // Cross-device fallback: copy + unlink. Not atomic at the FS level,
+        // but the orphan sweep handles a kill -9 between copy and unlink by
+        // collecting the leftover tmp file.
+        try {
+          _copyFileSync(tmpPath, targetPath);
+          try { _unlinkSync(tmpPath); } catch { /* orphan sweep handles it */ }
+          return;
+        } catch (copyErr) {
+          // Copy failed -- best-effort cleanup of tmp and re-throw the copy
+          // error (more informative than the original EXDEV).
+          try { _unlinkSync(tmpPath); } catch { /* ignore */ }
+          throw copyErr;
+        }
+      }
+      // Best-effort cleanup of the tmp file if rename fails for any other
+      // reason (EACCES, ENOSPC, etc.).
+      try { _unlinkSync(tmpPath); } catch { /* orphan sweep handles it */ }
+      throw err;
+    }
+  } finally {
+    releaseLock(lockPath, lockFd);
   }
 }
 

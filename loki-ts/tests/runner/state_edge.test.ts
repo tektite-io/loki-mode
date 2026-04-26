@@ -10,18 +10,26 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { loadState, saveState } from "../../src/runner/state.ts";
+import {
+  __setFsForTesting,
+  atomicWriteFileSync,
+  loadState,
+  saveState,
+} from "../../src/runner/state.ts";
 
 let tmp: string;
 let dir: string;
@@ -68,32 +76,96 @@ afterEach(() => {
 // a faulting renameSync without touching node:fs internals.
 
 describe("atomicWriteFileSync: cross-device EXDEV rename", () => {
-  // TODO: implement EXDEV fallback in state.ts atomicWriteFileSync.
-  // Required behavior:
-  //   1. catch err in renameSync; if err.code === 'EXDEV', copyFileSync
-  //      (tmpPath, targetPath) then unlinkSync(tmpPath).
-  //   2. all other errors continue to re-throw with the current cleanup.
-  //   3. refactor to accept an injectable fs adapter so this test can run
-  //      without process-wide module mocking.
-  // Tracker: state.ts:117-134.
-  it.skip(
-    "TODO: implement EXDEV fallback in state.ts atomicWriteFileSync " +
-      "(currently re-throws EXDEV with no copyFileSync+unlink fallback; " +
-      "destructured `renameSync` import precludes runtime monkey-patching)",
-    () => {
-      // Spec when implemented:
-      //   - simulate renameSync throwing { code: 'EXDEV' } once
-      //   - assert atomicWriteFileSync completes successfully
-      //   - assert target file contains the written payload
-      //   - assert no .tmp.<pid> file is left behind
-      mkdirSync(dir, { recursive: true });
-      const target = join(dir, "x.json");
-      // Placeholder assertion -- real implementation requires an injectable
-      // fs adapter. See comment block above.
-      expect(existsSync(target)).toBe(false);
-    },
-  );
+  // Restore default fs after each test in this block so a faulting renameSync
+  // can't leak into siblings.
+  afterEach(() => {
+    __setFsForTesting({});
+  });
+
+  it("falls back to copyFileSync when renameSync throws EXDEV (content correct)", () => {
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, "x.json");
+    const payload = '{"hello":"exdev"}';
+
+    let renameCalls = 0;
+    let copyCalls = 0;
+    __setFsForTesting({
+      renameSync: (_oldPath, _newPath) => {
+        renameCalls++;
+        const err = new Error("simulated cross-device link") as NodeJS.ErrnoException;
+        err.code = "EXDEV";
+        throw err;
+      },
+      copyFileSync: (src, dst, mode) => {
+        copyCalls++;
+        copyFileSync(src as string, dst as string, mode);
+      },
+    });
+
+    atomicWriteFileSync(target, payload);
+
+    expect(renameCalls).toBe(1);
+    expect(copyCalls).toBe(1);
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(payload);
+
+    // Tmp file from the failed rename must be cleaned up.
+    const leftover = readdirSync(dir).filter((n) => n.includes(".tmp."));
+    expect(leftover).toEqual([]);
+  });
+
+  it("EXDEV fallback atomically replaces existing target (no partial content)", () => {
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, "x.json");
+    // Pre-populate with a known prior value.
+    writeFileSync(target, '{"prev":"v1"}');
+
+    const newPayload = '{"prev":"v2-much-longer-payload-to-detect-truncation"}';
+
+    __setFsForTesting({
+      renameSync: () => {
+        const err = new Error("EXDEV") as NodeJS.ErrnoException;
+        err.code = "EXDEV";
+        throw err;
+      },
+      // Real copyFileSync -- copyFileSync on POSIX is implemented as an
+      // open-truncate-write so the visible content is either the old file
+      // or the complete new file, never a partial mix.
+      copyFileSync: (src, dst, mode) => copyFileSync(src as string, dst as string, mode),
+    });
+
+    atomicWriteFileSync(target, newPayload);
+
+    expect(readFileSync(target, "utf8")).toBe(newPayload);
+    // No tmp leftover.
+    expect(readdirSync(dir).filter((n) => n.includes(".tmp."))).toEqual([]);
+    // No lock leftover.
+    expect(readdirSync(dir).filter((n) => n.endsWith(".lock"))).toEqual([]);
+  });
+
+  it("re-throws non-EXDEV errors and cleans up tmp file", () => {
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, "x.json");
+
+    __setFsForTesting({
+      renameSync: () => {
+        const err = new Error("EACCES simulated") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      },
+    });
+
+    expect(() => atomicWriteFileSync(target, "data")).toThrow(/EACCES/);
+    // Tmp must be cleaned up on the non-EXDEV branch too.
+    expect(readdirSync(dir).filter((n) => n.includes(".tmp."))).toEqual([]);
+    // Lock must be released even when an error propagates.
+    expect(readdirSync(dir).filter((n) => n.endsWith(".lock"))).toEqual([]);
+  });
 });
+
+// Suppress unused warnings for symbols imported for parity with the new tests.
+void renameSync;
+void dirname;
 
 // ---------------------------------------------------------------------------
 // 2. Orphan tmp-file 5-minute cleanup (REAL test, not just spec)

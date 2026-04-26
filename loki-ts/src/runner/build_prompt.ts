@@ -91,16 +91,38 @@ function stripTrailingNewlines(s: string): string {
   return s.replace(/\n+$/, "");
 }
 
-/** Read a file then truncate to N bytes (bash `$(head -c N file)`). */
+/** Read a file then truncate to N bytes (bash `$(head -c N file)`).
+ *
+ * Bash command substitution `$(...)` ALSO strips embedded NUL bytes
+ * (bash variables cannot hold NUL). Mirror that to keep parity with the
+ * shell baseline, especially for binary PRD reads (fixture-50).
+ */
 function readBytesSafe(path: string, maxBytes: number): string | null {
-  const content = readFileSafe(path);
-  if (content === null) return null;
-  // Bash head -c counts bytes, not chars. Convert to bytes, slice, decode.
-  const buf = Buffer.from(content, "utf8");
-  const sliced =
-    buf.byteLength <= maxBytes ? content : buf.subarray(0, maxBytes).toString("utf8");
+  const buf = readFileBufferSafe(path);
+  if (buf === null) return null;
+  const sliced = buf.byteLength <= maxBytes ? buf : buf.subarray(0, maxBytes);
+  // Strip NUL bytes BEFORE utf-8 decode so the byte count matches bash.
+  let stripped: Buffer = sliced;
+  if (sliced.includes(0)) {
+    const out: number[] = [];
+    for (const b of sliced) {
+      if (b !== 0) out.push(b);
+    }
+    stripped = Buffer.from(out);
+  }
+  const text = stripped.toString("utf8");
   // Bash command substitution `$(...)` strips trailing newlines.
-  return stripTrailingNewlines(sliced);
+  return stripTrailingNewlines(text);
+}
+
+/** Read a file as raw bytes, returning null if missing. */
+function readFileBufferSafe(path: string): Buffer | null {
+  try {
+    if (!existsSync(path)) return null;
+    return readFileSync(path);
+  } catch {
+    return null;
+  }
 }
 
 /** Read a file then keep first N lines (bash `$(head -N file)`). */
@@ -577,17 +599,49 @@ function formatBmadTasks(path: string): string {
   try {
     const data: unknown = JSON.parse(raw);
     let working: unknown = data;
-    let out = JSON.stringify(working);
+    // Bash uses `json.dumps(data, indent=None)` which emits Python's default
+    // separators `(', ', ': ')` -- NOT JS JSON.stringify's compact `,` `:`.
+    let out = pythonJsonDumps(working);
     if (out.length > 32000 && Array.isArray(working)) {
       const arr: unknown[] = [...working];
-      while (arr.length > 0 && JSON.stringify(arr).length > 32000) arr.pop();
+      while (arr.length > 0 && pythonJsonDumps(arr).length > 32000) arr.pop();
       working = arr;
-      out = JSON.stringify(working);
+      out = pythonJsonDumps(working);
     }
     return out.slice(0, 32000);
   } catch {
     return "";
   }
+}
+
+/**
+ * Serialize a JS value with the same separator defaults as
+ * Python's `json.dumps(value, indent=None)`: `, ` between items and
+ * `: ` between key/value. Keys are emitted in insertion order which
+ * mirrors what `json.load` produces from a text file (Python preserves
+ * insertion order since 3.7, matching what we read with JSON.parse).
+ *
+ * Strings are escaped with JSON.stringify (matches Python default for
+ * the ASCII / common BMP text the BMAD inputs use).
+ */
+function pythonJsonDumps(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  const t = typeof value;
+  if (t === "boolean") return value ? "true" : "false";
+  if (t === "number") return JSON.stringify(value);
+  if (t === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map((v) => pythonJsonDumps(v)).join(", ") + "]";
+  }
+  if (t === "object") {
+    const obj = value as Record<string, unknown>;
+    const parts: string[] = [];
+    for (const k of Object.keys(obj)) {
+      parts.push(JSON.stringify(k) + ": " + pythonJsonDumps(obj[k]));
+    }
+    return "{" + parts.join(", ") + "}";
+  }
+  return JSON.stringify(value);
 }
 
 // ---------------------------------------------------------------------------

@@ -112,14 +112,131 @@ describe("resolveProvider dispatch", () => {
   });
 });
 
-describe("stubbed providers throw with discoverable message", () => {
-  it("codex throws", async () => {
-    const p = codexProvider();
-    await expect(p.invoke(makeCall({ provider: "codex" }))).rejects.toThrow(
-      /STUB: Phase 5/,
-    );
+// codex was stubbed through v7.4.5; v7.4.6 ports codex.sh:113-189 in full.
+// Real tests live in `codexProvider invocation` below.
+
+describe("codexProvider invocation", () => {
+  let codexStubPath: string;
+  let codexArgvLog: string;
+  let codexEnvLog: string;
+
+  function writeCodexStub(opts: {
+    exitCode?: number;
+    stdout?: string;
+    stderr?: string;
+  } = {}): void {
+    const exitCode = opts.exitCode ?? 0;
+    const stdout = opts.stdout ?? "";
+    const stderr = opts.stderr ?? "";
+    codexArgvLog = join(tmp, "codex-argv.log");
+    codexEnvLog = join(tmp, "codex-env.log");
+    const script = [
+      "#!/bin/sh",
+      `printf '%s\\n' "$@" > '${codexArgvLog}'`,
+      // Capture both env vars so tests can assert presence + value.
+      `printf 'LOKI_CODEX_REASONING_EFFORT=%s\\nCODEX_MODEL_REASONING_EFFORT=%s\\n' "\${LOKI_CODEX_REASONING_EFFORT}" "\${CODEX_MODEL_REASONING_EFFORT}" > '${codexEnvLog}'`,
+      stdout ? `printf '%s' '${stdout.replace(/'/g, "'\\''")}'` : "",
+      stderr ? `printf '%s' '${stderr.replace(/'/g, "'\\''")}' 1>&2` : "",
+      `exit ${exitCode}`,
+    ].filter(Boolean).join("\n");
+    writeFileSync(codexStubPath, script);
+    chmodSync(codexStubPath, 0o755);
+  }
+
+  function readCodexEnv(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const line of readFileSync(codexEnvLog, "utf8").split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) out[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    return out;
+  }
+
+  beforeEach(() => {
+    codexStubPath = join(tmp, "codex-stub");
+    process.env["LOKI_CODEX_CLI"] = codexStubPath;
   });
 
+  afterEach(() => {
+    delete process.env["LOKI_CODEX_CLI"];
+  });
+
+  it("argv shape: [exec, --full-auto, <prompt>] (codex.sh:188)", async () => {
+    writeCodexStub({ stdout: "ok" });
+    const p = codexProvider();
+    const r = await p.invoke(makeCall({ provider: "codex", prompt: "build x" }));
+    expect(r.exitCode).toBe(0);
+    const argv = readFileSync(codexArgvLog, "utf8").split("\n").filter(Boolean);
+    // Note: process.argv[0] (the cli path) is NOT in argv recorded by the
+    // stub -- the stub uses "$@" which is positional args only. The contract
+    // shape we verify is: positional 1 = "exec", 2 = "--full-auto", 3 = prompt.
+    expect(argv[0]).toBe("exec");
+    expect(argv[1]).toBe("--full-auto");
+    expect(argv[2]).toBe("build x");
+  });
+
+  it("tier=planning maps to effort=xhigh (codex.sh:128)", async () => {
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "planning" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("xhigh");
+    expect(readCodexEnv()["CODEX_MODEL_REASONING_EFFORT"]).toBe("xhigh");
+  });
+
+  it("tier=development maps to effort=high (codex.sh:129)", async () => {
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "development" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("high");
+  });
+
+  it("tier=fast maps to effort=low (codex.sh:130)", async () => {
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "fast" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("low");
+  });
+
+  it("LOKI_MAX_TIER=low caps planning(xhigh) -> low (codex.sh:165)", async () => {
+    process.env["LOKI_MAX_TIER"] = "low";
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "planning" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("low");
+  });
+
+  it("LOKI_MAX_TIER=high caps planning(xhigh) -> high but leaves high alone (codex.sh:166-168)", async () => {
+    process.env["LOKI_MAX_TIER"] = "high";
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "planning" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("high");
+  });
+
+  it("LOKI_MAX_TIER=opus does not cap (codex.sh:169)", async () => {
+    process.env["LOKI_MAX_TIER"] = "opus";
+    writeCodexStub();
+    const p = codexProvider();
+    await p.invoke(makeCall({ provider: "codex", tier: "planning" }));
+    expect(readCodexEnv()["LOKI_CODEX_REASONING_EFFORT"]).toBe("xhigh");
+  });
+
+  it("propagates non-zero exit code", async () => {
+    writeCodexStub({ exitCode: 9, stderr: "boom" });
+    const p = codexProvider();
+    const r = await p.invoke(makeCall({ provider: "codex" }));
+    expect(r.exitCode).toBe(9);
+  });
+
+  it("writes captured output (stdout + stderr) to iterationOutputPath", async () => {
+    writeCodexStub({ stdout: "codex-stdout", stderr: "codex-warn" });
+    const p = codexProvider();
+    const r = await p.invoke(makeCall({ provider: "codex" }));
+    expect(r.capturedOutputPath).toBe(outputPath);
+    const captured = readFileSync(outputPath, "utf8");
+    expect(captured).toContain("codex-stdout");
+    expect(captured).toContain("codex-warn");
+  });
 });
 
 describe("claudeProvider invocation", () => {
