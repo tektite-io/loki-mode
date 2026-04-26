@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0.0",
+  "release": "v7.4.6",
+  "branch": "feat/bun-migration",
+  "base_pr": "#157 (DRAFT, extends with v7.4.6)",
+  "created": "2026-04-26",
+  "owner": "claude-opus-4-7 autonomous fleet",
+  "decisions": {
+    "Q1": "A - reachable items completed; unreachable items get wired infra (CI matrix, multi-arch buildx) so they run on next pipeline",
+    "Q2": "A - stub-binary pattern at LOKI_*_CLI env path matches existing claude/cline/gemini/aider tests; real subprocess exec, not function mock",
+    "Q3": "A - 10 implementation agents grouped by file scope to avoid collisions, then 10 review agents for peer review",
+    "Q4": "A - 10 area-specific reviewers + 10 cross-cutting (security, perf, parity, races, errors, claude.md, dashboard contract, docs, devil's advocate)",
+    "Q5": "A - extend PR #157 with v7.4.6; phased rollout already gates v7.4.x behind v7.3.0 soak"
+  },
+  "categories": {
+    "biggest_4_risks_user_named": [
+      {"id": "R-CODEX", "item": "codex provider re-port (currently STUB at providers.ts:199-206)", "agent": "W1-A1", "status": "PENDING"},
+      {"id": "R-BP-39", "item": "build_prompt fixture-39 multi-line LOKI_HUMAN_INPUT preservation", "agent": "W1-A2", "status": "PENDING"},
+      {"id": "R-BP-42", "item": "build_prompt fixture-42 BMAD JSON ', ' separator (Python json.dumps default)", "agent": "W1-A2", "status": "PENDING"},
+      {"id": "R-BP-50", "item": "build_prompt fixture-50 leading NUL byte preservation in degraded read path", "agent": "W1-A2", "status": "PENDING"},
+      {"id": "R-EXDEV", "item": "state.ts atomicWriteFileSync EXDEV cross-device fallback (copyFileSync+unlinkSync)", "agent": "W1-A3", "status": "PENDING"},
+      {"id": "R-CI-MAC", "item": "macOS matrix in test.yml + bun-parity.yml (catch BSD utils, bash 3.2)", "agent": "W1-A4", "status": "PENDING"}
+    ],
+    "not_touched_in_scope": [
+      {"id": "G-ARM64", "item": "ARM64 Linux Docker buildx (linux/arm64)", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-MAC-CI", "item": "macOS matrix runner", "agent": "W1-A4", "status": "PENDING"}
+    ],
+    "not_touched_unreachable": [
+      {"id": "U-WIN", "item": "Windows install path", "blocker": "no Windows host; can wire windows-latest matrix but parity tests need bash"},
+      {"id": "U-WSL", "item": "WSL2 verification", "blocker": "same as Windows"},
+      {"id": "U-FREEBSD", "item": "FreeBSD/OpenBSD POSIX", "blocker": "no host"},
+      {"id": "U-VSCODE", "item": "VSCode extension Bun route", "blocker": "deprecated as of v7.2.0; intentional"},
+      {"id": "U-PYTHON-MIG", "item": "memory/mcp/dashboard Python migration", "blocker": "out of scope per ADR-001"},
+      {"id": "U-PHASE6", "item": "Phase 6 v8.0.0 sunset bash", "blocker": "calendar-bound, requires 30-day clean soak"}
+    ],
+    "not_tested_addressable": [
+      {"id": "T-ATOMIC-FLOCK", "item": "Multi-process race on .loki/ atomic writes", "agent": "W1-A3", "status": "PENDING"},
+      {"id": "T-DISK-FULL", "item": "Disk full during atomic write", "agent": "W1-A7", "status": "PENDING"},
+      {"id": "T-SYMLINK", "item": "Symlink chains 3+ deep PATH resolution", "agent": "W1-A7", "status": "PENDING"},
+      {"id": "T-CRLF", "item": "CRLF line endings (synthetic)", "agent": "W1-A7", "status": "PENDING"},
+      {"id": "T-DOCKER-SBX", "item": "Dockerfile.sandbox build + run", "agent": "W1-A7", "status": "PENDING"},
+      {"id": "T-LONG-LOOP", "item": "Long-running loop (100 iter; 1hr+ deferred)", "agent": "W1-A9", "status": "PENDING"},
+      {"id": "T-MCP-SHIM", "item": "MCP tool invocations through Bun shim", "agent": "W1-A8", "status": "PENDING"},
+      {"id": "T-DASH-PARSE", "item": "Dashboard FastAPI parsing of new state.ts writes", "agent": "W1-A8", "status": "PENDING"}
+    ],
+    "not_tested_unreachable": [
+      {"id": "U-REAL-CLAUDE", "item": "Real Claude CLI invocation", "blocker": "cost + auth + agent-loop danger; will add manual UAT script"},
+      {"id": "U-REAL-PRD", "item": "Real PRD execution end-to-end", "blocker": "same"},
+      {"id": "U-REAL-BREW", "item": "Brew install via real brew tap", "blocker": "network state + interferes with user's local brew"},
+      {"id": "U-1HR-LOOP", "item": "Long-running loop >1hr", "blocker": "session time budget; 100-iter substitute provided"},
+      {"id": "U-ARM64-NATIVE", "item": "Real ARM64 Linux runtime", "blocker": "buildx provided; runtime needs ARM64 host"}
+    ],
+    "forgot": [
+      {"id": "F-README", "item": "README Bun migration banner + install guide update", "agent": "W1-A5", "status": "PENDING"},
+      {"id": "F-CONTRIB", "item": "CONTRIBUTING.md Bun dev workflow", "agent": "W1-A5", "status": "PENDING"},
+      {"id": "F-UPGRADING", "item": "UPGRADING.md migration guide", "agent": "W1-A5", "status": "PENDING"},
+      {"id": "F-LOCK", "item": ".claude/scheduled_tasks.lock investigation", "agent": "W1-A6", "status": "PENDING"},
+      {"id": "F-DEBUG", "item": "LOKI_DEBUG env pattern (BUG-16)", "agent": "W1-A6", "status": "PENDING"},
+      {"id": "F-WIKI-SYNC", "item": "wiki-sync.yml git add -A removal", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "F-LOKI-MODE-JS", "item": "bin/loki-mode.js banner", "agent": "W1-A6", "status": "PENDING"},
+      {"id": "F-SKILL", "item": "SKILL.md architecture (bash to Bun) section", "agent": "W1-A5", "status": "PENDING"},
+      {"id": "F-WIKI-API", "item": "wiki/API-Reference.md re-audit", "agent": "W1-A5", "status": "PENDING"},
+      {"id": "F-CONSOLE", "item": "Test files console.log cleanup", "agent": "W1-A6", "status": "PENDING"},
+      {"id": "F-SOAK-AUTO", "item": "Soak monitoring automation", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "F-SLO", "item": "SLO definition", "agent": "W1-A5", "status": "PENDING"}
+    ],
+    "gaps_addressable": [
+      {"id": "G-CI-MATRIX", "item": "CI matrix (Linux + macOS)", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-NPM-CI", "item": "CI runs against npm tarball + Docker image", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-PARITY-DRIFT", "item": "Automated alerting on bash/bun output divergence", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-COVERAGE", "item": "Code coverage report", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-SBOM", "item": "SBOM generation for npm tarball", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-DEP-VULN", "item": "Dependency vulnerability scan in CI", "agent": "W1-A4", "status": "PENDING"},
+      {"id": "G-LICENSE", "item": "License audit for new TS deps", "agent": "W1-A10", "status": "PENDING"},
+      {"id": "G-MULTI-PROC", "item": "Multi-process safety on .loki/ (flock)", "agent": "W1-A3", "status": "PENDING"},
+      {"id": "G-CHECK-PHASE6", "item": "check-phase6-ready.ts wired in CI", "agent": "W1-A4", "status": "PENDING"}
+    ],
+    "gaps_unreachable_or_deferred": [
+      {"id": "U-NODE-VER", "item": "CI Node version matrix (currently 20 only)", "blocker": "low priority; will add node 22 in same matrix work"},
+      {"id": "U-BUN-VER", "item": "CI Bun version matrix (currently 1.3.13 only)", "blocker": "low priority; pinned for reproducibility"},
+      {"id": "U-PROD-TELE", "item": "Production telemetry (which route users take)", "blocker": "needs metrics infra; deferred"},
+      {"id": "U-MUTATION", "item": "Mutation testing (stryker)", "blocker": "tooling install; deferred to v7.5.0"},
+      {"id": "U-FUZZ", "item": "Fuzz testing of shim", "blocker": "infra; deferred"},
+      {"id": "U-EXT-SEC", "item": "External security audit", "blocker": "third-party engagement"},
+      {"id": "U-PROVENANCE", "item": "Supply-chain provenance attestation", "blocker": "needs sigstore setup; deferred"}
+    ]
+  },
+  "verification_gates": {
+    "before_commit": [
+      "bun run typecheck (0 errors)",
+      "bun test (>= 514 pass, 0 fail, <= 4 skip after KNOWN_FAILING_FIXTURES drained)",
+      "bash tests/test-cli-commands.sh (14/14 both routes)",
+      "All 60 build_prompt fixtures sha256 match",
+      "No emojis in any new file",
+      "14 version locations bumped to v7.4.6",
+      "Cleanup: kill processes, rm /tmp/loki-* /tmp/test-*",
+      "HEREDOC commit message",
+      "Files staged individually (no git add -A)"
+    ]
+  },
+  "out_of_scope_acknowledged": [
+    "Real Claude/Codex/Gemini API calls (cost + safety)",
+    "Windows runtime testing (no host)",
+    "Real ARM64 runtime (buildx only; runtime needs ARM64 hardware)",
+    "Real PRD end-to-end execution (cost)",
+    "1hr+ stress tests (session time)",
+    "Phase 6 bash sunset (calendar-bound)"
+  ]
+}

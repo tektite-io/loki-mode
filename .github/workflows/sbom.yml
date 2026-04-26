@@ -1,0 +1,81 @@
+name: SBOM (CycloneDX)
+
+# Generates a CycloneDX Software Bill of Materials for the published npm
+# package on every push to main / feat/bun-migration and on every release.
+# The SBOM is uploaded as a workflow artifact and (on release) attached to
+# the GitHub Release assets.
+
+on:
+  push:
+    branches:
+      - main
+      - feat/bun-migration
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-sbom:
+    name: Generate CycloneDX SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install production dependencies
+        run: npm install --omit=dev --no-package-lock
+
+      - name: Install CycloneDX npm generator
+        run: npm install --no-save @cyclonedx/cyclonedx-npm
+
+      - name: Read VERSION
+        id: version
+        run: echo "version=$(cat VERSION | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM (JSON)
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm \
+            --output-format JSON \
+            --output-file sbom.cdx.json \
+            --spec-version 1.5
+          test -s sbom.cdx.json || { echo "FATAL: SBOM JSON not generated"; exit 1; }
+          echo "SBOM JSON size: $(wc -c < sbom.cdx.json) bytes"
+
+      - name: Generate SBOM (XML)
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm \
+            --output-format XML \
+            --output-file sbom.cdx.xml \
+            --spec-version 1.5
+          test -s sbom.cdx.xml || { echo "FATAL: SBOM XML not generated"; exit 1; }
+          echo "SBOM XML size: $(wc -c < sbom.cdx.xml) bytes"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-loki-mode-${{ steps.version.outputs.version }}
+          path: |
+            sbom.cdx.json
+            sbom.cdx.xml
+          retention-days: 90
+
+      - name: Attach SBOM to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          gh release upload "$TAG" sbom.cdx.json sbom.cdx.xml --clobber

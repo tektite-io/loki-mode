@@ -136,8 +136,12 @@ jobs:
           fi
 
   bun-tests:
-    name: Bun tests (loki-ts + dual-route CLI)
-    runs-on: ubuntu-latest
+    name: Bun tests (loki-ts + dual-route CLI) on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -185,8 +189,13 @@ jobs:
       - name: Run CLI tests via Bun shim route
         run: PATH="$PWD/bin:$PATH" bash tests/test-cli-commands.sh
 
-      - name: Install hyperfine (for bench-suite)
+      - name: Install hyperfine (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y hyperfine
+
+      - name: Install hyperfine (macOS)
+        if: runner.os == 'macOS'
+        run: brew install hyperfine
 
       - name: Sanity bench-suite (hyperfine, 5 runs, 1 warmup)
         working-directory: loki-ts
