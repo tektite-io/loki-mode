@@ -92,13 +92,29 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$TARBALL"
 
-      - name: Attach signature artifacts to release
+      - name: Upload signature artifacts (also published to sigstore transparency log)
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-${{ steps.tag.outputs.tag }}
+          path: |
+            loki-mode-*.tgz
+            loki-mode-*.tgz.sig
+            loki-mode-*.tgz.pem
+          retention-days: 365
+
+      - name: Attach signature artifacts to release (best-effort)
+        # GitHub Releases are immutable by default. If the release is still
+        # mutable (rare), this attaches the signatures alongside the tarball.
+        # If not, the signature is still publicly verifiable via the
+        # sigstore Rekor transparency log -- no action needed by users.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           TARBALL=$(ls loki-mode-*.tgz | head -1)
-          gh release upload "$TAG" "${TARBALL}.sig" "${TARBALL}.pem" --clobber
+          gh release upload "$TAG" "${TARBALL}.sig" "${TARBALL}.pem" --clobber \
+            || echo "Release is immutable; signature available in sigstore Rekor and as workflow artifact."
 
   sign-docker-image:
     name: cosign keyless-sign Docker image digests
