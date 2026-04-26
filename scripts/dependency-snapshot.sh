@@ -42,6 +42,22 @@ if [[ -z "$NPM_JSON" ]]; then
   NPM_JSON='{}'
 fi
 
+# v7.4.10: capture SHA-512 integrity hashes for every transitive package.
+# Pre-v7.4.10 the snapshot was version+URL only -- vulnerable to
+# dependency-confusion since a swapped tarball wouldn't be detected.
+# We materialize a package-lock.json (npm install --package-lock-only writes
+# integrity + resolved fields) and embed it alongside the npm tree.
+LOCKFILE_JSON="null"
+TMPLOCK_DIR="$(mktemp -d -t loki-lock-XXXXXX)"
+trap 'rm -rf "$TMPLOCK_DIR"' EXIT
+cp package.json "$TMPLOCK_DIR/" 2>/dev/null || true
+if (cd "$TMPLOCK_DIR" && npm install --package-lock-only --no-audit --no-fund \
+  --silent >/dev/null 2>&1); then
+  if [[ -f "$TMPLOCK_DIR/package-lock.json" ]]; then
+    LOCKFILE_JSON="$(cat "$TMPLOCK_DIR/package-lock.json")"
+  fi
+fi
+
 # Optional: bun pm ls --json. bun emits the listing in human-readable text
 # unless --json is supported; capture whatever it gives back, fall back to
 # null if bun is unavailable or the command fails.
@@ -59,13 +75,15 @@ if command -v bun >/dev/null 2>&1; then
 fi
 
 # Compose the final snapshot file with python3 to guarantee well-formed JSON.
-NPM_JSON="$NPM_JSON" BUN_JSON="$BUN_JSON" DATE_STAMP="$DATE_STAMP" \
+NPM_JSON="$NPM_JSON" BUN_JSON="$BUN_JSON" LOCKFILE_JSON="$LOCKFILE_JSON" \
+  DATE_STAMP="$DATE_STAMP" \
   python3 - "$OUT_FILE" <<'PY'
 import json, os, sys
 
 out_path = sys.argv[1]
 npm_raw = os.environ.get("NPM_JSON", "{}")
 bun_raw = os.environ.get("BUN_JSON", "null")
+lock_raw = os.environ.get("LOCKFILE_JSON", "null")
 date_stamp = os.environ.get("DATE_STAMP", "")
 
 try:
@@ -78,14 +96,32 @@ try:
 except Exception as e:
     bun_obj = {"_parse_error": str(e), "_raw": bun_raw}
 
+try:
+    lock_obj = json.loads(lock_raw)
+except Exception as e:
+    lock_obj = {"_parse_error": str(e), "_raw": lock_raw}
+
+# Count integrity hashes captured (sanity signal -- if zero, snapshot is
+# vulnerable to dependency-confusion).
+integrity_count = 0
+if isinstance(lock_obj, dict):
+    pkgs = lock_obj.get("packages", {})
+    if isinstance(pkgs, dict):
+        for meta in pkgs.values():
+            if isinstance(meta, dict) and meta.get("integrity"):
+                integrity_count += 1
+
 snapshot = {
     "snapshot_date": date_stamp,
     "npm": npm_obj,
     "bun": bun_obj,
+    "lockfile": lock_obj,
+    "integrity_hash_count": integrity_count,
 }
 
 with open(out_path, "w") as f:
     json.dump(snapshot, f, indent=2, sort_keys=True)
+print(f"  integrity_hash_count = {integrity_count}", file=sys.stderr)
 PY
 
 echo "Wrote dependency snapshot: $OUT_FILE"

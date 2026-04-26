@@ -42,17 +42,38 @@ jobs:
         working-directory: loki-ts
         run: |
           mkdir -p coverage
-          # Bun writes a text summary to stdout. Capture both stdout and
-          # the lcov-style report it can emit via --coverage-reporter=lcov
-          # (graceful fallback if the reporter flag is unavailable).
           set +e
           bun test --coverage --coverage-reporter=lcov --coverage-dir=./coverage 2>&1 | tee coverage/coverage.txt
           ec=${PIPESTATUS[0]}
           set -e
-          # Baseline-only: do not gate on threshold. Tests must still pass.
           if [ "$ec" -ne 0 ]; then
             echo "::error::bun test failed (exit $ec)"
             exit "$ec"
+          fi
+
+      # v7.4.10: enforce a minimum line coverage threshold. Pre-v7.4.10 this
+      # workflow was baseline-only (no gate). 70% chosen from observed
+      # baseline at v7.4.9; bumps later as suite matures.
+      - name: Enforce minimum line coverage
+        working-directory: loki-ts
+        env:
+          MIN_LINE_PCT: '70'
+        run: |
+          # Bun's text summary line: "All files | 87.50 |  80.00 | ..."
+          # Extract the "All files" row's first numeric column (lines).
+          PCT=$(grep -E "^All files" coverage/coverage.txt 2>/dev/null \
+            | head -1 \
+            | awk -F'[|]' '{ gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }')
+          if [ -z "$PCT" ]; then
+            echo "::warning::could not parse line coverage from bun test output; skipping threshold gate"
+            exit 0
+          fi
+          # Compare as integers (floor). awk handles float arithmetic.
+          BELOW=$(awk -v p="$PCT" -v m="$MIN_LINE_PCT" 'BEGIN{ print (p+0 < m+0) ? "1" : "0" }')
+          echo "Line coverage: ${PCT}% (minimum required: ${MIN_LINE_PCT}%)"
+          if [ "$BELOW" = "1" ]; then
+            echo "::error::line coverage ${PCT}% < threshold ${MIN_LINE_PCT}%"
+            exit 1
           fi
 
       - name: Upload coverage artifact

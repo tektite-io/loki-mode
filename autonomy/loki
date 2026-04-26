@@ -38,6 +38,16 @@ if [ -n "${NO_COLOR:-}" ]; then
     RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; NC=''
 fi
 
+# v7.4.10: opt-in debug tracer. When LOKI_DEBUG is set (any non-empty value)
+# every loki_debug call emits "[loki-debug] <ISO-timestamp> <msg>" to stderr.
+# When unset it is a true no-op (no syscalls, zero observable output).
+loki_debug() {
+    if [ -z "${LOKI_DEBUG:-}" ]; then return 0; fi
+    local ts
+    ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "?")
+    printf '[loki-debug] %s %s\n' "$ts" "$*" >&2
+}
+
 # Logging functions (portable across bash/zsh)
 log_info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }

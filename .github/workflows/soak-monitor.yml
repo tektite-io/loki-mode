@@ -1,27 +1,22 @@
-name: v7.3.0 Soak Monitor
+name: Post-Release Soak Monitor
 
-# Daily heartbeat during the v7.3.0 soak window. Aggregates:
-#   1. Open GitHub issues tagged `v7.3.0`
+# v7.4.10: Repurposed from PR #158 watcher (PR is now closed).
+# Daily snapshot of post-release health for the latest published version:
+#   1. Open GitHub issues tagged `bun-route` or matching the latest version
 #   2. Most recent npm download count for `loki-mode`
-#   3. Latest GitHub release reactions (last 5 releases)
-# Posts a comment on PR #158 with the daily snapshot.
-#
-# Triggers: manual + 09:00 UTC daily.
+#   3. Docker Hub pulls in the last 24h
+#   4. Latest GitHub release reactions
+# Writes a job summary to the workflow run; uploads JSON artifact for trend
+# analysis. Does NOT post to any PR (PR #158 was a one-shot soak target).
 
 on:
   schedule:
     - cron: '0 9 * * *'
   workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'PR number to comment on (default: 158)'
-        required: false
-        default: '158'
 
 permissions:
   contents: read
   issues: read
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}
@@ -36,131 +31,104 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve PR number
-        id: pr
+      - name: Resolve latest version
+        id: ver
         run: |
-          PR="${{ github.event.inputs.pr_number }}"
-          if [ -z "$PR" ]; then PR="158"; fi
-          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          VERSION=$(cat VERSION | tr -d '\n')
+          echo "current=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Gather GitHub signals
         id: gh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set +e
-          # 1. Issues tagged v7.3.0 (open)
-          ISSUES_JSON=$(gh issue list --label v7.3.0 --state open --json number,title,createdAt --limit 50 2>/dev/null || echo "[]")
-          ISSUES_COUNT=$(echo "$ISSUES_JSON" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-
-          # 2. Latest 5 release reactions
-          RELEASES_JSON=$(gh api 'repos/${{ github.repository }}/releases?per_page=5' 2>/dev/null || echo "[]")
-
-          # Persist for assembly step
+          set -uo pipefail
           mkdir -p /tmp/soak
-          echo "$ISSUES_JSON"   > /tmp/soak/issues.json
-          echo "$RELEASES_JSON" > /tmp/soak/releases.json
-          echo "issues_count=$ISSUES_COUNT" >> "$GITHUB_OUTPUT"
-          set -e
+
+          # Open issues tagged `bun-route` (post-migration regression label)
+          OPEN_ISSUES=$(gh issue list --repo "${{ github.repository }}" \
+            --label bun-route --state open --json number,title,createdAt 2>/dev/null \
+            || echo "[]")
+          echo "$OPEN_ISSUES" > /tmp/soak/open-issues.json
+          ISSUE_COUNT=$(echo "$OPEN_ISSUES" | python3 -c "import sys, json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+          echo "open_issues=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
+
+          # Last 5 release reaction totals
+          RELEASES=$(gh release list --repo "${{ github.repository }}" --limit 5 --json tagName,createdAt 2>/dev/null || echo "[]")
+          echo "$RELEASES" > /tmp/soak/recent-releases.json
+          REL_COUNT=$(echo "$RELEASES" | python3 -c "import sys, json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+          echo "recent_releases=$REL_COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Gather npm signals
         id: npm
         run: |
-          set +e
-          # npm download count for the last day. Public, no auth.
-          DAY_JSON=$(curl -fsSL "https://api.npmjs.org/downloads/point/last-day/loki-mode" 2>/dev/null || echo "{}")
-          WEEK_JSON=$(curl -fsSL "https://api.npmjs.org/downloads/point/last-week/loki-mode" 2>/dev/null || echo "{}")
-          echo "$DAY_JSON"  > /tmp/soak/npm-day.json
-          echo "$WEEK_JSON" > /tmp/soak/npm-week.json
-          set -e
+          set -uo pipefail
+          # npm last-day downloads
+          DAY=$(curl -fsS "https://api.npmjs.org/downloads/point/last-day/loki-mode" 2>/dev/null \
+            | python3 -c "import sys, json; print(json.load(sys.stdin).get('downloads', '?'))" 2>/dev/null || echo "?")
+          WEEK=$(curl -fsS "https://api.npmjs.org/downloads/point/last-week/loki-mode" 2>/dev/null \
+            | python3 -c "import sys, json; print(json.load(sys.stdin).get('downloads', '?'))" 2>/dev/null || echo "?")
+          echo "last_day=$DAY" >> "$GITHUB_OUTPUT"
+          echo "last_week=$WEEK" >> "$GITHUB_OUTPUT"
 
-      - name: Build heartbeat comment
-        id: build
+          # Confirm latest version on npm
+          LATEST=$(curl -fsS "https://registry.npmjs.org/loki-mode/latest" 2>/dev/null \
+            | python3 -c "import sys, json; print(json.load(sys.stdin).get('version', '?'))" 2>/dev/null || echo "?")
+          echo "npm_latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Gather Docker Hub signals
+        id: docker
         run: |
-          python3 - <<'PY' > /tmp/soak/comment.md
-          import json, datetime, os, pathlib
+          set -uo pipefail
+          REPO=$(curl -fsS "https://hub.docker.com/v2/repositories/asklokesh/loki-mode/" 2>/dev/null || echo "{}")
+          PULLS=$(echo "$REPO" | python3 -c "import sys, json; print(json.load(sys.stdin).get('pull_count', '?'))" 2>/dev/null || echo "?")
+          STARS=$(echo "$REPO" | python3 -c "import sys, json; print(json.load(sys.stdin).get('star_count', '?'))" 2>/dev/null || echo "?")
+          echo "pulls_total=$PULLS" >> "$GITHUB_OUTPUT"
+          echo "stars=$STARS" >> "$GITHUB_OUTPUT"
 
-          def jload(p, default):
-              try:
-                  with open(p) as f: return json.load(f)
-              except Exception:
-                  return default
-
-          issues   = jload("/tmp/soak/issues.json", [])
-          releases = jload("/tmp/soak/releases.json", [])
-          npm_day  = jload("/tmp/soak/npm-day.json", {})
-          npm_week = jload("/tmp/soak/npm-week.json", {})
-
-          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
-
-          lines = []
-          lines.append(f"## v7.3.0 soak heartbeat -- {today}")
-          lines.append("")
-          lines.append(f"**Open issues tagged `v7.3.0`:** {len(issues)}")
-          if issues:
-              for it in issues[:10]:
-                  lines.append(f"- #{it['number']} {it['title']} (opened {it.get('createdAt','?')})")
-              if len(issues) > 10:
-                  lines.append(f"- ... and {len(issues) - 10} more")
-          else:
-              lines.append("- (none)")
-          lines.append("")
-          lines.append("**npm downloads (loki-mode):**")
-          lines.append(f"- Last day:  {npm_day.get('downloads', 'n/a')}")
-          lines.append(f"- Last week: {npm_week.get('downloads', 'n/a')}")
-          lines.append("")
-          lines.append("**Latest releases (reactions):**")
-          if releases:
-              for r in releases[:5]:
-                  reactions = r.get("reactions", {}) or {}
-                  total = reactions.get("total_count", 0)
-                  tag = r.get("tag_name", "?")
-                  lines.append(f"- `{tag}` -- reactions: {total}")
-          else:
-              lines.append("- (no release data)")
-          lines.append("")
-          lines.append(f"_Generated by `.github/workflows/soak-monitor.yml` run #{os.environ.get('GITHUB_RUN_ID','?')}._")
-
-          print("\n".join(lines))
-          PY
-          echo "comment_path=/tmp/soak/comment.md" >> "$GITHUB_OUTPUT"
-
-      - name: Comment on soak PR (idempotent)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build snapshot JSON
         run: |
-          PR="${{ steps.pr.outputs.number }}"
-          if ! gh pr view "$PR" --json number >/dev/null 2>&1; then
-            echo "PR #$PR not found or inaccessible -- emitting heartbeat to job summary instead"
-            cat /tmp/soak/comment.md >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
+          cat > /tmp/soak/snapshot.json <<JSON
+          {
+            "captured_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "repo_version": "${{ steps.ver.outputs.current }}",
+            "npm_latest": "${{ steps.npm.outputs.npm_latest }}",
+            "npm_last_day_downloads": "${{ steps.npm.outputs.last_day }}",
+            "npm_last_week_downloads": "${{ steps.npm.outputs.last_week }}",
+            "docker_pulls_total": "${{ steps.docker.outputs.pulls_total }}",
+            "docker_stars": "${{ steps.docker.outputs.stars }}",
+            "open_bun_route_issues": "${{ steps.gh.outputs.open_issues }}",
+            "recent_releases_count": "${{ steps.gh.outputs.recent_releases }}"
+          }
+          JSON
+          cat /tmp/soak/snapshot.json
 
-          # Idempotency: prepend a sentinel marker, find any existing
-          # heartbeat comment, edit it in place if present, otherwise create.
-          # Avoids spamming PR #158 with one comment per day during soak.
-          MARKER="<!-- loki-soak-heartbeat -->"
-          BODY="$MARKER
-          $(cat /tmp/soak/comment.md)"
-          printf '%s\n' "$BODY" > /tmp/soak/comment-with-marker.md
+      - name: Write job summary
+        run: |
+          {
+            echo "## Post-Release Soak Snapshot"
+            echo ""
+            echo "Captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "| Signal | Value |"
+            echo "|---|---|"
+            echo "| Repo VERSION | ${{ steps.ver.outputs.current }} |"
+            echo "| npm latest | ${{ steps.npm.outputs.npm_latest }} |"
+            echo "| npm downloads (last day) | ${{ steps.npm.outputs.last_day }} |"
+            echo "| npm downloads (last week) | ${{ steps.npm.outputs.last_week }} |"
+            echo "| Docker pulls (total) | ${{ steps.docker.outputs.pulls_total }} |"
+            echo "| Docker stars | ${{ steps.docker.outputs.stars }} |"
+            echo "| Open \`bun-route\` issues | ${{ steps.gh.outputs.open_issues }} |"
+            echo "| Recent releases | ${{ steps.gh.outputs.recent_releases }} |"
+            echo ""
+            echo "Snapshot JSON attached as artifact \`soak-snapshot\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1 || true)
-
-          if [ -n "$EXISTING_ID" ]; then
-            echo "Editing existing heartbeat comment $EXISTING_ID"
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" \
-              -f body="$(cat /tmp/soak/comment-with-marker.md)"
-          else
-            echo "Creating first heartbeat comment"
-            gh pr comment "$PR" --body-file /tmp/soak/comment-with-marker.md
-          fi
-          cat /tmp/soak/comment.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload heartbeat artifact
+      - name: Upload snapshot artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: soak-heartbeat-${{ github.run_id }}
+          name: soak-snapshot-${{ github.run_id }}
           path: /tmp/soak/
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90

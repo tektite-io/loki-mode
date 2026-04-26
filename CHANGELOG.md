@@ -5,6 +5,104 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.4.10] - 2026-04-26
+
+PATCH release. Closes every closeable gap from the v7.4.9 honest audit.
+The remaining gaps are documented as "infra-bound" (need Windows host,
+ARM64 hardware, paid services, etc.) or "calendar-bound" (Phase 6 sunset).
+
+### Workflow improvements
+
+- **soak-monitor.yml repurposed.** Was tied to the now-merged PR #158;
+  now writes a daily snapshot (npm downloads, Docker pulls, open
+  `bun-route` issues, recent release reactions) to the workflow run
+  summary plus a 90d artifact. No more dead-PR comments.
+- **sbom.yml fixed (W2-R6).** SBOM is now generated against the
+  unpacked `npm pack` tarball, not the source tree. Closes the
+  "SBOM doesn't describe what users receive" gap. Spec 1.5 retained;
+  attached to GitHub Releases.
+- **license-audit.sh now scans transitives (W2-R6).** Adds
+  `npx license-checker` over the resolved production tree. Verdict
+  is "PASS (direct + transitive)" when both layers are permissive,
+  "PASS (direct only)" when license-checker is unavailable.
+  Pre-v7.4.10 only the 4 direct deps were audited; ~350 transitive
+  were blind.
+- **dependency-snapshot.sh now records SHA-512 integrity (W2-R6).**
+  Materializes a temporary `package-lock.json` via `npm install
+  --package-lock-only` and embeds it alongside the npm tree. Snapshot
+  JSON now includes `integrity_hash_count` so CI can fail if it ever
+  drops to zero. Closes the dependency-confusion vulnerability
+  window the v7.4.6 audit flagged.
+- **coverage.yml gates on 70% line coverage.** Was baseline-only;
+  now fails the workflow if line coverage drops below 70%. Threshold
+  picked from the observed v7.4.9 baseline; bumps later as the suite
+  matures.
+- **CI Bun version matrix added.** `bun-tests` job now runs
+  `bun-version: ["1.3.13", "latest"]` so upstream Bun breakage is
+  caught in CI before users hit it via `brew upgrade bun`.
+
+### New workflows
+
+- **provenance.yml (sigstore cosign).** Keyless signing of every
+  npm tarball + Docker image digest on release publish. Uses GitHub
+  Actions OIDC, no long-lived keys. Verification command in the
+  workflow header. Attaches `.sig` + `.pem` to the GitHub Release.
+- **arm64-runtime.yml.** Pulls the multi-arch image with
+  `--platform linux/arm64` (qemu emulation) on every release publish
+  and runs `loki version`, `status --json`, `doctor --json`, and the
+  `LOKI_LEGACY_BASH=1` fallthrough. Closes the C3/W2-R6 gap where
+  buildx shipped the ARM64 image but no test ever ran the binary.
+- **mutation-testing.yml (stryker).** Weekly + manual; mutates the
+  6 highest-blast-radius runner modules (state, build_prompt,
+  providers, budget, checkpoint, shell). Threshold 50% break / 60%
+  low / 80% high. Loaded only on schedule because it takes ~10-25
+  min per run.
+
+### Code
+
+- **state.ts orphan-tmp sweep walks all .loki/ subdirs (W2-R3 MEDIUM).**
+  Was depth-1 in `.loki/` + `.loki/state/`; now walks recursively up
+  to depth 4. Callers writing to `queue/`, `checklist/`, `quality/`,
+  `logs/`, `memory/`, `checkpoints/` no longer leak orphan tmp files.
+- **autonomy/loki adds LOKI_DEBUG tracer.** Opt-in (any non-empty
+  value enables); emits `[loki-debug] <ISO> <msg>` to stderr only.
+  True no-op when unset. Closes the BUG-16 deferral that W1-A6
+  fabricated in the v7.4.6 cycle.
+- **bun-parity.yml re-enables doctor text mode.** v7.4.9 added the
+  Bun probe to bash `cmd_doctor`, restoring parity. The skip
+  introduced in v7.4.6 is removed.
+
+### Docs
+
+- **CONTRIBUTING.md proper rewrite.** v7.4.6's W1-A5 reported
+  rewriting this file but `git diff` returned empty -- the original
+  was unchanged. v7.4.10 actually rewrites it: Bun + Python 3.12
+  setup, Bun-route + bash-route test instructions, `bun:test` +
+  parity workflow, "Adding a new ported command" template, "Adding
+  a build_prompt parity fixture" recipe.
+
+### Verification
+
+- `bun run typecheck`: clean
+- `bun test`: **549 pass / 0 fail / 0 skip** (1482 expects, 46s)
+- `bash tests/test-cli-commands.sh`: 14/14 (Bun route)
+- `LOKI_LEGACY_BASH=1 bash tests/test-cli-commands.sh`: 14/14
+- All YAML in `.github/workflows/` parses
+
+### Remaining gaps (truly infra-bound; documented, not closeable here)
+
+- **Windows / WSL / FreeBSD runtime testing.** No host. Bash code
+  uses `sed -i ''` (BSD) and `sed -i` (GNU) inconsistencies plus
+  Linux-specific `find -mmin` syntax that would need a refactor
+  before Windows could pass. Documented in `docs/UNREACHABLE-TESTS.md`.
+- **Real Claude/Codex/Gemini CLI invocation in CI.** Cost + auth +
+  agent-loop danger. Stub-binary tests cover argv shape and env
+  emission; real integration is manual UAT only.
+- **Real PRD end-to-end execution in CI.** Cost + nondeterminism.
+- **External security audit.** Third-party engagement; not engaged.
+- **Phase 6 / v8.0.0 bash sunset.** Calendar-bound, requires
+  30-day clean soak post-v7.4.10 ship.
+
 ## [7.4.9] - 2026-04-26
 
 PATCH release. Closes the gaps surfaced by the v7.4.8 post-merge review:

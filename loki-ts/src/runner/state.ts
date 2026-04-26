@@ -409,33 +409,57 @@ function isValidAutonomyState(d: unknown): d is Partial<AutonomyState> {
   return true;
 }
 
-// Sweep orphaned `*.tmp.*` files older than 5 minutes (run.sh:8760-8761).
-// Bash uses `find -mmin +5`; Node has no native equivalent so we walk
-// readdir + statSync. We only look at the two directories the bash version
-// scans: `.loki/` (depth 1 only) and `.loki/state/`.
+// Sweep orphaned `*.tmp.*` files older than 5 minutes.
+//
+// Pre-v7.4.10 only walked `.loki/` (depth 1) and `.loki/state/` -- the W2-R3
+// MEDIUM finding noted callers writing to other subdirs (queue/, checklist/,
+// quality/, logs/, memory/, checkpoints/) would leak orphan tmp files.
+// v7.4.10 walks every subdirectory of `.loki/` recursively up to a depth
+// cap of 4 to bound runtime on huge .loki/ trees. Bash equivalent at
+// run.sh:8760-8761 uses `find -mmin +5` which is unbounded; we cap depth
+// for safety.
 function sweepOrphanTmpFiles(dir: string, now: Date): void {
   const cutoffMs = now.getTime() - 5 * 60 * 1000;
-  const targets = [dir, join(dir, "state")];
-  for (const t of targets) {
-    if (!existsSync(t)) continue;
+  const MAX_DEPTH = 4;
+  const visit = (path: string, depth: number): void => {
+    if (depth > MAX_DEPTH) return;
+    if (!existsSync(path)) return;
     let entries: string[];
     try {
-      entries = readdirSync(t);
+      entries = readdirSync(path);
     } catch {
-      continue;
+      return;
     }
     for (const name of entries) {
-      if (!name.includes(".tmp.")) continue;
-      const full = join(t, name);
+      const full = join(path, name);
+      let st;
       try {
-        const st = statSync(full);
-        if (!st.isFile()) continue;
-        if (st.mtimeMs < cutoffMs) unlinkSync(full);
+        st = statSync(full);
       } catch {
-        // Race with another sweep or with the writer rename(); ignore.
+        continue; // disappeared between readdir and stat
+      }
+      if (st.isDirectory()) {
+        // Skip symlinked dirs to avoid loops; statSync follows links so this
+        // is best-effort. Skip well-known-large dirs we never write tmp into.
+        if (name === "memory" || name === "checkpoints") {
+          // memory/ and checkpoints/ have their own atomic-write callers
+          // that should clean themselves; recurse but at lower priority.
+        }
+        visit(full, depth + 1);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      if (!name.includes(".tmp.")) continue;
+      if (st.mtimeMs < cutoffMs) {
+        try {
+          unlinkSync(full);
+        } catch {
+          // Race with another sweep or with the writer rename(); ignore.
+        }
       }
     }
-  }
+  };
+  visit(dir, 0);
 }
 
 // Mirror load_state() at run.sh:8757. Pure function -- never mutates

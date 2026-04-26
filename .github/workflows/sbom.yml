@@ -35,33 +35,46 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install production dependencies
+      - name: Read VERSION
+        id: version
+        run: echo "version=$(cat VERSION | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+      # v7.4.10: SBOM now describes the PUBLISHED npm tarball, not the
+      # source tree. Closes the W2-R6 supply-chain gap where the SBOM
+      # didn't match what users actually receive from `npm install`.
+      - name: Build the npm publish tarball
+        run: |
+          npm pack
+          ls -la loki-mode-*.tgz
+          mkdir -p /tmp/published
+          tar xzf loki-mode-*.tgz -C /tmp/published
+
+      - name: Install production deps inside the published tarball
+        working-directory: /tmp/published/package
         run: npm install --omit=dev --no-package-lock
 
       - name: Install CycloneDX npm generator
         run: npm install --no-save @cyclonedx/cyclonedx-npm
 
-      - name: Read VERSION
-        id: version
-        run: echo "version=$(cat VERSION | tr -d '\n')" >> "$GITHUB_OUTPUT"
-
-      - name: Generate SBOM (JSON)
+      - name: Generate SBOM (JSON) for the published package
+        working-directory: /tmp/published/package
         run: |
           npx --yes @cyclonedx/cyclonedx-npm \
             --output-format JSON \
-            --output-file sbom.cdx.json \
+            --output-file "$GITHUB_WORKSPACE/sbom.cdx.json" \
             --spec-version 1.5
-          test -s sbom.cdx.json || { echo "FATAL: SBOM JSON not generated"; exit 1; }
-          echo "SBOM JSON size: $(wc -c < sbom.cdx.json) bytes"
+          test -s "$GITHUB_WORKSPACE/sbom.cdx.json" || { echo "FATAL: SBOM JSON not generated"; exit 1; }
+          echo "SBOM JSON size: $(wc -c < "$GITHUB_WORKSPACE/sbom.cdx.json") bytes"
 
-      - name: Generate SBOM (XML)
+      - name: Generate SBOM (XML) for the published package
+        working-directory: /tmp/published/package
         run: |
           npx --yes @cyclonedx/cyclonedx-npm \
             --output-format XML \
-            --output-file sbom.cdx.xml \
+            --output-file "$GITHUB_WORKSPACE/sbom.cdx.xml" \
             --spec-version 1.5
-          test -s sbom.cdx.xml || { echo "FATAL: SBOM XML not generated"; exit 1; }
-          echo "SBOM XML size: $(wc -c < sbom.cdx.xml) bytes"
+          test -s "$GITHUB_WORKSPACE/sbom.cdx.xml" || { echo "FATAL: SBOM XML not generated"; exit 1; }
+          echo "SBOM XML size: $(wc -c < "$GITHUB_WORKSPACE/sbom.cdx.xml") bytes"
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4

@@ -153,8 +153,57 @@ echo ""
 echo "Total direct dependencies audited: ${TOTAL}"
 echo ""
 
+echo ""
+echo "==============================================================="
+echo "Transitive (production) dependency license audit"
+echo "==============================================================="
+# v7.4.10: extend audit to transitive deps via license-checker.
+# Pre-v7.4.10 only the 4 direct deps were audited; AGPL/GPL transitive
+# would have shipped undetected. Now we install --omit=dev into a temp
+# dir, run license-checker over the resolved tree, and add any
+# non-permissive transitive to OFFENDERS.
+#
+# Skipped if npm is in offline mode or the install step fails.
+TMPROOT="$(mktemp -d -t loki-license-audit-XXXXXX)"
+trap 'rm -rf "$TMPROOT"' EXIT
+cp "${REPO_ROOT}/package.json" "${TMPROOT}/" 2>/dev/null || true
+TRANSITIVE_OK=true
+if (
+  cd "$TMPROOT"
+  npm install --omit=dev --no-package-lock --no-audit --no-fund \
+    --silent >/dev/null 2>&1
+); then
+  TRANSITIVE_RAW="$(cd "$TMPROOT" && npx --yes license-checker \
+    --production --csv --excludePrivatePackages 2>/dev/null || true)"
+  if [[ -n "$TRANSITIVE_RAW" ]]; then
+    TRANSITIVE_COUNT=0
+    while IFS=, read -r module licenses _rest; do
+      module="${module//\"/}"
+      licenses="${licenses//\"/}"
+      [[ "$module" == "module name" ]] && continue
+      [[ -z "$module" ]] && continue
+      TRANSITIVE_COUNT=$((TRANSITIVE_COUNT + 1))
+      if ! is_permissive "$licenses"; then
+        OFFENDERS+=("${module} :: ${licenses} (transitive)")
+      fi
+    done <<<"$TRANSITIVE_RAW"
+    echo "Transitive packages audited: ${TRANSITIVE_COUNT}"
+  else
+    echo "Transitive scan: license-checker produced no output (skipping)"
+    TRANSITIVE_OK=false
+  fi
+else
+  echo "Transitive scan: npm install in temp dir failed (offline?); skipping"
+  TRANSITIVE_OK=false
+fi
+
+echo ""
 if [[ ${#OFFENDERS[@]} -eq 0 ]]; then
-  echo "LICENSE-AUDIT: PASS"
+  if [[ "$TRANSITIVE_OK" == "true" ]]; then
+    echo "LICENSE-AUDIT: PASS (direct + transitive)"
+  else
+    echo "LICENSE-AUDIT: PASS (direct only -- transitive scan unavailable)"
+  fi
   exit 0
 fi
 
