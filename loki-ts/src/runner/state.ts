@@ -162,7 +162,12 @@ function statusTxtPath(dir: string): string {
 // the write and release it after the rename, mirroring the flock pattern in
 // autonomy/run.sh:11729-11748. Stale locks (process crashed mid-write) are
 // detected by mtime > LOCK_STALE_MS and stolen.
-const LOCK_TTL_MS = 30_000;          // mtime threshold for declaring a lock stale
+// v7.4.7: bumped from 30s -> 120s after W2-R3 HIGH finding. Sub-millisecond
+// writes (STATUS.txt / autonomy-state.json are <10KB) make 30s safe in the
+// common case, but a stalled disk, paused container (SIGSTOP, debugger), or
+// swap-thrashing host can exceed 30s. At 120s the only way to trip the
+// stealer-during-legit-write race is genuine writer death.
+const LOCK_TTL_MS = 120_000;         // mtime threshold for declaring a lock stale
 const LOCK_MAX_WAIT_MS = 5_000;      // total time we'll wait for a contended lock
 const LOCK_BACKOFF_INITIAL_MS = 5;   // first sleep on contention
 const LOCK_BACKOFF_MAX_MS = 100;     // cap exponential backoff
@@ -232,6 +237,15 @@ function releaseLock(lockPath: string, fd: number): void {
 }
 
 export function atomicWriteFileSync(targetPath: string, contents: string): void {
+  // v7.4.7 (W2-R3 LOW): reject targets that end in `.lock` -- they would
+  // collide with the lockfile naming convention used by another writer
+  // racing on the un-suffixed target. No real callers write `*.lock` today;
+  // this is a defensive guard.
+  if (targetPath.endsWith(".lock")) {
+    throw new Error(
+      `atomicWriteFileSync: target path "${targetPath}" ends in .lock which collides with the lockfile naming convention; rename the target`,
+    );
+  }
   // Per-process tmp suffix prevents a same-process double-write from clobbering
   // its own tmp; per-target lockfile prevents cross-process races.
   const tmpPath = `${targetPath}.tmp.${process.pid}`;

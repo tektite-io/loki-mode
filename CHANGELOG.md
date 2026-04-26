@@ -5,6 +5,62 @@ All notable changes to Loki Mode will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.4.7] - 2026-04-26
+
+PATCH release on `feat/bun-migration`. Hardens state.ts atomic writes
+ahead of the merge-to-main of PR #157. Addresses two of the three
+outstanding W2-R3 race-condition findings.
+
+### Fixed
+
+- **state.ts LOCK_TTL_MS bumped 30s -> 120s.** W2-R3 HIGH: under
+  pathological host conditions (paused container, swap-thrashing,
+  stalled disk) a legitimate writer holding the lock for >30s would
+  see its lockfile stolen by a peer running stale-detection, putting
+  two writers in the critical section. Sub-millisecond writes for
+  typical .loki/ payloads (<10KB) were always safe in the common
+  case; the bump pushes the only failure mode out to genuine writer
+  death (>120s wall-clock without progress).
+- **state.ts target.lock collision guard.** W2-R3 LOW: callers
+  attempting to atomicWriteFileSync a path ending in `.lock` would
+  collide with another writer's lockfile naming convention. No
+  current callers do this; the guard throws at function entry to
+  prevent future regressions. New defensive error message names the
+  conflict explicitly.
+
+### Tests
+
+- `state_concurrency.test.ts:121` updated to backdate the stale
+  lockfile by 200s (was 60s) so the new 120s TTL still detects it
+  as stale.
+
+### Verification
+
+- `bun run typecheck`: clean
+- `bun test`: **549 pass / 0 fail / 0 skip** (1475 expects, 42s)
+- `bash tests/test-cli-commands.sh`: 14/14 (Bun route)
+- `LOKI_LEGACY_BASH=1 bash tests/test-cli-commands.sh`: 14/14 (bash route)
+
+### Bash baseline tag
+
+Before merging PR #158 (v7.3.0) and PR #157 (v7.4.0..v7.4.7) to main,
+the `v7.2.0-bash-final` annotated tag was created on
+`origin/main@0e56e6c5` so users can revert via:
+- `npm install -g loki-mode@7.2.0`
+- `git checkout v7.2.0-bash-final`
+
+### Outstanding W2 review items deferred
+
+- W2-R3 MEDIUM: orphan-tmp sweep walks `.loki/` and `.loki/state/`
+  only -- callers writing elsewhere are responsible for their own
+  cleanup. Will be addressed if a real caller surfaces.
+- W2-R6: SBOM source-tree vs published-tarball gap, license-audit
+  transitive coverage, dependency-snapshot integrity hashes.
+  Workflows ship; first nightly run will surface real findings.
+- W2-R9: Dashboard E2E Playwright vs new state.ts -- contract test
+  in `dashboard_parse.test.ts` covers parser correctness; full UI
+  render gap remains.
+
 ## [7.4.6] - 2026-04-26
 
 PATCH release on `feat/bun-migration`. Closes the four biggest real risks

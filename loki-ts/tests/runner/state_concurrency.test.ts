@@ -118,15 +118,16 @@ describe("atomicWriteFileSync: multi-process flock safety", () => {
 });
 
 describe("atomicWriteFileSync: stale lockfile recovery", () => {
-  it("steals a lockfile whose mtime is > 30s in the past and writes successfully", () => {
+  it("steals a lockfile whose mtime is > 120s in the past and writes successfully", () => {
     const target = join(dir, "stale.json");
     const lockPath = `${target}.lock`;
 
     // Pre-create a lockfile as if a previous loki process crashed mid-write.
     writeFileSync(lockPath, "");
-    // Backdate by 60s -- comfortably above the 30s LOCK_TTL_MS in state.ts.
-    const sixtySecAgoSec = (Date.now() - 60 * 1000) / 1000;
-    utimesSync(lockPath, sixtySecAgoSec, sixtySecAgoSec);
+    // Backdate by 200s -- comfortably above the 120s LOCK_TTL_MS in state.ts
+    // (raised from 30s in v7.4.7 per W2-R3 HIGH).
+    const ageSec = (Date.now() - 200 * 1000) / 1000;
+    utimesSync(lockPath, ageSec, ageSec);
     expect(existsSync(lockPath)).toBe(true);
 
     const payload = '{"recovered":"after-stale-lock"}';
