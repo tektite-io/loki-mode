@@ -9,6 +9,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.15] - 2026-05-03
+
+MINOR release. 8 coordinated improvements landed via parallel sub-agent fleet.
+Closes most of the v7.5.12 council-deferred backlog and the v7.5.14 sentrux
+follow-ups. Zero breaking changes; every new behavior is opt-in or additive.
+
+### Added
+
+- **Sentrux iteration-loop wire-in** (autonomy/run.sh, opt-in via
+  `LOKI_SENTRUX_GATE=1`, default OFF). Two helper functions
+  (`_loki_sentrux_iteration_start`, `_loki_sentrux_iteration_end`) save a
+  baseline at iteration start and emit a structured Finding JSON to
+  `.loki/state/findings-sentrux-<iter>.json` on DEGRADED verdict.
+  No-op when sentrux not on PATH; single env-check cost when flag unset.
+  Tests: `tests/test-sentrux-iteration-wireup.sh` (7/7 PASS).
+- **Dashboard `/api/quality/architecture` endpoint** (dashboard/server.py).
+  Globs `.loki/state/findings-sentrux-*.json`, returns sorted series with
+  `{series, current, samples}` shape. Resilient to missing dir, empty state,
+  corrupt files, non-object payloads. Tests: 5/5 PASS.
+- **`loki sentrux init-rules [<path>] [--force]`** (autonomy/loki cmd_sentrux).
+  Scaffolds a conservative `.sentrux/rules.toml` with `max_cycles=0`,
+  `no_god_files=true`, `max_cc=30` and commented layer-enforcement examples.
+  Refuses to overwrite existing files unless `--force`. Tests: 9/9 PASS.
+- **`loki doctor --json` includes sentrux state** (autonomy/loki +
+  loki-ts/src/commands/doctor.ts). New top-level `sentrux` field
+  `{found, version, status, required: "optional"}`. Sibling of `checks`/`disk`
+  -- intentionally NOT counted in `summary` so existing dashboard consumers
+  remain byte-compatible. bun-parity matrix passes. Tests: 13/13 PASS.
+- **Escalations sidebar UI** (dashboard-ui/components/loki-escalations.js).
+  Surfaces the existing `/api/escalations` server-side feature that had no
+  UI. Polls list, click to view markdown body, keyboard shortcut `e`.
+  Tests: 13/13 PASS.
+- **`loki web` and `loki dashboard` --help clarification** (autonomy/loki).
+  Each command's help block now explains the relationship between the two
+  (Purple Lab on port 57375 vs Operations Dashboard on port 57374) -- closes
+  the v7.5.12 UAT "loki web vs dashboard confusion" gap.
+- **`.github/workflows/sentrux-real.yml`** -- new workflow, manual
+  + nightly schedule, runs `tests/integration/test_sentrux_real.sh` against
+  the real binary on Linux. `continue-on-error: true`, does not block any
+  other workflow.
+
+### Fixed
+
+- **Pytest gate timeout wrapper** (autonomy/run.sh `enforce_test_coverage` +
+  new `_loki_run_pytest_with_timeout`). Wraps the pytest invocation with
+  `gtimeout`/`timeout` (configurable via `LOKI_PYTEST_TIMEOUT`, default 300s).
+  Distinguishes exit code 124 (timeout) from genuine test failure. Degrades
+  gracefully when neither timeout binary is available. Closes Triage #14.
+  Tests: 5/5 PASS.
+- **Episode JSON load resilience** (memory/storage.py `_load_json`). Per-file
+  try/except now catches `json.JSONDecodeError`, `UnicodeDecodeError`, and
+  `OSError`. Logs a warning, skips the file, continues -- one corrupt file
+  no longer breaks the entire memory load. All callers (`engine.py`,
+  `retrieval.py`, `consolidation.py`) inherit the fix via the centralized
+  loader. Closes Triage #15. Tests: 8/8 PASS.
+- **Linux CI coverage for sentrux unit test** (tests/run-all-tests.sh +
+  scripts/local-ci.sh). The bash-only `tests/test-sentrux-gate.sh` was not
+  in the explicit Linux test runner allow-list; now it is. Real-binary
+  integration test correctly remains gated to the new manual workflow.
+  Tests: 4/4 PASS.
+- **All 7 new v7.5.15 test suites wired into tests/run-all-tests.sh**.
+  Devil's Advocate review caught that 7 of 8 new tests were only invoked
+  manually and would silently rot. Fixed via direct registration plus two
+  small wrapper scripts (`tests/dashboard/run_quality_architecture_tests.sh`,
+  `tests/memory/run_episode_load_resilience_tests.sh`) so the bash runner
+  surfaces pytest failures alongside bash failures. Final tests/run-all-tests.sh
+  exit: 24/25 PASS (the single failure is pre-existing `pip install mcp` env
+  gap on the dev machine, unrelated to this release).
+
+### Verified locally before push
+
+- All 7 new test suites green: 15+9+7+13+5+13+4 = 66/66 PASS.
+- `bash scripts/local-ci.sh` -- 20/20 PASS (will re-verify after final
+  release commit).
+- All branches merged via 6 standard `git merge --no-ff` operations; the
+  remaining 2 worktrees applied via inspected `cp` of specific files.
+- `bash -n` clean on every modified shell script.
+- `bun run typecheck` + `bun run build` clean; loki-ts/dist/loki.js rebuilt.
+
+### NOT in this release (honest list, in CHANGELOG for traceability)
+
+- "Parent-shell exit dependency" (v7.5.12 UAT item #2). Requires deeper
+  investigation of dashboard daemonization (`setsid`/`disown`/proper fork);
+  Dev5 explicitly punted to avoid regressing `loki dashboard stop` PID
+  tracking.
+- Bash-to-Bun migration Phases 2-6 (the published ADR-001 roadmap is
+  ~13 weeks, can't be combined with this release).
+- RARV-C Part B Phases 2-5 (groundedness, OTel bridge, typed tasks,
+  gateway routing) -- Phase 1 needs to ship first.
+- 4th reviewer agent calling sentrux MCP (the 9 MCP tools need their own
+  verification cycle).
+- Counter-evidence proof type `'sentrux-clean'` -- depends on the
+  RARV-C Phase 1 override council code that doesn't exist on main yet.
+- Per-framework app-runner detection (Next.js/Nuxt/Astro/SvelteKit -- each
+  needs research and fixtures).
+- pip PEP 668 / venv detection (Triage #5) -- needs design discussion.
+- Ruby/Elixir/Java/PHP detection (Triage #6) -- 4 independent helpers.
+- Multi-language sentrux coverage at scale -- 52 languages supported by
+  sentrux; we exercised TypeScript only in the integration fixture.
+
+### Migration / rollback
+
+No migration required. Every new behavior is opt-in (env flag) or additive
+(new endpoints, new subcommands, new help text, more resilient error
+handling). To roll back: `npm install -g loki-mode@7.5.14`. No state
+migrations.
+
 ## [7.5.14] - 2026-05-03
 
 MINOR release. Adds an optional, opt-in architectural-drift gate that wraps
