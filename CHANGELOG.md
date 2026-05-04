@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.16] - 2026-05-04
+
+PATCH release. Adds council transcript persistence across both bash and Bun council paths, a REST API to query transcripts, and a live dashboard panel. Motivation: YC demo readiness -- a partner clicking through the dashboard can now see the full multi-reviewer council record (who voted what, whether the devil's advocate triggered, and whether it flipped the outcome) without digging into raw log files.
+
+### Added
+
+- **Bash council transcript writer** (`autonomy/completion-council.sh`): new function
+  `council_write_transcript()` persists a structured JSON record per council round to
+  `.loki/council/transcripts/iter-<N>-<TIMESTAMP>.json`. Handles both council code paths:
+  - Path A: `council_vote()` (legacy v1 path) -- parses per-voter data from
+    `votes/iteration-N/member-M.txt` free-text files with regex fallback.
+  - Path B: `council_evaluate()` + `council_aggregate_votes()` (v2 path) -- reads from
+    structured `votes/round-N.json` with Priority 1; falls back to member txt files.
+  Wire-in calls added to `council_vote()` (after emit_event_json, Path A) and to
+  `council_evaluate()` at all exit branches (after DA check, Path B).
+  -- Dev E
+
+- **REST API endpoints** (`dashboard/server.py`):
+  - `GET /api/council/transcripts` -- list transcripts, descending by iteration;
+    query params: `limit` (default 20, max 200), `since` (ISO8601), `iter_min`.
+  - `GET /api/council/transcripts/{iteration_id}` -- fetch single transcript by id or
+    return 404. Both endpoints use `_get_loki_dir()` for path resolution and return
+    gracefully when the transcripts directory does not yet exist.
+  -- Dev B
+
+- **Dashboard panel** (`dashboard-ui/scripts/build-standalone.js`):
+  new `<loki-council-transcripts>` custom element added inside `id="page-council"` after
+  the existing `<loki-council-dashboard>` element. Renders per-iteration transcript cards
+  with: iteration number, timestamp, task/PRD preview, per-voter verdict badges
+  (APPROVE=green, REJECT=red, CANNOT_VALIDATE=yellow), contrarian section (only when
+  triggered), outcome badge, and OVERRIDE highlight when `contrarian_flipped=true`.
+  Polls `GET /api/council/transcripts?limit=10` on connect and every 30s. Empty state
+  shows "No council rounds recorded yet". No new top-level nav item added.
+  -- Dev C
+
+- **Bun transcript writer + tests**:
+  `councilWriteTranscript()` added to `loki-ts/src/runner/council.ts`, called from
+  `councilEvaluate()` after the devil's advocate check. Tests in
+  `loki-ts/tests/runner/council_transcripts.test.ts` (6 unit) and
+  `tests/test-council-transcripts-api.sh` (bash E2E).
+  -- Dev D
+
+### Verified locally
+
+- `bash -n autonomy/completion-council.sh` clean.
+- `shellcheck -S error autonomy/completion-council.sh` clean.
+- Bash writer integration test: synthetic `round-5.json` + `council_write_transcript 5 APPROVED true false` produces valid JSON at `iter-5-<TIMESTAMP>.json`; all required Q2 schema fields present (verified via `python3 -c "import json; json.load(...)"`).
+- Unit tests (Bun): [placeholder -- fill in after Dev D lands].
+- API tests (bash E2E): [placeholder -- fill in after Dev D lands].
+
+### NOT in this release
+
+- Real-time WebSocket push for transcripts (dashboard polls every 30s only; push is a separate effort).
+- Backfill of pre-7.5.16 transcripts (writer fires only for rounds that run after upgrade).
+- Authentication on the new `/api/council/transcripts` endpoints (same open-localhost model as all other council endpoints).
+- Transcript viewer as a separate top-level nav item (sub-section under Council tab by design).
+
+### Migration
+
+None required. Change is fully additive: new files written to `.loki/council/transcripts/`,
+two new API endpoints, one new dashboard panel. Existing behavior is unchanged.
+
+Rollback: `npm install -g loki-mode@7.5.15`.
+
 ## [7.5.15] - 2026-05-03
 
 MINOR release. 8 coordinated improvements landed via parallel sub-agent fleet.
