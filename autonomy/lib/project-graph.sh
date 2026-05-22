@@ -497,15 +497,88 @@ sys.stdout.write(text)
 PYEOF
 }
 
+# Phase G: walk upward from <target_dir> looking for the nearest `.git/`
+# ancestor. Caps the walk at 8 levels and stops at $HOME. Echoes the
+# absolute path to the git-root directory (the one whose child `.git`
+# exists), or empty when no ancestor matches.
+#
+# Honors $HOME stop: we never cross out of the user's home tree. This
+# keeps subdir activation scoped to user repos and avoids climbing to /
+# on machines where $HOME != /.
+_lpg_find_git_root() {
+    local cur="${1:-}"
+    [ -z "$cur" ] && return 0
+    [ ! -d "$cur" ] && return 0
+    cur=$(_lpg_abs "$cur")
+    local home_abs
+    home_abs="${HOME:-}"
+    [ -n "$home_abs" ] && home_abs=$(_lpg_abs "$home_abs")
+
+    local depth=0
+    while [ "$depth" -lt 8 ]; do
+        if [ -d "$cur/.git" ]; then
+            printf '%s' "$cur"
+            return 0
+        fi
+        # Stop at $HOME boundary.
+        if [ -n "$home_abs" ] && [ "$cur" = "$home_abs" ]; then
+            return 0
+        fi
+        local parent
+        parent=$(dirname "$cur")
+        if [ "$parent" = "$cur" ] || [ "$parent" = "/" ]; then
+            return 0
+        fi
+        cur="$parent"
+        depth=$((depth + 1))
+    done
+    return 0
+}
+
 # Emit a layered CLAUDE.md block.
-# Backward compat: empty stdout when LOKI_PROJECT_GRAPH_ROOT is unset.
+# Backward compat: empty stdout when LOKI_PROJECT_GRAPH_ROOT is unset AND
+# subdir-mode is not eligible. Subdir-mode activates when (a)
+# LOKI_PROJECT_GRAPH_ROOT is set OR (b) TARGET_DIR/LOKI_TARGET_DIR is
+# explicitly set AND it sits inside a `.git/` ancestor (cap 8 levels,
+# stop at $HOME). The implicit `$(pwd)` fallback NEVER activates
+# subdir-mode, which preserves the existing "empty out when env unset"
+# contract used by case 1 of tests/test-claude-md-walker.sh.
+#
+# Layer order: parent -> members -> subdir(root-to-leaf, deepest last)
+# -> scope. All paths are deduped via a tracked set of absolute paths.
 # Honors __LPG_TOTAL_CAP across all layers (stops at layer boundary).
 load_app_graph_context() {
     local root="${LOKI_PROJECT_GRAPH_ROOT:-}"
-    [ -z "$root" ] && return 0
 
-    local target_dir="${TARGET_DIR:-${LOKI_TARGET_DIR:-$(pwd)}}"
+    # Resolve target dir. We must distinguish an explicit caller-provided
+    # TARGET_DIR/LOKI_TARGET_DIR from the implicit $(pwd) fallback so that
+    # subdir-mode never activates on the implicit case (backward compat
+    # for callers that run the walker without setting either env var).
+    local target_dir target_explicit=0
+    if [ -n "${TARGET_DIR:-}" ]; then
+        target_dir="$TARGET_DIR"
+        target_explicit=1
+    elif [ -n "${LOKI_TARGET_DIR:-}" ]; then
+        target_dir="$LOKI_TARGET_DIR"
+        target_explicit=1
+    else
+        target_dir="$(pwd)"
+    fi
     target_dir=$(_lpg_abs "$target_dir")
+
+    # Decide if subdir-mode is eligible. Eligibility requires an explicit
+    # target dir AND a `.git/` ancestor inside the cap. (Eligibility is
+    # also implied whenever LOKI_PROJECT_GRAPH_ROOT is set, since that
+    # path was already validated by the discovery pass.)
+    local git_root=""
+    if [ "$target_explicit" = "1" ]; then
+        git_root=$(_lpg_find_git_root "$target_dir")
+    fi
+
+    # Nothing to emit if neither project-graph nor subdir-mode is active.
+    if [ -z "$root" ] && [ -z "$git_root" ]; then
+        return 0
+    fi
 
     local members_csv="${LOKI_PROJECT_GRAPH_MEMBERS:-}"
     local members_arr=()
@@ -515,11 +588,19 @@ load_app_graph_context() {
 
     local total_bytes=0
     local out=""
+    # Dedupe set: colon-delimited list of absolute paths already appended.
+    # Membership check uses the `:path:` substring pattern so we never get
+    # false hits from path-prefix collisions.
+    local seen_paths=":"
 
     _append_layer() {
         local kind="$1"
         local p="$2"
         [ ! -f "$p" ] && return 0
+        # Dedupe: skip if this absolute path was already emitted.
+        case "$seen_paths" in
+            *":$p:"*) return 0 ;;
+        esac
         local content
         content=$(_lpg_read_layer "$p")
         [ -z "$content" ] && return 0
@@ -537,11 +618,14 @@ load_app_graph_context() {
             out="${out}${block}"
         fi
         total_bytes=$((total_bytes + block_bytes))
+        seen_paths="${seen_paths}${p}:"
         return 0
     }
 
     # Parent layer first.
-    _append_layer parent "$root/CLAUDE.md" || { printf '%s' "$out"; return 0; }
+    if [ -n "$root" ]; then
+        _append_layer parent "$root/CLAUDE.md" || { printf '%s' "$out"; return 0; }
+    fi
 
     # Member layers (skip the scope member -- we add it as scope below).
     local m
@@ -552,6 +636,37 @@ load_app_graph_context() {
         fi
         _append_layer member "$m/CLAUDE.md" || { printf '%s' "$out"; return 0; }
     done
+
+    # Subdir layers: ancestors of target_dir up to (and including) git_root,
+    # emitted root-to-leaf so the deepest layer comes last. The scope layer
+    # is emitted separately below, so we exclude target_dir itself from the
+    # subdir walk.
+    if [ -n "$git_root" ]; then
+        # Collect ancestors from target_dir up to git_root (exclusive of
+        # target_dir, inclusive of git_root). Cap at 8 hops as a safety net
+        # in case the inputs are pathological.
+        local subdir_chain=()
+        local cur="$target_dir"
+        local hops=0
+        while [ "$hops" -lt 8 ]; do
+            local parent
+            parent=$(dirname "$cur")
+            if [ "$parent" = "$cur" ] || [ "$parent" = "/" ]; then
+                break
+            fi
+            cur="$parent"
+            subdir_chain+=("$cur")
+            if [ "$cur" = "$git_root" ]; then
+                break
+            fi
+            hops=$((hops + 1))
+        done
+        # subdir_chain is leaf-to-root order; reverse so we emit root-to-leaf.
+        local i count=${#subdir_chain[@]}
+        for (( i = count - 1; i >= 0; i-- )); do
+            _append_layer subdir "${subdir_chain[$i]}/CLAUDE.md" || { printf '%s' "$out"; return 0; }
+        done
+    fi
 
     # Scope layer (target dir).
     _append_layer scope "$target_dir/CLAUDE.md" || { printf '%s' "$out"; return 0; }

@@ -39,9 +39,16 @@ __LOKI_MCP_CONFIG_SH_LOADED=1
 
 # ---------- Loki MCP bundle path ----------
 # Emits the absolute path to .loki/mcp-config.json (TARGET_DIR-relative).
-# Writes the bundle each call -- content is small and deterministic, so
-# unconditional regeneration is simpler than a staleness check and the
-# write cost is negligible (one per iteration).
+# Bundle includes the always-on `loki-mode` server. Phase G (v7.5.24):
+# when any supported LSP binary (typescript-language-server, pylsp, gopls,
+# rust-analyzer) is on PATH, the bundle also gets a single `lsp-proxy`
+# entry that fans out to per-language servers at runtime. Detection uses
+# `command -v` only; absence is a normal state, not an error.
+#
+# Idempotent-write: the new bundle bytes are compared against the existing
+# file (`cmp -s`); the file is only rewritten when content differs. This
+# preserves mtime across calls when nothing changed, which matters for the
+# Phase G LSP-detection regression test (no LSP -> no bundle churn).
 #
 # The bundle mirrors the repo's .mcp.json `loki-mode` entry: a single
 # stdio MCP server backed by `python3 -m mcp.server`. Caller may extend
@@ -58,23 +65,55 @@ loki_mcp_config_path() {
         return 1
     fi
 
-    # Use python3 for the write so we never depend on heredoc-quoting
-    # behavior and the JSON stays canonical.
-    if ! _MCP_OUT="$mcp_path" python3 -c "
+    # Phase G: detect supported LSP binaries on PATH. The lsp-proxy server
+    # routes by language at runtime, so we register it once when ANY of the
+    # supported binaries is present (multiple binaries -> still one entry).
+    local lsp_detected=0
+    local lsp_bin
+    for lsp_bin in typescript-language-server pylsp gopls rust-analyzer; do
+        if command -v "$lsp_bin" >/dev/null 2>&1; then
+            lsp_detected=1
+            break
+        fi
+    done
+
+    # Build the bundle to a temp file, then compare bytes before rewriting.
+    # This makes the helper idempotent: identical bundle bytes -> no write,
+    # mtime stable. python3 is used so JSON encoding is canonical.
+    local tmp_bundle
+    tmp_bundle="${mcp_path}.tmp.$$"
+    if ! _MCP_OUT="$tmp_bundle" _MCP_LSP="$lsp_detected" python3 -c "
 import json, os
 out = os.environ['_MCP_OUT']
-bundle = {
-    'mcpServers': {
-        'loki-mode': {
-            'command': 'python3',
-            'args': ['-m', 'mcp.server'],
-        }
-    }
+lsp = os.environ.get('_MCP_LSP', '0') == '1'
+servers = {
+    'loki-mode': {
+        'command': 'python3',
+        'args': ['-m', 'mcp.server'],
+    },
 }
+if lsp:
+    servers['lsp-proxy'] = {
+        'command': 'python3',
+        'args': ['-m', 'mcp.lsp_proxy'],
+    }
+bundle = {'mcpServers': servers}
 with open(out, 'w') as f:
     json.dump(bundle, f, indent=2)
 " 2>/dev/null; then
+        rm -f "$tmp_bundle" 2>/dev/null
         return 1
+    fi
+
+    # Idempotent write: only replace the file when bytes differ. cmp -s
+    # exits 0 when identical, so we keep the existing file in that case.
+    if [ -f "$mcp_path" ] && cmp -s "$tmp_bundle" "$mcp_path" 2>/dev/null; then
+        rm -f "$tmp_bundle" 2>/dev/null
+    else
+        mv -f "$tmp_bundle" "$mcp_path" 2>/dev/null || {
+            rm -f "$tmp_bundle" 2>/dev/null
+            return 1
+        }
     fi
 
     # Emit absolute path -- python3 handles realpath portably.

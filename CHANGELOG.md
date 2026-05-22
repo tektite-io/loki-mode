@@ -9,6 +9,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.24] - 2026-05-22
+
+PATCH release. Phase G of the v7.5.18 -> v7.5.27 arc. LSP-backed MCP
+proxy + subdirectory-scoped CLAUDE.md walker. When any supported
+language server is on PATH (typescript-language-server, pylsp, gopls,
+rust-analyzer), Loki auto-registers an `lsp-proxy` MCP server that
+exposes `lsp_find_references`, `lsp_go_to_definition`, and
+`lsp_symbol_at_position` tools. Subdir walker extends Phase F's
+parent/member CLAUDE.md walker with ancestor-walk (root-to-leaf) up to
+the nearest `.git/` directory. No new CLI subcommands. No new opt-in
+env vars.
+
+### Added
+
+- **`mcp/lsp_proxy.py`** (new, 713 lines, stdlib-only). MCP server
+  proxying LSP requests to language-specific binaries. Stdlib-only
+  (no new pip deps): `json`, `subprocess`, `shutil`, `threading`,
+  `os`, `pathlib`. LSP wire protocol implemented with proper
+  Content-Length framing (per LSP spec, not line-delimited).
+  - 3 MCP tools: `lsp_find_references`, `lsp_go_to_definition`,
+    `lsp_symbol_at_position`.
+  - 4 supported languages: TS/TSX/JS/JSX (typescript-language-server),
+    Python (pylsp), Go (gopls), Rust (rust-analyzer).
+  - Lazy spawn on first matching tool call, kept alive per session,
+    3-stage shutdown (shutdown -> exit -> SIGTERM after 2s grace ->
+    SIGKILL).
+  - PIDs recorded at `.loki/lsp/pids.json` so `loki doctor` can reap
+    stragglers.
+  - `_NoopFastMCP` fallback so the module imports cleanly in test
+    environments where the FastMCP SDK is absent; production launch
+    surfaces the error explicitly.
+- **`mcp/tests/test_lsp_proxy.py`** (new, 377 lines, 19 tests). 5
+  test suites: LangMap+Detection, WireFraming, ToolDispatch,
+  Cleanup, LSPClientShutdown. Uses fake LSP subprocesses for
+  request/response framing verification.
+- **`tests/test-lsp-proxy.sh`** (new, ~180 LOC, 9 assertions).
+  Verifies LSP detection in the bash MCP-config helper, idempotent
+  bundle rewrite, single `lsp-proxy` entry even when multiple LSPs
+  detected.
+- **`autonomy/lib/project-graph.sh`** extended with subdir walker
+  (lines 503-660). New `_lpg_find_git_root` helper (ascends at most
+  8 levels, stops at `$HOME` or first ancestor with `.git/`).
+  `load_app_graph_context` now emits subdir layers root-to-leaf with
+  `<!-- LOKI_LAYER:subdir path=... -->` markers. Dedupe via
+  tracked-set of absolute CLAUDE.md paths (parent + subdir
+  collision -> emitted once). Existing 32KB total + 16KB per-layer
+  caps preserved.
+- **`tests/test-project-graph.sh`** -- 4 new subdir-walker
+  assertions (now 24/24 total).
+
+### Changed
+
+- **`autonomy/lib/mcp-config.sh::loki_mcp_config_path`** -- detects
+  any of the 4 supported LSP binaries via `command -v` and injects a
+  single `lsp-proxy` entry into the bundle when at least one is
+  present. The proxy routes by language at runtime, so multiple
+  detected binaries still yield one entry. Idempotent-write
+  preserved via `cmp -s` byte comparison.
+- **`loki-ts/src/providers/mcp_config.ts`** -- Bun mirror. Pure
+  PATH walk (stdlib `node:fs` + `node:path`) to detect any of the 4
+  LSP binaries, then `buildBundle(lspDetected)` injects the same
+  `lsp-proxy` entry when found. Byte-identical to bash output (parity
+  test still passes).
+- **`loki-ts/tests/providers/mcp_config.test.ts`** -- new
+  PATH-stub setup so existing tests are deterministic regardless of
+  whether the test machine has an LSP installed. New test
+  `injects lsp-proxy entry when an LSP binary is on PATH` validates
+  the Phase G code path.
+- **`.mcp.json`** -- registered `loki-mode-lsp-proxy` alongside
+  `loki-mode` for discoverability.
+
+### Verified locally before commit
+
+- `bash scripts/local-ci.sh` -- 21/21 PASS.
+- `bash tests/test-lsp-proxy.sh` -- 9/9 PASS.
+- `bash tests/test-project-graph.sh` -- 24/24 PASS (20 Phase F + 4
+  new Phase G).
+- `bash tests/test-parity-mcp-config.sh` -- 4/4 PASS (bash + Bun
+  emit byte-identical bundles with AND without LSP detected).
+- `bash tests/test-mcp-config.sh` -- 16/16 PASS (no regression).
+- `bash tests/test-claude-md-walker.sh` -- 13/13 PASS (no regression).
+- `bash tests/test-claude-flags.sh` -- 29/29 PASS (no regression).
+- `bash tests/test-voter-agents-json.sh` -- 17/17 PASS (no regression).
+- `cd loki-ts && bun test tests/providers/mcp_config.test.ts` --
+  7/7 PASS (6 existing + 1 new Phase G).
+- `python3 -m unittest mcp.tests.test_lsp_proxy` -- 19/19 PASS.
+- `cd loki-ts && bun run typecheck` clean.
+
+### NOT tested (honest disclosures)
+
+- Real LSP server interaction. The `LSPClient` wire framing is
+  unit-tested against fake subprocesses; we have not yet run the
+  proxy against `typescript-language-server` or `pylsp` and observed
+  Hover / Location results round-trip from a real language server.
+  Deferred to first user-driven session.
+- LSP behavior across versions. The wire protocol is stable but
+  initialize-capabilities differ between LSP releases; tests use
+  generic JSON-RPC mocks.
+- Subdir walker on Windows path separators. Bash + `_lpg_find_git_root`
+  use POSIX path semantics; not verified on Windows.
+- Codebases > 1M LOC. The subdir walker caps at 32KB total, so large
+  CLAUDE.md fragments are silently truncated at the cap boundary.
+
+### Migration
+
+- No action required for users without an LSP installed: Loki
+  behaves exactly as v7.5.23.
+- Users who install `typescript-language-server`, `pylsp`, `gopls`,
+  or `rust-analyzer` AFTER updating to v7.5.24 will see the
+  `lsp-proxy` entry appear automatically on next `loki start`.
+- The subdir CLAUDE.md walker activates whenever Loki is launched
+  from inside a subdirectory of a `.git/` project, regardless of
+  `LOKI_PROJECT_GRAPH_ROOT` (Phase F's parent/member walker still
+  takes precedence when a graph is detected).
+
 ## [7.5.23] - 2026-05-22
 
 PATCH release. Phase F of the v7.5.18 -> v7.5.27 arc. Cross-project

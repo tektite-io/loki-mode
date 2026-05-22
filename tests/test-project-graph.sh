@@ -258,6 +258,106 @@ else
     bad "bad-app-id: got [$app] (should be empty)"
 fi
 
+# ---------- 8. Phase G: _lpg_find_git_root from 3 levels deep ----------
+# Build a tree: <tmp>/repo/.git + <tmp>/repo/a/b/c (3 levels under repo).
+# Walking from c/ must return <tmp>/repo (the dir that contains .git).
+GITFIX="$TMPROOT/gitfix"
+mkdir -p "$GITFIX/repo/.git" "$GITFIX/repo/a/b/c"
+# Override HOME to a path NOT containing GITFIX so the $HOME stop does not
+# short-circuit the walk before .git is found.
+git_root_out=$(HOME="$TMPROOT/elsewhere" _lpg_find_git_root "$GITFIX/repo/a/b/c")
+expected_root=$(cd "$GITFIX/repo" && pwd)
+if [ "$git_root_out" = "$expected_root" ]; then
+    ok "find_git_root: 3-levels-deep target resolves to git root"
+else
+    bad "find_git_root: expected [$expected_root], got [$git_root_out]"
+fi
+
+# ---------- 9. Phase G: _lpg_find_git_root stops at $HOME ----------
+# Tree has no .git anywhere. Walking up from <FAKE_HOME>/proj/deep should
+# stop at FAKE_HOME and return empty (NOT keep climbing to / and beyond).
+FAKEHOME="$TMPROOT/fakehome"
+mkdir -p "$FAKEHOME/proj/deep"
+git_root_out=$(HOME="$FAKEHOME" _lpg_find_git_root "$FAKEHOME/proj/deep")
+if [ -z "$git_root_out" ]; then
+    ok "find_git_root: stops at \$HOME when no .git found"
+else
+    bad "find_git_root: should have stopped at HOME, got [$git_root_out]"
+fi
+
+# ---------- 10. Phase G: subdir walker emits root-to-leaf with LOKI_LAYER:subdir ----------
+# Build: <tmp>/subwalk/repo/.git + intermediate CLAUDE.md files at each
+# nesting level (repo/, repo/a/, repo/a/b/), and a scope CLAUDE.md at c/.
+SUBWALK="$TMPROOT/subwalk"
+mkdir -p "$SUBWALK/repo/.git" "$SUBWALK/repo/a/b/c"
+printf '%s\n' '# repo root claude' > "$SUBWALK/repo/CLAUDE.md"
+printf '%s\n' '# subdir a claude'    > "$SUBWALK/repo/a/CLAUDE.md"
+printf '%s\n' '# subdir b claude'    > "$SUBWALK/repo/a/b/CLAUDE.md"
+printf '%s\n' '# scope c claude'     > "$SUBWALK/repo/a/b/c/CLAUDE.md"
+(
+    unset LOKI_PROJECT_GRAPH_ROOT LOKI_PROJECT_GRAPH_APP_ID LOKI_PROJECT_GRAPH_MEMBERS
+    HOME="$TMPROOT/elsewhere" TARGET_DIR="$SUBWALK/repo/a/b/c" load_app_graph_context
+) > "$TMPROOT/subwalk.out"
+
+repo_abs=$(cd "$SUBWALK/repo" && pwd)
+# Each subdir layer must appear with the LOKI_LAYER:subdir marker.
+ok_count=0
+for p in "$repo_abs/CLAUDE.md" "$repo_abs/a/CLAUDE.md" "$repo_abs/a/b/CLAUDE.md"; do
+    if grep -qF "<!-- LOKI_LAYER:subdir path=$p -->" "$TMPROOT/subwalk.out"; then
+        ok_count=$((ok_count + 1))
+    fi
+done
+# Scope layer should use the scope marker, not subdir.
+scope_marker_present=0
+if grep -qF "<!-- LOKI_LAYER:scope path=$repo_abs/a/b/c/CLAUDE.md -->" "$TMPROOT/subwalk.out"; then
+    scope_marker_present=1
+fi
+# Root-to-leaf order: byte offset of the repo-root subdir marker must be
+# less than the b-level subdir marker.
+off_root=$(grep -bF "<!-- LOKI_LAYER:subdir path=$repo_abs/CLAUDE.md -->" "$TMPROOT/subwalk.out" | head -n1 | cut -d: -f1)
+off_b=$(grep -bF "<!-- LOKI_LAYER:subdir path=$repo_abs/a/b/CLAUDE.md -->" "$TMPROOT/subwalk.out" | head -n1 | cut -d: -f1)
+order_ok=0
+if [ -n "$off_root" ] && [ -n "$off_b" ] && [ "$off_root" -lt "$off_b" ]; then
+    order_ok=1
+fi
+if [ "$ok_count" = "3" ] && [ "$scope_marker_present" = "1" ] && [ "$order_ok" = "1" ]; then
+    ok "subdir-walker: 3 subdir layers + scope, emitted root-to-leaf"
+else
+    bad "subdir-walker: count=$ok_count scope=$scope_marker_present order=$order_ok"
+fi
+
+# ---------- 11. Phase G: dedupe across parent + subdir collision ----------
+# Build a fixture where LOKI_PROJECT_GRAPH_ROOT happens to equal git-root,
+# so the parent layer path collides with the topmost subdir layer path.
+# Expected: the collided CLAUDE.md is emitted EXACTLY ONCE (the first
+# kind wins -- parent here, since parent is appended before subdir).
+DEDUPE="$TMPROOT/dedupe"
+mkdir -p "$DEDUPE/repo/.git" "$DEDUPE/repo/ui/.loki/state"
+printf '%s\n' '# shared root claude' > "$DEDUPE/repo/CLAUDE.md"
+printf '%s\n' '# ui scope claude'    > "$DEDUPE/repo/ui/CLAUDE.md"
+repo_abs=$(cd "$DEDUPE/repo" && pwd)
+ui_abs=$(cd "$DEDUPE/repo/ui" && pwd)
+(
+    # Manually set the project-graph env vars so the walker sees a parent
+    # at git-root. No members; the parent layer alone collides with the
+    # topmost subdir layer.
+    LOKI_PROJECT_GRAPH_ROOT="$repo_abs"
+    LOKI_PROJECT_GRAPH_APP_ID="dedupe"
+    LOKI_PROJECT_GRAPH_MEMBERS=""
+    export LOKI_PROJECT_GRAPH_ROOT LOKI_PROJECT_GRAPH_APP_ID LOKI_PROJECT_GRAPH_MEMBERS
+    HOME="$TMPROOT/elsewhere" TARGET_DIR="$ui_abs" load_app_graph_context
+) > "$TMPROOT/dedupe.out"
+
+# Count how many times the colliding path appears as the path= value in
+# any LOKI_LAYER marker. Must be exactly 1.
+collide_count=$(grep -cF "<!-- LOKI_LAYER:parent path=$repo_abs/CLAUDE.md -->" "$TMPROOT/dedupe.out")
+subdir_dup=$(grep -cF "<!-- LOKI_LAYER:subdir path=$repo_abs/CLAUDE.md -->" "$TMPROOT/dedupe.out")
+if [ "$collide_count" = "1" ] && [ "$subdir_dup" = "0" ]; then
+    ok "dedupe: parent + subdir collision emits the shared path exactly once"
+else
+    bad "dedupe: parent_count=$collide_count subdir_dup=$subdir_dup (want 1 + 0)"
+fi
+
 echo
 echo "Total: $((PASS + FAIL))  Passed: $PASS  Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

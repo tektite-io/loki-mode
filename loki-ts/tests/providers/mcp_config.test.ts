@@ -14,14 +14,23 @@ import { mcpConfigPath, userMcpConfigPath, buildMcpConfigArgv } from "../../src/
 
 describe("mcp_config.mcpConfigPath", () => {
   let td: string;
+  let savedPath: string | undefined;
   beforeEach(() => {
     td = mkdtempSync(join(tmpdir(), "loki-mcp-cfg-"));
+    // Phase G: stub PATH to an empty dir so LSP detection is deterministically
+    // false during these tests. Without this, tests that assert the bundle
+    // shape would fail on machines where typescript-language-server, pylsp,
+    // gopls, or rust-analyzer happen to be on PATH.
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = mkdtempSync(join(tmpdir(), "loki-mcp-empty-path-"));
   });
   afterEach(() => {
     rmSync(td, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
   });
 
-  it("returns absolute path under .loki/ and writes the bundle", () => {
+  it("returns absolute path under .loki/ and writes the bundle (no LSP)", () => {
     const p = mcpConfigPath(td);
     expect(p).toBe(join(td, ".loki", "mcp-config.json"));
     const body = readFileSync(p, "utf8");
@@ -51,6 +60,27 @@ describe("mcp_config.mcpConfigPath", () => {
     // which Claude could pass through to the spawned MCP server unexpanded.
     expect(body.includes("${")).toBe(false);
     expect(/\$[A-Za-z_]/.test(body)).toBe(false);
+  });
+
+  // Phase G (v7.5.24): LSP-proxy entry injected when supported binary on PATH.
+  it("injects lsp-proxy entry when an LSP binary is on PATH", () => {
+    // Drop a fake `typescript-language-server` binary into a temp dir and
+    // prepend that dir to PATH. The detector only checks for a file's
+    // existence, so the binary need not be executable in the test.
+    const fakeBinDir = mkdtempSync(join(tmpdir(), "loki-mcp-bin-"));
+    try {
+      const fakeBin = join(fakeBinDir, "typescript-language-server");
+      writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n");
+      process.env["PATH"] = fakeBinDir;
+      const p = mcpConfigPath(td);
+      const parsed = JSON.parse(readFileSync(p, "utf8"));
+      expect(parsed.mcpServers["lsp-proxy"]).toEqual({
+        command: "python3",
+        args: ["-m", "mcp.lsp_proxy"],
+      });
+    } finally {
+      rmSync(fakeBinDir, { recursive: true, force: true });
+    }
   });
 });
 
