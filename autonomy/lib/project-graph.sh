@@ -328,7 +328,7 @@ loki_project_graph_discover() {
     # Parse all manifests + cluster by app_id.
     local target_app_id=""
     local parent_app_id=""
-    local manifest path dir app_id
+    local manifest app_id
     declare -a parsed_paths=()
     declare -a parsed_ids=()
     for manifest in "${found[@]}"; do
@@ -506,8 +506,6 @@ load_app_graph_context() {
 
     local target_dir="${TARGET_DIR:-${LOKI_TARGET_DIR:-$(pwd)}}"
     target_dir=$(_lpg_abs "$target_dir")
-    local target_basename
-    target_basename=$(basename "$target_dir")
 
     local members_csv="${LOKI_PROJECT_GRAPH_MEMBERS:-}"
     local members_arr=()
@@ -517,7 +515,6 @@ load_app_graph_context() {
 
     local total_bytes=0
     local out=""
-    local layer_kind layer_path layer_content layer_block layer_bytes
 
     _append_layer() {
         local kind="$1"
