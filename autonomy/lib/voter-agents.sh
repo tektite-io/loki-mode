@@ -58,11 +58,20 @@ loki_voter_agents_json() {
     _VA_ITER="$iter" \
     _VA_PRD="$prd" \
     _VA_TIER="$tier" \
+    _VA_COMPLEXITY="${LOKI_COMPLEXITY:-standard}" \
     python3 -c '
 import json, os
 iter_n = os.environ.get("_VA_ITER", "0")
 prd = os.environ.get("_VA_PRD", "")
 tier = os.environ.get("_VA_TIER", "development")
+complexity = os.environ.get("_VA_COMPLEXITY", "standard")
+# Effort selection mirrors Bun route loki-ts/src/providers/claude_flags.ts::effortForTier
+# so bash and Bun emit the same effort levels under all LOKI_COMPLEXITY values.
+# Architect roster (standard complexity): requirements-verifier=high, test-auditor=high,
+# convergence-voter=medium. Under complex, each shifts up one notch (medium->high, high->xhigh).
+_effort_bump = {"low": "medium", "medium": "high", "high": "xhigh"}
+def _effort(base):
+    return _effort_bump.get(base, base) if complexity == "complex" else base
 prd_clause = (
     f"PRD at {prd}. Read it for ground-truth requirements."
     if prd else
@@ -72,7 +81,7 @@ agents = {
     "requirements-verifier": {
         "description": "Verifies the iteration delivered the PRD-required behavior.",
         "model": "opus",
-        "effort": "high",
+        "effort": _effort("high"),
         "tools": ["Read", "Grep", "Bash"],
         "prompt": (
             f"You are the requirements-verifier for iteration {iter_n}. "
@@ -185,7 +194,27 @@ loki_council_dispatch_agents() {
         return 1
     fi
 
-    # 1. Flag support gate.
+    # 1a. Custom council size gate (added per v7.5.21 Phase C reviewer council
+    # Opus #2 HIGH finding): the Phase C dispatch hardcodes 3 voters, so when a
+    # user sets LOKI_COUNCIL_SIZE != 3 (documented public env in Docker README,
+    # wiki Environment-Variables, certification lesson), the dispatch helper
+    # would silently emit total_members=3 + threshold=2, breaking the unanimous
+    # devil's-advocate check at completion-council.sh that compares
+    # complete_count -eq COUNCIL_SIZE. Cheapest correct fix: fall back to the
+    # heuristic path which respects COUNCIL_SIZE, until a multi-voter dispatch
+    # ships in a later phase. Default COUNCIL_SIZE=3 -> Phase C dispatch active.
+    if [ "${COUNCIL_SIZE:-3}" != "3" ]; then
+        return 1
+    fi
+
+    # 1b. Managed-council bypass gate (Opus #2 MEDIUM finding): if the
+    # experimental managed council is enabled, defer to it -- otherwise its
+    # member output would be shadowed by the round file the dispatch writes.
+    if [ "${LOKI_EXPERIMENTAL_MANAGED_COUNCIL:-false}" = "true" ]; then
+        return 1
+    fi
+
+    # 1c. Flag support gate.
     # shellcheck disable=SC1091
     . "${__LOKI_VA_LIB_DIR}/claude-flags.sh" 2>/dev/null || return 1
     if ! loki_claude_flag_supported "--agents"; then
@@ -213,12 +242,18 @@ loki_council_dispatch_agents() {
     local prompt
     prompt=$(printf 'Loki council iteration %s. Run each declared agent against the current workspace, return one finding per agent matching the provided JSON Schema. Be terse, be honest.' "$iteration")
 
+    # Capture stderr to a per-iteration log so hung / failing claude
+    # invocations are diagnosable instead of silently swallowed. Per Opus #2
+    # LOW finding: stored under COUNCIL_STATE_DIR, no PII risk beyond the
+    # prompt itself which already lives in the dispatch log.
     local response
     local rc=0
+    local stderr_log="$COUNCIL_STATE_DIR/votes/dispatch-stderr-${iteration}.log"
+    mkdir -p "$(dirname "$stderr_log")" 2>/dev/null || true
     response=$(claude --dangerously-skip-permissions \
                       -p "$prompt" \
                       --agents "$agents_json" \
-                      --json-schema "$schema_path" 2>/dev/null) || rc=$?
+                      --json-schema "$schema_path" 2>"$stderr_log") || rc=$?
     if [ "$rc" -ne 0 ] || [ -z "$response" ]; then
         return 1
     fi

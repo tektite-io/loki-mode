@@ -1527,7 +1527,8 @@ council_evaluate() {
     # (unsupported flags, missing binary, parse error, etc.) it returns 1 and
     # we fall through to the existing heuristic council_aggregate_votes path.
     local aggregate_result=""
-    local _va_helper="$(dirname "${BASH_SOURCE[0]}")/lib/voter-agents.sh"
+    local _va_helper
+    _va_helper="$(dirname "${BASH_SOURCE[0]}")/lib/voter-agents.sh"
     if [ -f "$_va_helper" ]; then
         # shellcheck disable=SC1090
         . "$_va_helper" 2>/dev/null || true
