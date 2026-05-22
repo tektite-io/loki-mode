@@ -9,6 +9,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.22] - 2026-05-22
+
+PATCH release. Phase D of the v7.5.18 -> v7.5.27 arc. Wires Claude Code's
+`--mcp-config <paths...>` and `--include-hook-events` flags into Loki's
+Claude provider invocation. Default-on when CLI supports them; hook
+events stream into `.loki/events.jsonl` via the existing event bus
+for dashboard visibility. No new CLI subcommands.
+
+### Added
+
+- **`loki-ts/src/providers/mcp_config.ts`** (new, ~98 lines). Exports
+  `mcpConfigPath(targetDir)`, `userMcpConfigPath()`, `buildMcpConfigArgv`.
+  Per-iteration writes `.loki/mcp-config.json` bundling the loki-mode
+  MCP server entry (matches project `.mcp.json` shape). Detects
+  `~/.claude/mcp.json` user overlay and emits both paths when present.
+  No env-var expansion in the written file (security: no `${...}`
+  patterns survive).
+- **`autonomy/lib/mcp-config.sh`** (new, ~111 lines). Bash mirror.
+  Functions: `loki_mcp_config_path`, `loki_user_mcp_config_path`,
+  `loki_mcp_config_argv`. Same bundle shape, same overlay detection,
+  same security posture (no shell expansion in written JSON).
+- **`loki-ts/tests/providers/mcp_config.test.ts`** (new, ~94 lines).
+  6 tests covering bundle write, idempotency, overlay detection,
+  argv composition.
+- **`tests/test-mcp-config.sh`** (new, ~213 lines). 16 bash assertions
+  covering helper parity, no-overlay path, with-overlay path, auto-flag
+  emission gated on CLI support, `LOKI_HOOK_EVENTS=off` opt-out.
+- **`tests/test-parity-mcp-config.sh`** (new, ~151 lines). 4 cross-route
+  assertions: bash and Bun emit the same path-token count, same order
+  (Loki bundle first, user overlay second), bundle bytes are
+  canonical-JSON identical.
+- **`dashboard/server.py`** -- `_read_events` accepts optional
+  `type_prefix` parameter; council transcripts handler accepts
+  `?type_prefix=` query param and exposes a new `hook_events` key in
+  the response when set. Backward compatible: unset behavior unchanged.
+
+### Changed
+
+- **`providers/claude.sh::_loki_build_claude_auto_flags`** -- sources
+  the mcp-config helper. Appends `--mcp-config` followed by each path
+  as a SEPARATE argv element (Commander variadic shape `<configs...>`,
+  per Dev-C parity finding). Appends `--include-hook-events` as a
+  boolean flag when supported AND `LOKI_HOOK_EVENTS != off`.
+- **`loki-ts/src/providers/claude_flags.ts::buildAutoFlags`** -- mirror.
+  Spread paths via `out.push(...)` instead of one space-joined value.
+  Same opt-out via `process.env.LOKI_HOOK_EVENTS`.
+- **`autonomy/run.sh`** (+47 lines around line 10852) -- embedded
+  Python tee-parser learns the `hook_event` record type. New
+  `append_hook_event(event_name, payload)` writes a
+  `{"type":"claude_hook_<lower>", "source":"claude_cli",
+  "timestamp":"<iso>", "payload":<record>}` envelope to
+  `.loki/events.jsonl` via `fcntl.flock` on the existing
+  `.loki/events.jsonl.lock` sentinel. Honors
+  `LOKI_HOOK_EVENTS=off`.
+
+### Verified locally before commit
+
+- `bash scripts/local-ci.sh` -- 21/21 PASS.
+- `bash tests/test-mcp-config.sh` -- 16/16 PASS.
+- `bash tests/test-parity-mcp-config.sh` -- 4/4 PASS.
+- `bash tests/test-claude-flags.sh` -- 29/29 PASS (no regression).
+- `bash tests/test-voter-agents-json.sh` -- 17/17 PASS (no regression).
+- `cd loki-ts && bun test tests/providers/mcp_config.test.ts` -- 6/6 PASS.
+- `cd loki-ts && bun test tests/providers/claude_flags.test.ts` -- 33/33
+  PASS (29 existing + 4 new Phase D).
+- `cd loki-ts && bun run typecheck` clean.
+- `python3 -c "import ast; ast.parse(open('dashboard/server.py').read())"`
+  clean.
+
+### NOT tested (honest disclosures)
+
+- Live `claude --mcp-config <paths> --include-hook-events` invocation
+  against the installed CLI v2.1.148. Static argv composition is
+  parity-tested across bash and Bun (4/4 pass) and the flag-support
+  check is conservative (only emits when `claude --help` advertises).
+  But we have not yet observed the hook-event records arriving in
+  `.loki/events.jsonl` from a real claude run. Synthetic injection
+  through the python tee-parser is unit-tested; end-to-end is deferred
+  to first user-driven session.
+- Behavior when `~/.claude/mcp.json` uses the `servers` top-level key
+  instead of `mcpServers`. We pass the user file through unchanged; if
+  Claude rejects either shape, the overlay fails silently and only the
+  Loki bundle remains in effect.
+- Dashboard UI tab for the new `hook_events` response key. API-only in
+  this release; UI tab deferred to v7.5.23+ per architect plan.
+
+### Migration
+
+- No action required for users on Claude CLI versions that support
+  both flags: Loki picks up the upgrade automatically.
+- Users who want to suppress hook events: `export LOKI_HOOK_EVENTS=off`.
+- Users who want to override the MCP server bundle: edit the project
+  `.mcp.json` or drop a `~/.claude/mcp.json` -- both are detected.
+
 ## [7.5.21] - 2026-05-22
 
 PATCH release. Phase C of the v7.5.18 -> v7.5.27 arc. Replaces the ad-hoc

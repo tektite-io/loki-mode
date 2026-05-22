@@ -10849,6 +10849,53 @@ def save_in_progress(tasks):
     except:
         pass
 
+# Phase D (v7.5.22): hook-event emission.
+# Mirror events/emit.sh::safe_append_event_jsonl semantics from inside
+# python by holding an fcntl.flock on .loki/events.jsonl.lock for the
+# duration of the append. Bash function is not callable from this
+# embedded process; fcntl matches the flock(1) path one-to-one.
+EVENTS_JSONL = ".loki/events.jsonl"
+HOOK_EVENTS_ENABLED = os.environ.get("LOKI_HOOK_EVENTS", "on") != "off"
+
+def append_hook_event(event_name, payload):
+    """Append a claude_hook_<event_name> record to .loki/events.jsonl."""
+    if not HOOK_EVENTS_ENABLED:
+        return
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    try:
+        events_dir = os.path.dirname(EVENTS_JSONL)
+        if events_dir:
+            os.makedirs(events_dir, exist_ok=True)
+        record = {
+            "type": "claude_hook_" + str(event_name).lower(),
+            "source": "claude_cli",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "payload": payload,
+        }
+        line = json.dumps(record, default=str)
+        lock_path = EVENTS_JSONL + ".lock"
+        if fcntl is not None:
+            # flock path: serialize across processes.
+            with open(lock_path, "a") as lf:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                    with open(EVENTS_JSONL, "a") as ef:
+                        ef.write(line + "\n")
+                finally:
+                    try:
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+        else:
+            # No fcntl available (extremely rare on POSIX). Best-effort.
+            with open(EVENTS_JSONL, "a") as ef:
+                ef.write(line + "\n")
+    except Exception as e:
+        print(f"{YELLOW}[Hook event append error: {e}]{NC}", file=sys.stderr)
+
 def process_stream():
     global active_agents
     active_agents = load_agents()
@@ -10971,6 +11018,20 @@ def process_stream():
                             print(f"{DIM}[Agent Complete]{NC} ", end="", flush=True)
                         else:
                             print(f"{DIM}[Result]{NC} ", end="", flush=True)
+
+            elif msg_type == "hook_event":
+                # Phase D (v7.5.22): forward Claude hook lifecycle events
+                # into .loki/events.jsonl as claude_hook_<eventname>.
+                # Schema not fully specified upstream; probe common field
+                # names for the event identifier and lowercase it.
+                event_name = (
+                    data.get("hook_event")
+                    or data.get("event")
+                    or data.get("name")
+                    or data.get("hook")
+                    or "unknown"
+                )
+                append_hook_event(event_name, data)
 
             elif msg_type == "result":
                 # Session complete - mark all agents as completed

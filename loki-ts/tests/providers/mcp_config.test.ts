@@ -1,0 +1,100 @@
+// loki-ts/tests/providers/mcp_config.test.ts -- Phase D (v7.5.22) MCP config tests.
+//
+// Covers:
+// - mcpConfigPath writes the bundle to <targetDir>/.loki/mcp-config.json
+// - Re-call is idempotent (mtime unchanged within 1s window)
+// - buildMcpConfigArgv emits single --mcp-config <path> when user file absent
+// - buildMcpConfigArgv emits both paths when user file present (variadic)
+// - No env-var-shaped string (${...}) appears in the written file (no shell expansion)
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync, statSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mcpConfigPath, userMcpConfigPath, buildMcpConfigArgv } from "../../src/providers/mcp_config.ts";
+
+describe("mcp_config.mcpConfigPath", () => {
+  let td: string;
+  beforeEach(() => {
+    td = mkdtempSync(join(tmpdir(), "loki-mcp-cfg-"));
+  });
+  afterEach(() => {
+    rmSync(td, { recursive: true, force: true });
+  });
+
+  it("returns absolute path under .loki/ and writes the bundle", () => {
+    const p = mcpConfigPath(td);
+    expect(p).toBe(join(td, ".loki", "mcp-config.json"));
+    const body = readFileSync(p, "utf8");
+    const parsed = JSON.parse(body);
+    expect(parsed).toEqual({
+      mcpServers: {
+        "loki-mode": { command: "python3", args: ["-m", "mcp.server"] },
+      },
+    });
+  });
+
+  it("re-call is idempotent (mtime unchanged within 1s)", async () => {
+    const p = mcpConfigPath(td);
+    const mtime1 = statSync(p).mtimeMs;
+    // Small sleep so a re-write would change mtime in a measurable way.
+    await new Promise((r) => setTimeout(r, 50));
+    const p2 = mcpConfigPath(td);
+    expect(p2).toBe(p);
+    const mtime2 = statSync(p).mtimeMs;
+    expect(mtime2).toBe(mtime1);
+  });
+
+  it("no env-var-shaped string (${...}) appears in the written file", () => {
+    const p = mcpConfigPath(td);
+    const body = readFileSync(p, "utf8");
+    // Security: bundle must not contain shell-expansion patterns ($VAR or ${VAR})
+    // which Claude could pass through to the spawned MCP server unexpanded.
+    expect(body.includes("${")).toBe(false);
+    expect(/\$[A-Za-z_]/.test(body)).toBe(false);
+  });
+});
+
+describe("mcp_config.buildMcpConfigArgv", () => {
+  let td: string;
+  let homeDir: string;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    td = mkdtempSync(join(tmpdir(), "loki-mcp-argv-"));
+    homeDir = mkdtempSync(join(tmpdir(), "loki-mcp-home-"));
+    savedHome = process.env["HOME"];
+    process.env["HOME"] = homeDir;
+  });
+  afterEach(() => {
+    rmSync(td, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+    if (savedHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = savedHome;
+  });
+
+  it("emits single --mcp-config <path> when user overlay absent", () => {
+    // userMcpConfigPath returns null because ~/.claude/mcp.json doesn't exist.
+    expect(userMcpConfigPath()).toBeNull();
+    const argv = buildMcpConfigArgv(td);
+    expect(argv).toEqual(["--mcp-config", join(td, ".loki", "mcp-config.json")]);
+  });
+
+  it("emits both paths when user overlay present (variadic)", () => {
+    const userCfgDir = join(homeDir, ".claude");
+    const userCfg = join(userCfgDir, "mcp.json");
+    mkdirSync(userCfgDir, { recursive: true });
+    writeFileSync(userCfg, JSON.stringify({ servers: { custom: { command: "foo" } } }));
+    expect(userMcpConfigPath()).toBe(userCfg);
+    const argv = buildMcpConfigArgv(td);
+    expect(argv).toEqual([
+      "--mcp-config",
+      join(td, ".loki", "mcp-config.json"),
+      userCfg,
+    ]);
+  });
+
+  it("userMcpConfigPath returns null when HOME unset", () => {
+    delete process.env["HOME"];
+    expect(userMcpConfigPath()).toBeNull();
+  });
+});

@@ -14,6 +14,7 @@
 // alternating ["--flag", "value", ...] that the caller appends to its CLI argv.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
+import { buildMcpConfigArgv } from "./mcp_config.ts";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -168,6 +169,28 @@ export function buildAutoFlags(args: AutoFlagsArgs): string[] {
     claudeFlagSupported("--exclude-dynamic-system-prompt-sections")
   ) {
     out.push("--exclude-dynamic-system-prompt-sections");
+  }
+  // Phase D (v7.5.22): --mcp-config variadic. Emits the Loki bundle path plus
+  // optional ~/.claude/mcp.json overlay. Wrapped in try/catch so a filesystem
+  // failure (e.g. read-only targetDir) does not break flag emission for the
+  // rest of the pipeline (e.g. --include-hook-events below).
+  if (claudeFlagSupported("--mcp-config")) {
+    try {
+      const td = args.targetDir ?? process.env["TARGET_DIR"] ?? ".";
+      const mcpArgv = buildMcpConfigArgv(td);
+      out.push(...mcpArgv);
+    } catch (e) {
+      console.warn(`[claude_flags] --mcp-config emit skipped: ${(e as Error).message}`);
+    }
+  }
+  // Phase D (v7.5.22): --include-hook-events boolean. Default on; suppress with
+  // LOKI_HOOK_EVENTS=off. Requires --output-format=stream-json (wired by Dev-C
+  // in runner/providers.ts; this module only emits the flag itself).
+  if (
+    process.env["LOKI_HOOK_EVENTS"] !== "off" &&
+    claudeFlagSupported("--include-hook-events")
+  ) {
+    out.push("--include-hook-events");
   }
   return out;
 }

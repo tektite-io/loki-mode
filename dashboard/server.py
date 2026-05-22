@@ -3168,8 +3168,17 @@ def _parse_time_range(time_range: str) -> Optional[datetime]:
     return datetime.now(timezone.utc) - delta
 
 
-def _read_events(time_range: str = "7d", max_events: int = 10000) -> list:
-    """Read events from .loki/events.jsonl with time filter and size limits."""
+def _read_events(time_range: str = "7d", max_events: int = 10000, type_prefix: Optional[str] = None) -> list:
+    """Read events from .loki/events.jsonl with time filter and size limits.
+
+    Args:
+        time_range: e.g. "7d", "24h", "30m". Events older than the cutoff are dropped.
+        max_events: hard cap on the number of returned events.
+        type_prefix: when set (non-empty), only return events whose ``type`` field
+            starts with this prefix. Backward compatible: when None or empty,
+            no type filtering is applied. Used by v7.5.22 Phase D for filtering
+            ``claude_hook_*`` events without adding a new endpoint.
+    """
     events_file = _get_loki_dir() / "events.jsonl"
     if not events_file.exists():
         return []
@@ -3208,6 +3217,10 @@ def _read_events(time_range: str = "7d", max_events: int = 10000) -> list:
                                 continue
                         except (ValueError, TypeError):
                             pass  # Keep events with unparseable timestamps
+                    # Optional type-prefix filter (v7.5.22 Phase D).
+                    if type_prefix:
+                        if not str(event.get("type", "")).startswith(type_prefix):
+                            continue
                     events.append(event)
                 except json.JSONDecodeError:
                     pass
@@ -3780,13 +3793,18 @@ async def get_council_transcripts(
     limit: int = Query(default=20, ge=1, le=200),
     since: Optional[str] = Query(default=None),
     iter_min: Optional[int] = Query(default=None, ge=0),
+    type_prefix: Optional[str] = Query(default=None),
 ):
     """List council transcript records, sorted descending by iteration number.
 
     Query params:
-      limit    int, default=20, max=200
-      since    ISO8601 string (optional), filter to transcripts after this time
-      iter_min int (optional), filter to iteration >= N
+      limit       int, default=20, max=200
+      since       ISO8601 string (optional), filter to transcripts after this time
+      iter_min    int (optional), filter to iteration >= N
+      type_prefix str (optional), v7.5.22 Phase D. When set, the response also
+                  includes a ``hook_events`` array of matching .loki/events.jsonl
+                  entries whose ``type`` starts with this prefix (e.g.
+                  ``claude_hook_``). Unset -> behavior unchanged.
     """
     # Validate query params before any early-return so invalid inputs always get 400.
     since_dt = None
@@ -3798,7 +3816,10 @@ async def get_council_transcripts(
 
     transcripts_dir = _get_loki_dir() / "council" / "transcripts"
     if not transcripts_dir.exists():
-        return {"transcripts": [], "total": 0, "latest_id": None}
+        response: dict = {"transcripts": [], "total": 0, "latest_id": None}
+        if type_prefix:
+            response["hook_events"] = _read_events(type_prefix=type_prefix)
+        return response
 
     records = []
     for f in sorted(transcripts_dir.glob("iter-*.json"), reverse=True):
@@ -3827,11 +3848,15 @@ async def get_council_transcripts(
         if len(records) >= limit:
             break
 
-    return {
+    response = {
         "transcripts": records,
         "total": len(records),
         "latest_id": records[0].get("iteration_id") if records else None,
     }
+    # v7.5.22 Phase D: opt-in hook-event passthrough via _read_events filter.
+    if type_prefix:
+        response["hook_events"] = _read_events(type_prefix=type_prefix)
+    return response
 
 
 @app.get("/api/council/transcripts/{iteration_id}")

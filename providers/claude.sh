@@ -117,6 +117,14 @@ if [ -f "$_loki_claude_flags_helper" ]; then
     . "$_loki_claude_flags_helper"
 fi
 
+# Source the v7.5.22 Phase D mcp-config helper (idempotent).
+# shellcheck source=../autonomy/lib/mcp-config.sh
+_loki_mcp_config_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/autonomy/lib/mcp-config.sh"
+if [ -f "$_loki_mcp_config_helper" ]; then
+    # shellcheck disable=SC1090
+    . "$_loki_mcp_config_helper"
+fi
+
 # Build the auto-derived flag array. Caller passes tier + complexity + primary model.
 # Values that the helper returns empty are dropped (no flag emitted).
 # Honors loki_claude_flag_supported() so we never pass a flag the installed CLI lacks.
@@ -162,6 +170,36 @@ _loki_build_claude_auto_flags() {
     if [ "${LOKI_DYNAMIC_PROMPT_SECTIONS:-auto}" != "keep" ] \
        && loki_claude_flag_supported "--exclude-dynamic-system-prompt-sections"; then
         _LOKI_CLAUDE_AUTO_FLAGS+=("--exclude-dynamic-system-prompt-sections")
+    fi
+
+    # --mcp-config (Phase D, v7.5.22). Variadic flag (Commander `<configs...>`):
+    # Claude expects SEPARATE argv elements per path, not one space-joined
+    # value. Per Dev-C parity concern -- spread each path as its own argv
+    # element so bash matches Bun's shape exactly. Loki bundle first, optional
+    # user overlay (~/.claude/mcp.json) second. Skip entirely if the bundle
+    # cannot be written so we never pass malformed paths.
+    if type loki_mcp_config_argv >/dev/null 2>&1 \
+       && loki_claude_flag_supported "--mcp-config"; then
+        local _mcp_argv
+        if _mcp_argv=$(loki_mcp_config_argv) && [ -n "$_mcp_argv" ]; then
+            _LOKI_CLAUDE_AUTO_FLAGS+=("--mcp-config")
+            # Split space-separated path list into individual argv elements.
+            # Both paths come from Loki-controlled writers (loki_mcp_config_path)
+            # or HOME expansion -- whitespace in paths is not supported here.
+            local _mcp_path
+            for _mcp_path in $_mcp_argv; do
+                _LOKI_CLAUDE_AUTO_FLAGS+=("$_mcp_path")
+            done
+        fi
+    fi
+
+    # --include-hook-events (Phase D, v7.5.22). Boolean flag; only valid
+    # when --output-format=stream-json (which the claude branch in
+    # autonomy/run.sh always uses). Default-on; opt out with
+    # LOKI_HOOK_EVENTS=off.
+    if [ "${LOKI_HOOK_EVENTS:-on}" != "off" ] \
+       && loki_claude_flag_supported "--include-hook-events"; then
+        _LOKI_CLAUDE_AUTO_FLAGS+=("--include-hook-events")
     fi
 }
 

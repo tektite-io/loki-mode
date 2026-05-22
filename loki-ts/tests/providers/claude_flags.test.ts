@@ -225,4 +225,60 @@ describe("claude_flags.buildAutoFlags composition", () => {
     const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
     expect(out.includes("--exclude-dynamic-system-prompt-sections")).toBe(false);
   });
+
+  // Phase D (v7.5.22) regression tests for --mcp-config + --include-hook-events.
+  it("adds --mcp-config <path> when CLI advertises it", () => {
+    _resetClaudeHelpCacheForTest("  --mcp-config <configs...>  Load MCP servers from JSON files");
+    const savedHookEnv = process.env["LOKI_HOOK_EVENTS"];
+    process.env["LOKI_HOOK_EVENTS"] = "off"; // Isolate to mcp-config emission.
+    try {
+      const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+      const idx = out.indexOf("--mcp-config");
+      expect(idx).toBeGreaterThanOrEqual(0);
+      // Next element must be the Loki bundle path under targetDir.
+      expect(out[idx + 1]).toBe(join(td, ".loki", "mcp-config.json"));
+    } finally {
+      if (savedHookEnv === undefined) delete process.env["LOKI_HOOK_EVENTS"];
+      else process.env["LOKI_HOOK_EVENTS"] = savedHookEnv;
+    }
+  });
+
+  it("does NOT add --mcp-config when CLI does not advertise it (conservative)", () => {
+    _resetClaudeHelpCacheForTest("  --effort"); // No --mcp-config in help.
+    const savedHookEnv = process.env["LOKI_HOOK_EVENTS"];
+    process.env["LOKI_HOOK_EVENTS"] = "off";
+    try {
+      const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+      expect(out.includes("--mcp-config")).toBe(false);
+    } finally {
+      if (savedHookEnv === undefined) delete process.env["LOKI_HOOK_EVENTS"];
+      else process.env["LOKI_HOOK_EVENTS"] = savedHookEnv;
+    }
+  });
+
+  it("skips --include-hook-events when LOKI_HOOK_EVENTS=off (even if supported)", () => {
+    _resetClaudeHelpCacheForTest("  --include-hook-events  Include all hook lifecycle events");
+    const savedHookEnv = process.env["LOKI_HOOK_EVENTS"];
+    process.env["LOKI_HOOK_EVENTS"] = "off";
+    try {
+      const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+      expect(out.includes("--include-hook-events")).toBe(false);
+    } finally {
+      if (savedHookEnv === undefined) delete process.env["LOKI_HOOK_EVENTS"];
+      else process.env["LOKI_HOOK_EVENTS"] = savedHookEnv;
+    }
+  });
+
+  it("emits --include-hook-events when supported and LOKI_HOOK_EVENTS unset (default on)", () => {
+    _resetClaudeHelpCacheForTest("  --include-hook-events  Include all hook lifecycle events");
+    const savedHookEnv = process.env["LOKI_HOOK_EVENTS"];
+    delete process.env["LOKI_HOOK_EVENTS"];
+    try {
+      const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+      expect(out.includes("--include-hook-events")).toBe(true);
+    } finally {
+      if (savedHookEnv === undefined) delete process.env["LOKI_HOOK_EVENTS"];
+      else process.env["LOKI_HOOK_EVENTS"] = savedHookEnv;
+    }
+  });
 });
