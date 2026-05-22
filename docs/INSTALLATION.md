@@ -2,7 +2,7 @@
 
 The flagship product of [Autonomi](https://www.autonomi.dev/). Complete installation instructions for all platforms and use cases.
 
-**Version:** v7.5.19
+**Version:** v7.5.20
 
 ---
 
@@ -816,6 +816,38 @@ After installation:
 4. **Read Documentation:** Check out [README.md](../README.md) for usage guides
 
 5. **Join the Community:** Report issues or contribute at [GitHub](https://github.com/asklokesh/loki-mode)
+
+---
+
+## Release Operations
+
+### Token Rotation Runbook
+
+Follow this runbook when a release workflow fails to publish to npm.
+
+**Symptom:** The `publish-npm` step in `.github/workflows/release.yml` fails with:
+```
+npm error 404 Not Found - PUT https://registry.npmjs.org/loki-mode
+```
+
+A 404 on PUT means the registry rejected the credential, not that the package is missing.
+
+**Likely causes:**
+- The `NPM_TOKEN` Automation token has expired.
+- The token was revoked or its owner lost publish rights on the `loki-mode` package.
+- The npm account requires a 2FA refresh and the existing Automation token is no longer accepted.
+
+**Remediation steps:**
+1. Log in to npmjs.com as the publish account and regenerate an Automation token with publish access scoped to `loki-mode`.
+2. Open https://github.com/asklokesh/loki-mode/settings/secrets/actions
+3. Update the `NPM_TOKEN` repository secret with the new token value.
+4. Re-run the failed Release workflow: `gh run rerun <run-id>`. If re-run is not available for that run, push a no-op commit to `main` to retrigger.
+
+**Verification:**
+- Watch the new run: `gh run watch <new-run-id>` and confirm `publish-npm` and `publish-ts-sdk` succeed.
+- Confirm publish: `npm view loki-mode version` returns the new version.
+
+**Note on `publish-ts-sdk`:** This job publishes `sdk/typescript` to npm and uses the same `secrets.NPM_TOKEN` as `publish-npm` (see `.github/workflows/release.yml`). Rotating `NPM_TOKEN` fixes both jobs. The new Automation token must have publish access to both the `loki-mode` package and the TypeScript SDK package.
 
 ---
 

@@ -202,4 +202,27 @@ describe("claude_flags.buildAutoFlags composition", () => {
     // Crucially: no "--max-budget-usd" in the output
     expect(out.includes("--max-budget-usd")).toBe(false);
   });
+
+  // Phase E (v7.5.20) regression tests.
+  it("emits --exclude-dynamic-system-prompt-sections when supported (default on)", () => {
+    _resetClaudeHelpCacheForTest("  --exclude-dynamic-system-prompt-sections  Move per-machine sections");
+    delete process.env["LOKI_DYNAMIC_PROMPT_SECTIONS"];
+    const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+    expect(out.includes("--exclude-dynamic-system-prompt-sections")).toBe(true);
+  });
+
+  it("suppresses --exclude-dynamic-system-prompt-sections when LOKI_DYNAMIC_PROMPT_SECTIONS=keep", () => {
+    _resetClaudeHelpCacheForTest("  --exclude-dynamic-system-prompt-sections");
+    process.env["LOKI_DYNAMIC_PROMPT_SECTIONS"] = "keep";
+    const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+    expect(out.includes("--exclude-dynamic-system-prompt-sections")).toBe(false);
+    delete process.env["LOKI_DYNAMIC_PROMPT_SECTIONS"];
+  });
+
+  it("omits --exclude-dynamic-system-prompt-sections when CLI lacks support", () => {
+    _resetClaudeHelpCacheForTest("  --effort");
+    delete process.env["LOKI_DYNAMIC_PROMPT_SECTIONS"];
+    const out = buildAutoFlags({ tier: "development", primary: "opus", targetDir: td });
+    expect(out.includes("--exclude-dynamic-system-prompt-sections")).toBe(false);
+  });
 });

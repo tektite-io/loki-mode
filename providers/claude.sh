@@ -152,6 +152,17 @@ _loki_build_claude_auto_flags() {
             _LOKI_CLAUDE_AUTO_FLAGS+=("--fallback-model" "$fb")
         fi
     fi
+
+    # --exclude-dynamic-system-prompt-sections (Phase E, v7.5.20).
+    # Move per-machine sections (cwd, env, memory paths, git status) from the
+    # system prompt into the first user message. Improves cross-user prompt-cache
+    # reuse. Boolean flag: pass it OR do not, no value. Default ON when supported.
+    # Suppress with LOKI_DYNAMIC_PROMPT_SECTIONS=keep (for users who want the
+    # old behavior; the only opt-out lever for this flag).
+    if [ "${LOKI_DYNAMIC_PROMPT_SECTIONS:-auto}" != "keep" ] \
+       && loki_claude_flag_supported "--exclude-dynamic-system-prompt-sections"; then
+        _LOKI_CLAUDE_AUTO_FLAGS+=("--exclude-dynamic-system-prompt-sections")
+    fi
 }
 
 # Invocation function (basic, no tier).

@@ -9,6 +9,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.20] - 2026-05-22
+
+PATCH release. Phase E of the v7.5.18 -> v7.5.27 arc, plus the v7.5.19 Phase A
+follow-up patch (3 gemini refs the integration agent missed in `src/`).
+
+Phase E wires Claude Code's `--exclude-dynamic-system-prompt-sections` flag
+into Loki's provider invocation. Per-machine sections (cwd, env, memory paths,
+git status) move from the system prompt into the first user message. This
+improves cross-iteration and cross-user prompt cache reuse because the system
+prompt becomes stable. Default-on when the installed Claude CLI supports the
+flag. Suppress with `LOKI_DYNAMIC_PROMPT_SECTIONS=keep`. No new CLI subcommand.
+No new opt-in env var unless the user wants the old behavior.
+
+### Added
+
+- **`providers/claude.sh::_loki_build_claude_auto_flags`** -- appends
+  `--exclude-dynamic-system-prompt-sections` (boolean flag, no value) when
+  the installed Claude CLI advertises the flag AND
+  `LOKI_DYNAMIC_PROMPT_SECTIONS` is not set to `keep`. Default behavior is
+  "on when supported" -- nothing to enable.
+- **`loki-ts/src/providers/claude_flags.ts::buildAutoFlags`** -- mirror in
+  the Bun route. Same gate semantics, same opt-out lever.
+- **`tests/test-claude-flags.sh`** -- 3 new bash assertions: flag included
+  when help advertises it (default-on), flag suppressed when
+  `LOKI_DYNAMIC_PROMPT_SECTIONS=keep`, flag omitted when the CLI lacks
+  support. Total now 29/29 PASS.
+- **`loki-ts/tests/providers/claude_flags.test.ts`** -- 3 new Bun
+  assertions mirroring the bash side. Total now 29/29 PASS.
+
+### Fixed
+
+- **`src/integrations/github/action-handler.js`** -- `ALLOWED_PROVIDERS`
+  was still `['claude', 'codex', 'gemini']` after Phase A; the
+  `LABEL_CONFIG_MAP` still had `loki-provider-gemini`. Updated to
+  `['claude', 'codex', 'cline', 'aider']` and replaced the gemini label
+  with `loki-provider-cline` + `loki-provider-aider`. Was failing 3 tests
+  in the GitHub Actions Tests workflow run 26307961906 on the v7.5.19
+  push. Root cause: Phase A integration patched `autonomy/loki` but
+  missed the GitHub-integration handler under `src/`.
+- **`src/protocols/tools/start-project.js`** -- `provider` enum was still
+  `['claude', 'codex', 'gemini']`; updated to
+  `['claude', 'codex', 'cline', 'aider']`. Same root cause as above.
+- **`Dockerfile`** -- `LABEL description` mentioned "Gemini CLI"; updated
+  to "Cline, and Aider".
+- **`package.json`** -- description mentioned "5 AI providers (Claude
+  Code, OpenAI Codex, Google Gemini, Cline, Aider)"; updated to
+  "4 AI providers (Claude Code, OpenAI Codex, Cline, Aider)".
+- **`SKILL.md`** -- deprecation marker line incorrectly read "DEPRECATED
+  starting v7.5.19" (the v7.5.19 release commit erroneously bumped this
+  historical marker). Restored to the factual "DEPRECATED starting
+  v7.5.18" since Phase A actually shipped in v7.5.18.
+
+### Verified locally before commit
+
+- `bash tests/test-claude-flags.sh` -- 29/29 PASS (was 26, +3 Phase E
+  assertions).
+- `cd loki-ts && bun test tests/providers/claude_flags.test.ts` -- 29/29
+  PASS (was 26, +3 Phase E assertions).
+- `node --test tests/integrations/github/action-handler.test.js` --
+  25/25 PASS (was failing 3 before this commit on the v7.5.19 codebase).
+
+### NOT tested (honest disclosures)
+
+- The cache-reuse benefit from `--exclude-dynamic-system-prompt-sections`
+  is asserted by Anthropic in their docs; we have not measured the
+  cache_read_input_tokens delta on Loki's workload yet. Plan E's
+  measurement probe (10-iteration before/after run) lands in a follow-up
+  patch after Phase D ships hook events. CHANGELOG does not claim a
+  percentage until measured.
+- We did not run a live `claude -p` against the real CLI to confirm the
+  flag is consumed silently when supported. The flag-support check is
+  conservative (only emits when `claude --help` mentions it), so an
+  unsupported version sees nothing. But we have not e2e-verified the
+  successful invocation path against the live `claude` binary for
+  v7.5.20 specifically.
+
+### Migration
+
+- **No action required for users on Claude CLI versions that support
+  the flag**: the flag is passed automatically, behavior should be
+  identical or better (warmer prompt cache).
+- **Users who want the old behavior**: set
+  `LOKI_DYNAMIC_PROMPT_SECTIONS=keep` in their shell or `.env`.
+  Documented in `providers/claude.sh:160-163`.
+
 ## [7.5.19] - 2026-05-23
 
 PATCH release. Phase B of the v7.5.18 -> v7.5.27 arc. Wires three Claude

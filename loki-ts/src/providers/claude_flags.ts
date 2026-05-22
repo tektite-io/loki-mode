@@ -160,6 +160,15 @@ export function buildAutoFlags(args: AutoFlagsArgs): string[] {
     const fb = fallbackForPrimary(args.primary);
     if (fb !== null) out.push("--fallback-model", fb);
   }
+  // Phase E (v7.5.20): --exclude-dynamic-system-prompt-sections.
+  // Boolean flag (no value). Default on when supported; suppress with
+  // LOKI_DYNAMIC_PROMPT_SECTIONS=keep.
+  if (
+    (process.env["LOKI_DYNAMIC_PROMPT_SECTIONS"] ?? "auto") !== "keep" &&
+    claudeFlagSupported("--exclude-dynamic-system-prompt-sections")
+  ) {
+    out.push("--exclude-dynamic-system-prompt-sections");
+  }
   return out;
 }
 

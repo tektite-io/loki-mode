@@ -112,6 +112,41 @@ v=$(LOKI_ALLOW_HAIKU=true loki_fallback_for_primary haiku)
 v=$(loki_fallback_for_primary claude-opus-4-7)
 [ -z "$v" ] && ok "fallback dated id -> empty (no auto-fallback)" || bad "fallback dated got [$v]"
 
+# ---------- Phase E: --exclude-dynamic-system-prompt-sections via auto-flags ----------
+# Source the provider helper so we can call _loki_build_claude_auto_flags.
+# shellcheck disable=SC1090
+. "$REPO_ROOT/providers/claude.sh" 2>/dev/null
+
+# Fake claude --help text to control flag detection
+export __LOKI_CLAUDE_HELP_CACHE="  --exclude-dynamic-system-prompt-sections  Move per-machine sections"
+_loki_build_claude_auto_flags "development" "standard" "opus"
+joined="${_LOKI_CLAUDE_AUTO_FLAGS[*]}"
+if [[ "$joined" == *"--exclude-dynamic-system-prompt-sections"* ]]; then
+    ok "Phase E: flag included when supported (default on)"
+else
+    bad "Phase E: flag missing when supported, got [$joined]"
+fi
+
+# Suppress with LOKI_DYNAMIC_PROMPT_SECTIONS=keep
+LOKI_DYNAMIC_PROMPT_SECTIONS=keep _loki_build_claude_auto_flags "development" "standard" "opus"
+joined="${_LOKI_CLAUDE_AUTO_FLAGS[*]}"
+if [[ "$joined" != *"--exclude-dynamic-system-prompt-sections"* ]]; then
+    ok "Phase E: flag suppressed when LOKI_DYNAMIC_PROMPT_SECTIONS=keep"
+else
+    bad "Phase E: flag should be suppressed, got [$joined]"
+fi
+
+# Omit when CLI lacks support
+export __LOKI_CLAUDE_HELP_CACHE="  --effort"
+_loki_build_claude_auto_flags "development" "standard" "opus"
+joined="${_LOKI_CLAUDE_AUTO_FLAGS[*]}"
+if [[ "$joined" != *"--exclude-dynamic-system-prompt-sections"* ]]; then
+    ok "Phase E: flag omitted when CLI lacks support"
+else
+    bad "Phase E: flag should be omitted when unsupported, got [$joined]"
+fi
+unset __LOKI_CLAUDE_HELP_CACHE
+
 # ---------- loki_claude_flag_supported ----------
 if command -v claude >/dev/null 2>&1; then
     if loki_claude_flag_supported "--effort"; then
