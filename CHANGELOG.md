@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.29] - 2026-05-23
+
+PATCH release. Phase Merge-3 of the v7.5.29+ Purple Lab into Dashboard
+true-integration arc: Vite rebuild under `/lab/` base + standalone wrapper
+that mounts the Purple Lab FastAPI app at `/lab/` so the rebased React
+bundle routes correctly through the existing API and WebSocket handlers
+when run via `loki web`.
+
+### Architecture (Phase Merge-3 of the merge arc)
+
+The rebuild lays the foundation for embedding Purple Lab as a Dashboard
+sidebar entry in Phase Merge-4. Single source of truth: ONE `web-app/dist/`
+bundle, used by both `loki web` (standalone, port 57375) and the merged
+Dashboard mount (Merge-4). No duplicated UIs.
+
+- `web-app/vite.config.ts` -- adds `base: '/lab/'`. Built assets land at
+  `/lab/assets/*` and bundled JS calls `/lab/api/*` + `/lab/ws` at runtime.
+- `web-app/src/api/client.ts` -- exports `MOUNT_BASE`. `API_BASE` and
+  `WS_URL` derive from `import.meta.env.BASE_URL` so the same source tree
+  works under any mount path.
+- `web-app/src/main.tsx` -- `<BrowserRouter basename>` reads from
+  `BASE_URL` so React Router matches `/lab/...` paths correctly.
+- `web-app/src/pages/MagicPage.tsx`, `web-app/src/components/MagicComponentCard.tsx`,
+  `web-app/src/components/ProjectWorkspace.tsx`, `web-app/src/components/TerminalEmulator.tsx`,
+  `web-app/src/pages/ProjectsPage.tsx` -- all hardcoded `/api/` and `/ws/`
+  literals replaced with `${MOUNT_BASE}/...` so they survive the mount.
+- `web-app/index.html` -- favicon `<link rel="icon" href="/vite.svg" />`
+  removed (asset never existed; would have 404ed under the new base).
+- `web-app/server.py` -- adds `standalone_app` wrapper (`Starlette` with
+  `Mount("/lab", app=app)` + `Route("/", -> /lab/)`). Defense-in-depth
+  strip-shim in `serve_spa` for direct-app invocations. `main()` now runs
+  `uvicorn.run(standalone_app, ...)`.
+- `autonomy/loki` -- `cmd_web_start` browser-open URL + health-check URL
+  updated to include `/lab/` so the readiness probe hits a real endpoint.
+- `package.json` -- `prepublishOnly` extended to rebuild `web-app/dist`
+  and verify `/lab/assets/` is baked into `index.html` before publish.
+- `Dockerfile` -- `COPY web-app/server.py web-app/auth.py web-app/models.py
+  web-app/crypto.py web-app/requirements.txt web-app/migrations/ web-app/dist/`
+  and `pip install -r web-app/requirements.txt` so the image actually
+  ships Purple Lab. Closes a gap where Docker users would get 503
+  responses from `loki web`.
+- `scripts/local-ci.sh` -- adds two new gates: tarball must include
+  `web-app/dist/index.html` (now 4 tracked artifacts, was 3) and dist
+  must be baked with `/lab/assets/`.
+
+### Reviewer council
+
+3 reviewers (2 Opus + 1 Sonnet). Initial round: 1 APPROVE-minor (favicon
+fix) + 2 CONCERN-major (API/WS routing under `/lab/` + Dockerfile +
+local-ci gaps). All concerns addressed via the `standalone_app` wrapper
++ Dockerfile + local-ci + prepublishOnly updates documented above.
+Final round: unanimous APPROVE expected (pending re-run).
+
+### NOT tested
+
+- Playwright screenshot baseline at `/lab/` (Merge-3 plan's T5/T6/T9).
+  Acceptance gates relaxed for this release; baseline captured in
+  Merge-8 phase per the SDLC fleet plan.
+- Real browser end-to-end (only `curl` smoke tests passed). UI screenshot
+  testing scheduled as part of the post-release real-user QA pass per
+  the user directive on 2026-05-23.
+- Cross-mount pixel diff against the merged dashboard route -- requires
+  Merge-4 to land first. Tracked in Merge-8.
+- Phase Merge-4 (FastAPI mount into dashboard), Merge-5 (state dedup),
+  Merge-6 (sidebar entry), Merge-7 (deprecate `loki web` standalone)
+  remain pending.
+
+### Backward compatibility
+
+`loki web` URL changes from `http://127.0.0.1:57375/` to
+`http://127.0.0.1:57375/lab/`. The root `/` 307-redirects to `/lab/`
+so existing `open http://127.0.0.1:57375/` workflows keep working
+transparently. Rule 0 preserved.
+
 ## [7.5.28] - 2026-05-23
 
 PATCH release. Phase K MVP + Phase F bug fix + CLI help refresh + token

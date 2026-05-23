@@ -3783,7 +3783,7 @@ cmd_web_start() {
         existing_pid=$(cat "$PURPLE_LAB_PID_FILE" 2>/dev/null)
         if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
             echo -e "${GREEN}Purple Lab already running (PID: $existing_pid)${NC}"
-            local url="http://${PURPLE_LAB_DEFAULT_HOST}:${port}"
+            local url="http://${PURPLE_LAB_DEFAULT_HOST}:${port}/lab/"
             echo -e "Open: ${CYAN}$url${NC}"
             if [ "$open_browser" = true ]; then
                 if command -v open &> /dev/null; then
@@ -3842,7 +3842,7 @@ cmd_web_start() {
     local retries=0
     local server_ready=false
     while [ $retries -lt 15 ]; do
-        if curl -s "http://${PURPLE_LAB_DEFAULT_HOST}:${port}/api/session/status" > /dev/null 2>&1; then
+        if curl -s "http://${PURPLE_LAB_DEFAULT_HOST}:${port}/lab/api/session/status" > /dev/null 2>&1; then
             server_ready=true
             break
         fi
@@ -3857,7 +3857,7 @@ cmd_web_start() {
         exit 1
     fi
 
-    local url="http://${PURPLE_LAB_DEFAULT_HOST}:${port}"
+    local url="http://${PURPLE_LAB_DEFAULT_HOST}:${port}/lab/"
 
     if [ "$server_ready" = true ]; then
         echo -e "${GREEN}Purple Lab running at: $url${NC} (PID: $pid)"

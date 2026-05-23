@@ -208,7 +208,13 @@ fi
 # ---------------------------------------------------------------------------
 # 10. Pre-publish 3a: npm pack tarball includes expected files
 # ---------------------------------------------------------------------------
-run_check "npm pack tarball contents" 'npm pack --dry-run 2>&1 | grep -E "loki-ts/dist/loki.js|bin/loki|dashboard/static/index.html" | wc -l | grep -qE "[3-9]|[1-9][0-9]"'
+run_check "npm pack tarball contents" 'npm pack --dry-run 2>&1 | grep -E "loki-ts/dist/loki.js|bin/loki|dashboard/static/index.html|web-app/dist/index.html" | wc -l | grep -qE "[4-9]|[1-9][0-9]"'
+
+# ---------------------------------------------------------------------------
+# 10b. Phase Merge-3: web-app dist must be built with base: '/lab/'
+# ---------------------------------------------------------------------------
+run_check "web-app dist baked with /lab/ base" 'test -f web-app/dist/index.html && grep -q "/lab/assets/" web-app/dist/index.html'
+run_check "no hardcoded /api/ or /ws literals in web-app/src/" '! grep -rnE "['"'"'\"]/(api|ws|proxy)/" web-app/src/ --include="*.ts" --include="*.tsx" 2>/dev/null | grep -v "\.test\." | grep -q .'
 
 # ---------------------------------------------------------------------------
 # 11. SBOM workflow equivalent (mirrors sbom.yml)
