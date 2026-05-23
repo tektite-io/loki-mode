@@ -73,6 +73,7 @@
     "bin/",
     "bin/loki",
     "loki-ts/dist/",
+    "loki-ts/data/",
     "loki-ts/package.json",
     "api/",
     "events/",

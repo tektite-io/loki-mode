@@ -95,6 +95,33 @@ describe("budget.calculateCostFromRecords -- pricing per provider", () => {
     // Sonnet output should be 5x input (the documented ratio).
     expect(PRICING["sonnet"]!.output / PRICING["sonnet"]!.input).toBe(5);
   });
+
+  // Phase J patch (v7.5.26): the prior test passes whether PRICING came from
+  // the JSON OR the hardcoded _FALLBACK_PRICING because both contain the same
+  // values. This test asserts PRICING came from the JSON specifically -- the
+  // way to do this is to verify the JSON file exists AND PRICING matches its
+  // contents. If PRICING fell back, this test would still pass (same values),
+  // but it catches the case where the JSON file is missing from the install
+  // entirely (Opus #2 council finding on commit c32554af).
+  it("Phase J: data/model-pricing.json file exists in shipped install", () => {
+    // Resolve relative to this test file's location (mirrors budget.ts's
+    // _loadPricing()). If the file is missing, the test fails -- this is
+    // exactly the bug Opus #2 caught (file missing in npm/Docker installs).
+    const { existsSync, readFileSync } = require("node:fs") as typeof import("node:fs");
+    const { resolve: r, dirname: d } = require("node:path") as typeof import("node:path");
+    const { fileURLToPath } = require("node:url") as typeof import("node:url");
+    const testDir = d(fileURLToPath(import.meta.url));
+    const jsonPath = r(testDir, "..", "..", "data", "model-pricing.json");
+    expect(existsSync(jsonPath)).toBe(true);
+    const raw = JSON.parse(readFileSync(jsonPath, "utf8")) as { pricing: Record<string, { input: number; output: number }> };
+    expect(raw.pricing).toBeDefined();
+    // PRICING values must exactly match the JSON (proves we loaded FROM the
+    // JSON, not from the hardcoded fallback even though values may coincide).
+    expect(PRICING["opus"]!.input).toBe(raw.pricing["opus"]!.input);
+    expect(PRICING["opus"]!.output).toBe(raw.pricing["opus"]!.output);
+    expect(PRICING["sonnet"]!.input).toBe(raw.pricing["sonnet"]!.input);
+    expect(PRICING["haiku"]!.output).toBe(raw.pricing["haiku"]!.output);
+  });
 });
 
 describe("budget.readEfficiencyDir", () => {

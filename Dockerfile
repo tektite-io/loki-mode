@@ -104,11 +104,15 @@ COPY --chown=loki:loki templates/ ./templates/
 COPY --chown=loki:loki integrations/ ./integrations/
 COPY --chown=loki:loki completions/ ./completions/
 
-# Bun runtime artifacts: shim + pre-built TypeScript bundle.
+# Bun runtime artifacts: shim + pre-built TypeScript bundle + rolling data.
 # loki-ts/dist/loki.js is built by `bun run build` (see loki-ts/scripts/build.ts)
 # and committed to the repo; ~37 KiB minified.
+# loki-ts/data/ holds rolling tables (e.g. model-pricing.json) that budget.ts
+# reads at runtime -- shipping the dir keeps the JSON-as-source-of-truth
+# contract intact across Docker installs.
 COPY --chown=loki:loki bin/ ./bin/
 COPY --chown=loki:loki loki-ts/dist/ ./loki-ts/dist/
+COPY --chown=loki:loki loki-ts/data/ ./loki-ts/data/
 
 # Install dashboard Python dependencies
 RUN pip3 install --no-cache-dir --break-system-packages \
