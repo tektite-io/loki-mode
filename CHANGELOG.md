@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.2] - 2026-05-24
+
+PATCH release. B-5 fix: provider precedence is now documented and surfaced
+in `loki status --json` so users can verify why a value was chosen.
+
+### Added
+
+- `loki status --json` and `loki status --json` (Bun route) both include
+  a new `provider_source` field with values `"saved"`, `"env"`, or
+  `"default"` indicating where the active provider came from.
+- `loki provider <unknown>` help text now includes a "Precedence" section
+  listing the 4-level resolution order: CLI flag > saved > env > default.
+- `wiki/Providers.md` gains a "Provider precedence (v7.7.2)" section
+  with the same table + a note that `loki status` shows the SAVED value,
+  not env.
+
+### Verified
+
+- env-only -> `provider: codex, provider_source: env`
+- saved + env -> `provider: cline, provider_source: saved` (saved wins)
+- neither -> `provider: claude, provider_source: default`
+- bash + Bun `loki status --json` byte-identical after the parity fix
+- 23/23 local-ci PASS
+
+### NOT tested in this release
+
+- `loki start --provider NAME` (CLI flag) override case for
+  `provider_source: "cli"` -- the CLI flag short-circuits the loki start
+  flow before status emission, so this source value is currently
+  unreachable from `loki status`. Documented but not surfaced. Will be
+  wired in v7.7.3 when CLI flag context propagates to status.
+
 ## [7.7.1] - 2026-05-24
 
 PATCH release. F-1 follow-up: USAGE.md surfaced in Dashboard UI.

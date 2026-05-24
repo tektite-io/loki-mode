@@ -2285,7 +2285,8 @@ if not os.path.isdir(loki_dir):
     result['status'] = 'inactive'
     result['phase'] = None
     result['iteration'] = 0
-    result['provider'] = env_provider
+    result['provider'] = env_provider if os.environ.get('LOKI_PROVIDER', '') else 'claude'
+    result['provider_source'] = 'env' if os.environ.get('LOKI_PROVIDER', '') else 'default'
     result['dashboard_url'] = None
     result['pid'] = None
     result['elapsed_time'] = 0
@@ -2343,13 +2344,27 @@ else:
         result['phase'] = None
         result['iteration'] = 0
 
-# Provider
+# Provider + provider_source (v7.7.2 B-5 clarity: surface WHY this
+# value won the resolution race: 'saved' vs 'env' vs 'default').
 provider_file = os.path.join(loki_dir, 'state', 'provider')
 if os.path.isfile(provider_file):
-    with open(provider_file) as f:
-        result['provider'] = f.read().strip()
+    try:
+        with open(provider_file) as f:
+            saved = f.read().strip()
+    except OSError:
+        saved = ''
 else:
+    saved = ''
+env_set = os.environ.get('LOKI_PROVIDER', '') != ''
+if saved:
+    result['provider'] = saved
+    result['provider_source'] = 'saved'
+elif env_set:
     result['provider'] = env_provider
+    result['provider_source'] = 'env'
+else:
+    result['provider'] = 'claude'
+    result['provider_source'] = 'default'
 
 # PID
 pid_file = os.path.join(loki_dir, 'loki.pid')
@@ -2816,6 +2831,15 @@ cmd_provider() {
             echo "  list     List available providers"
             echo "  info     Show provider details"
             echo "  models   Show resolved model configuration for all providers"
+            echo ""
+            echo "Precedence (v7.7.2 -- highest wins):"
+            echo "  1. loki start --provider NAME         CLI flag (per-invocation)"
+            echo "  2. .loki/state/provider               saved value (per-project)"
+            echo "  3. LOKI_PROVIDER env var              shell session default"
+            echo "  4. claude                             built-in default"
+            echo ""
+            echo "  Note: 'loki status' reflects the SAVED provider, not the env var."
+            echo "  Run 'loki provider set <name>' to make a project-level choice persist."
             echo ""
             echo "Examples:"
             echo "  loki provider show"
