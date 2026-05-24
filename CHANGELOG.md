@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.8] - 2026-05-24
+
+PATCH release. v7.7.0 LSP acceptance criterion #5: system prompt now
+instructs agents WHEN to call the LSP grounding tools.
+
+### Added
+
+- `LSP_GROUNDING_INSTRUCTION` in both bash (`autonomy/run.sh:9405`) and
+  TS (`loki-ts/src/runner/build_prompt.ts:222`) prompt templates. The
+  instruction tells agents: (1) before writing any reference to a symbol
+  not already read, call `lsp_check_exists`; (2) after editing a file,
+  call `lsp_get_diagnostics`; (3) for name-based definition lookup, call
+  `lsp_find_definition_by_name`. Skip silently when LSP server absent.
+- Injected in all 6 prompt-stitch sites (4 legacy `echo` modes + 2
+  static-first paths -- degraded + full). Cache-stable: lives in the
+  cache prefix so first-call cost is paid once.
+
+### Verified
+
+- Bash + TS prompt outputs both contain the LSP_GROUNDING line
+- 60/60 build_prompt parity fixtures regenerated and pass (bash + TS
+  byte-identical)
+- 23/23 local-ci PASS
+- The instruction text references the exact MCP tool names registered
+  by mcp/lsp_proxy.py so agents can invoke them without guessing
+
+### NOT tested in this release
+
+- Whether real agents actually call `lsp_check_exists` in practice
+  (the instruction is in the prompt; behavior change requires running
+  real sessions with the lsp-proxy MCP server active + a fabricated-
+  symbol test case)
+- The 30% retry-reduction benchmark from v7.7.0 acceptance #2 is still
+  pending (UT2-5)
+
 ## [7.7.7] - 2026-05-24
 
 PATCH release. Real-user end-to-end validation surfaced 3 bugs in the
