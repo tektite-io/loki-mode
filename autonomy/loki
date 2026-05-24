@@ -8247,6 +8247,33 @@ cmd_demo() {
 
 # Quick mode - lightweight single-task execution
 cmd_quick() {
+    # v7.6.3 B-11 fix: --help previously fell through to provider invocation
+    # (task_desc="--help") which hung the CLI for 10+ seconds. Explicit guard.
+    case "${1:-}" in
+        --help|-h|help)
+            echo -e "${BOLD}Loki Mode -- quick lightweight execution${NC}"
+            echo ""
+            echo "Usage: loki quick \"description of what to do\""
+            echo ""
+            echo "Runs Loki with a lightweight execution profile: 3 iterations max,"
+            echo "no quality council, no completion gate. Best for tiny tasks."
+            echo ""
+            echo "Examples:"
+            echo "  loki quick \"add dark mode to this React app\""
+            echo "  loki quick \"fix the login bug in auth.js\""
+            echo "  loki quick \"add input validation to the signup form\""
+            echo "  loki quick \"write unit tests for the API endpoints\""
+            echo ""
+            echo "Options:"
+            echo "  --help, -h    Show this help and exit"
+            echo ""
+            echo "Environment:"
+            echo "  LOKI_MAX_ITERATIONS    Override the default 3-iteration cap"
+            echo ""
+            echo "See also: loki start (full RARV cycle), loki run (alias for start)"
+            return 0
+            ;;
+    esac
     if [ $# -eq 0 ]; then
         echo -e "${RED}Error: No task description provided${NC}"
         echo ""

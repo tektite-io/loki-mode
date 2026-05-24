@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.6.3] - 2026-05-23
+
+PATCH release. B-11 fix.
+
+### Fixed
+
+- **B-11**: `loki quick --help` hung for 10+ seconds because the no-args
+  guard at `cmd_quick` only checked `$# -eq 0`, then fell through to
+  provider invocation with `task_desc="--help"`. Added explicit
+  `--help|-h|help` guard at function entry. Now returns in ~0.4s with
+  proper help text.
+
+### Verified
+
+- `time loki quick --help` -> ~0.4s, exit 0, "Usage:" + examples printed
+- 23/23 local-ci PASS
+
+### NOT tested in this release
+
+- Whether other `cmd_X` functions have the same fall-through-then-invoke
+  pattern (audit deferred to v7.6.4+)
+
 ## [7.6.2] - 2026-05-23
 
 PATCH release. Critical real-user bug fixes surfaced by a live `loki start`
