@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.5] - 2026-05-24
+
+PATCH release. URGENT bug fixes from a real user-reported v7.7.3 session
+that flooded the agent output with `mv` errors and crashed the dashboard
+mid-iteration.
+
+### Fixed (BOTH CRITICAL real-user impact)
+
+- **`mv` rename race in `write_dashboard_state`**: `.loki/dashboard-state.json.tmp`
+  was reused across concurrent background writers. When two processes
+  raced, one would clobber the other's content, then the loser's mv would
+  fail with `No such file or directory` because the winner already moved
+  the shared .tmp away. This flooded the agent's Bash tool output with
+  dozens of `mv: rename .loki/dashboard-state.json.tmp ...` errors per
+  iteration, breaking readability and confusing the agent. **Fix**: tmp
+  file now uses PID + RANDOM suffix (`${output_file}.tmp.$$.$RANDOM`) so
+  each process has its own unique tmp. Belt-and-suspenders: `mv` stderr
+  silenced + cleanup on any residual failure.
+
+- **Dashboard PID still killed by `kill_provider_child`** (v7.6.2 fix
+  incomplete): v7.6.2 added a protected-PID list but only read `*.pid`
+  files. The canonical `register_pid` helper (run.sh:873) writes
+  `*.json` files named `<PID>.json` -- the dashboard's PID was registered
+  as JSON and missed the protection set, so it got SIGKILL'd by the
+  provider cascade. User saw `Killed: 9` for the dashboard within
+  seconds of `loki start`. **Fix**: `kill_provider_child` now reads
+  BOTH `*.pid` files (legacy) AND `*.json` files (canonical registry,
+  filename IS the PID). Validates numeric + alive before adding.
+
+### Verified
+
+- `bash -n autonomy/run.sh` clean
+- 23/23 local-ci PASS
+- Code path inspection confirms register_pid's JSON registry now feeds
+  protected_pids correctly
+- The PID-suffixed tmp file design is the same pattern Python's
+  `tempfile.NamedTemporaryFile` uses; eliminates the race by design
+
+### NOT tested in this release
+
+- End-to-end real `loki start` session showing both fixes hold under
+  load (would cost ~$1.50 + ~3 minutes); the user's prior session
+  reproduced both bugs deterministically -- this release should make
+  them go away. Validate on next user run.
+
 ## [7.7.4] - 2026-05-24
 
 PATCH release. Documents-only ship: standing SDLC fleet pattern from

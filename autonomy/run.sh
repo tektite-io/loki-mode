@@ -3575,10 +3575,17 @@ except: print('{\"total\":0,\"unacknowledged\":0}')
 " 2>/dev/null || echo '{"total":0,"unacknowledged":0}')
     fi
 
-    # Write comprehensive JSON state (atomic via temp file + mv)
+    # Write comprehensive JSON state (atomic via temp file + mv).
+    # v7.7.5 fix: previously used `${output_file}.tmp` (no PID suffix). When two
+    # background processes both called write_dashboard_state concurrently, they
+    # raced on the same .tmp filename -- one would clobber the other's content,
+    # the loser's `mv` would fail with "No such file or directory" because the
+    # winner already moved the shared .tmp away. This flooded the agent output
+    # with `mv: rename .loki/dashboard-state.json.tmp ...` errors and made
+    # Loki sessions appear broken. Now each process gets a unique tmp suffix.
     local project_name=$(basename "$(pwd)")
     local project_path=$(pwd)
-    local _tmp_state="${output_file}.tmp"
+    local _tmp_state="${output_file}.tmp.$$.$RANDOM"
 
     # BUG #49 fix: Escape project path/name for JSON to handle special chars
     # (spaces, quotes, backslashes in directory names)
@@ -3643,7 +3650,12 @@ except: print('null')
   "notifications": $notification_summary
 }
 EOF
-    mv "$_tmp_state" "$output_file"
+    # v7.7.5 fix: silence mv stderr so any residual race (different process
+    # already swapped a newer file in) doesn't flood the agent output. The
+    # PID-suffixed tmp eliminates the race; the 2>/dev/null is belt-and-
+    # suspenders. `|| rm -f "$_tmp_state" 2>/dev/null` cleans up the tmp
+    # on the rare failure rather than leaking it.
+    mv "$_tmp_state" "$output_file" 2>/dev/null || rm -f "$_tmp_state" 2>/dev/null
 }
 
 #===============================================================================
@@ -11727,16 +11739,33 @@ LOKI_PROVIDER_ACTIVE=0
 kill_provider_child() {
     local killed=0
     local protected_pids=""
-    # Build list of PIDs that MUST survive a provider kill (dashboard, app-runner,
-    # status monitor, resource monitor). These are recorded as PID files when
-    # cmd_dashboard_start / cmd_api_start spawn them.
+    # v7.7.5 follow-up: previously this only read `*.pid` files, but the
+    # canonical registry (`register_pid` in run.sh:873) writes `*.json` files
+    # named `<PID>.json`. The dashboard PID was registered as JSON and thus
+    # not protected; provider kill cascade caught it. Now reads BOTH:
+    # *.pid files (legacy + .loki/dashboard/dashboard.pid) AND *.json files
+    # (the canonical pid registry, where the JSON filename IS the PID).
     local pid_root="${TARGET_DIR:-.}/.loki/pids"
     if [ -d "$pid_root" ]; then
         local pid_file pid
+        # Legacy / external `.pid` files: content is the PID
         for pid_file in "$pid_root"/*.pid; do
             [ -f "$pid_file" ] || continue
             pid=$(cat "$pid_file" 2>/dev/null | head -1 | tr -d '[:space:]')
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                protected_pids="${protected_pids} ${pid}"
+            fi
+        done
+        # Canonical `register_pid` registry: filename `<PID>.json` IS the PID.
+        for pid_file in "$pid_root"/*.json; do
+            [ -f "$pid_file" ] || continue
+            pid=$(basename "$pid_file" .json)
+            # Verify numeric + alive before adding (basename may be non-numeric
+            # if some other consumer wrote a non-PID JSON file here).
+            case "$pid" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            if kill -0 "$pid" 2>/dev/null; then
                 protected_pids="${protected_pids} ${pid}"
             fi
         done
