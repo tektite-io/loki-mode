@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.14] - 2026-05-27
+
+PATCH release. **Critical LSP regression fix** that has been silently
+broken since v7.7.0. `lsp_get_diagnostics` returned an empty array
+unconditionally because `LSPClient` had no notification reader thread
+and `request()`'s busy-read loop dropped every `publishDiagnostics`
+notification. Surfaced by codebase audit (see `/Users/lokesh/git/loki-
+plan/AUTONOMI-100M-STRATEGY.md` section 1.1 and `docs/plans/UT2-6-LSP-
+DIAGNOSTIC-BROADCAST.md` section 3).
+
+### Fixed
+
+- **`mcp/lsp_proxy.py::LSPClient`**: spawned a dedicated notification
+  reader thread (daemon) at the end of `start()` that owns
+  `proc.stdout` and routes JSON-RPC responses to per-request `Queue`
+  instances keyed by request id. `request()` now writes to stdin and
+  parks on its Queue with timeout, instead of reading stdout directly
+  (which dropped notifications). `textDocument/publishDiagnostics`
+  notifications populate `self.pending_diagnostics: Dict[uri, list]`.
+- **Reader thread lifecycle**: re-spawn after subprocess crash now
+  cleanly stops + joins the old reader, closes stale stdout to unblock
+  the read, drains any pending request waiters with an error sentinel,
+  and clears `pending_diagnostics` + `_opened_uris` + `_initialized`.
+  No thread leak.
+- **Silent reader death drain**: on any reader exit path (stop signal,
+  EOF, exception), the `finally` block drains all outstanding request
+  waiters with `{'error': {'message': 'LSP reader thread exited: ...',
+  'request_id': rid}}` so callers fail fast (was: hang full 5s timeout)
+  and logs a warning with exit reason + drained count.
+- **`lsp_get_diagnostics` consumer**: poll budget bumped from 250ms
+  (5×50ms) to 1s (20×50ms) matching the docstring claim. Removed
+  defensive `hasattr` fallback now that `pending_diagnostics` is
+  guaranteed on the class.
+
+### Added
+
+- `tests/test-lsp-diagnostics-regression.sh`: 5/5 PASS including
+  structural check, end-to-end fake-LSP publishDiagnostics flow via
+  reader thread, request routing via per-id Queue, reader-death drain
+  test (kills subprocess mid-request, asserts error returned <1.5s
+  instead of hanging full 5s+), re-spawn thread-leak test (asserts
+  old reader replaced by new on subprocess crash).
+
+### Verified
+
+- Council: 2 Opus + 1 Sonnet unanimous APPROVE. Opus 2 initial CONCERN
+  on (a) re-spawn thread leak and (b) silent reader death → both
+  remediated with reproducer tests → re-review APPROVE.
+- Test 5/5 PASS locally; AST clean; bash -n clean.
+
+### NOT tested
+
+- Live pyright/typescript-language-server/gopls/rust-analyzer/jdtls
+  end-to-end with real diagnostics (LSP binaries not all on local
+  PATH; synthetic fake-LSP subprocess in test proves the wire protocol
+  routing works correctly).
+- Pyright cold-start (3-6s per upstream docs) vs the 1s poll budget in
+  `lsp_get_diagnostics`. First call on cold pyright may return empty;
+  re-calling after warm should return diagnostics. Not a regression
+  (v7.7.0-v7.7.13 returned empty unconditionally regardless of warmth).
+
+### Strategy context
+
+Strategy doc at `/Users/lokesh/git/loki-plan/AUTONOMI-100M-STRATEGY.md`
+identifies this as the credibility-tax fix that must ship before any
+sales demo. Repo location is intentionally outside the repo to avoid
+public commit; the fix itself is shipped here as a normal PATCH.
+
 ## [7.7.13] - 2026-05-27
 
 PATCH release. Two user-reported P0 bugs on real-user smoke from npm
