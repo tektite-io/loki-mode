@@ -700,6 +700,10 @@ detect_arg_type() {
 
 # Start Loki Mode
 cmd_start() {
+    # First-run welcome (once): open the branded welcome page on the very
+    # first start. Writes ~/.loki/.welcomed and never repeats; non-blocking,
+    # and never auto-opens a browser in CI or non-interactive shells.
+    cmd_welcome_maybe_firstrun 2>/dev/null || true
     local args=()
     local prd_file=""
     local provider=""
@@ -3834,6 +3838,94 @@ cmd_dashboard_open() {
         echo ""
         echo "Could not detect browser opener."
         echo "Please open in browser: $url"
+    fi
+}
+
+# Welcome opener (the "magic opener"). Shows a branded welcome page in the
+# browser, or a terminal welcome when no browser is available (headless,
+# Docker, CI). Honors telemetry opt-out (LOKI_TELEMETRY_DISABLED / DO_NOT_TRACK):
+# when opted out, the page is loaded with ?telemetry=off so its form is
+# disabled and no analytics are ever sent.
+WELCOME_MARKER="${HOME}/.loki/.welcomed"
+
+_loki_telemetry_off() {
+    [ "${LOKI_TELEMETRY_DISABLED:-}" = "true" ] && return 0
+    [ "${DO_NOT_TRACK:-}" = "1" ] && return 0
+    return 1
+}
+
+cmd_welcome_terminal() {
+    local ver="${1:-}"
+    echo ""
+    echo -e "  ${BOLD}Loki Mode${NC} ${DIM}by Autonomi${NC}${ver:+  ${DIM}v${ver}${NC}}"
+    echo ""
+    echo -e "  ${BOLD}Describe it. Walk away. Get working, tested software.${NC}"
+    echo ""
+    echo -e "  Loki takes a spec (PRD, GitHub issue, or one-line brief) to a deployed"
+    echo -e "  product via the RARV-C closure loop, until the work is actually done."
+    echo ""
+    echo -e "  ${CYAN}Closure loop + council${NC}   Every change is verified by a unanimous council."
+    echo -e "  ${CYAN}Cross-project memory${NC}     Lessons compound, so agents stop repeating mistakes."
+    echo -e "  ${CYAN}Provider-agnostic${NC}        Claude, Codex, Cline, or Aider. Your keys, your infra."
+    echo ""
+    echo -e "  Quick start:  ${BOLD}loki start ./prd.md${NC}"
+    echo -e "  Docs:         ${BOLD}https://www.autonomi.dev/docs${NC}"
+    echo ""
+    if _loki_telemetry_off; then
+        echo -e "  ${DIM}Analytics are off for this session. Nothing is sent.${NC}"
+    else
+        echo -e "  ${DIM}Anonymous usage analytics help us improve the product. We never${NC}"
+        echo -e "  ${DIM}collect prompts, PRDs, or code. Opt out: LOKI_TELEMETRY_DISABLED=true${NC}"
+    fi
+    echo ""
+}
+
+cmd_welcome() {
+    local ver=""
+    [ -f "${SKILL_DIR}/VERSION" ] && ver="$(cat "${SKILL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')"
+
+    local welcome_file="${SKILL_DIR}/assets/welcome/welcome.html"
+
+    # Build the file URL with params: version, opt-out, and the existing
+    # anonymous telemetry distinct-id (so browser + install share one id).
+    local q="v=${ver}"
+    if _loki_telemetry_off; then
+        q="${q}&telemetry=off"
+    else
+        local idfile="${HOME}/.loki-telemetry-id"
+        [ -f "$idfile" ] && q="${q}&did=$(cat "$idfile" 2>/dev/null | tr -d '[:space:]')"
+    fi
+
+    # Headless / Docker / CI / no-browser: print the terminal welcome only.
+    local has_browser=""
+    if command -v open >/dev/null 2>&1; then has_browser="open"
+    elif command -v xdg-open >/dev/null 2>&1; then has_browser="xdg-open"
+    elif command -v start >/dev/null 2>&1; then has_browser="start"
+    fi
+
+    if [ -z "$has_browser" ] || [ ! -f "$welcome_file" ] || [ -n "${CI:-}" ] || [ ! -t 1 ]; then
+        cmd_welcome_terminal "$ver"
+        [ -f "$welcome_file" ] && echo -e "  ${DIM}Full welcome page: ${welcome_file}${NC}" && echo ""
+        return 0
+    fi
+
+    echo -e "${GREEN}Opening the Loki Mode welcome page in your browser...${NC}"
+    "$has_browser" "file://${welcome_file}?${q}" >/dev/null 2>&1 || cmd_welcome_terminal "$ver"
+}
+
+# First-run hook: open the welcome once, then never again. Browser only when
+# interactive + not CI + not opted out; otherwise nothing (no noisy auto-print
+# during a real run). Marker lives at ~/.loki/.welcomed.
+cmd_welcome_maybe_firstrun() {
+    [ -f "$WELCOME_MARKER" ] && return 0
+    mkdir -p "$(dirname "$WELCOME_MARKER")" 2>/dev/null || true
+    : > "$WELCOME_MARKER" 2>/dev/null || true
+    # Only auto-open on an interactive, non-CI terminal. cmd_welcome itself
+    # re-checks for a browser and falls back to the terminal welcome, so we
+    # gate purely on interactivity + CI here (grouped to avoid &&/|| precedence
+    # ambiguity). Backgrounded so it never delays the start.
+    if [ -t 1 ] && [ -z "${CI:-}" ]; then
+        (cmd_welcome >/dev/null 2>&1 &) || true
     fi
 }
 
@@ -12504,6 +12596,9 @@ main() {
             ;;
         demo)
             cmd_demo "$@"
+            ;;
+        welcome)
+            cmd_welcome "$@"
             ;;
         init)
             cmd_init "$@"

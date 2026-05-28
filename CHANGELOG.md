@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.27] - 2026-05-28
+
+PATCH release. A welcome opener (the "magic opener") shown on first run and
+via `loki welcome`, styled in the dashboard design language.
+
+### Added
+
+- **`assets/welcome/welcome.html`** (NEW): a self-contained welcome page
+  using the loki dashboard design tokens (accent #553DE9, DM Serif Display
+  / Inter / JetBrains Mono, glass cards, light + dark). It introduces the
+  product, subtly highlights the RARV-C closure loop, the cross-project
+  memory compounding moat, and the research backing (Anthropic, DeepMind,
+  OpenAI, NVIDIA), and links to autonomi.dev/docs.
+- **Opt-in profile form**: role, company size, and tools. On explicit
+  click it sends an anonymous `welcome_profile` event to the EXISTING
+  PostHog endpoint (us.i.posthog.com, the same public ingest key the
+  install telemetry already uses). The page makes ZERO network calls on
+  load; the submit is the only call. The payload carries only
+  {role, company_size, tools, source, loki_version, distinct_id} and
+  never any prompt, PRD, code, or path content.
+- **`loki welcome`** command: opens the page in a browser, or prints a
+  clean terminal welcome when headless / Docker / CI / no browser.
+- **First-run auto-open (once)**: on the first `loki start`, the welcome
+  opens a single time, gated by a `~/.loki/.welcomed` marker; never
+  repeats, and never auto-opens a browser in CI or non-interactive shells.
+- postinstall now points new users to `loki welcome`.
+
+### Privacy
+
+- Honors `LOKI_TELEMETRY_DISABLED=true` and `DO_NOT_TRACK=1` everywhere:
+  the page is loaded with `?telemetry=off` (form disabled, no capture) and
+  the terminal welcome shows an "analytics off" notice. Disclosed, never
+  covert. We never collect prompts, PRDs, or code.
+
+### Packaging
+
+- `assets/` now ships to npm (added to package.json `files`) and to both
+  Docker images (`COPY assets/` in Dockerfile + Dockerfile.sandbox).
+
+### Tests
+
+- `tests/test-welcome-opener.sh` (NEW, 14/14 PASS): single-network-call
+  guarantee (the only fetch is inside the submit handler, never on load),
+  no-PII payload (asserts the properties object, not the safety comment),
+  opt-out paths, terminal fallback, first-run wiring that verifies the hook
+  is actually CALLED from cmd_start (not just defined), and packaging.
+  Light + dark screenshots verified against the dashboard design tokens
+  (bg #FAFAF7, accent #553DE9).
+
 ## [7.7.26] - 2026-05-28
 
 PATCH release. UX: "more running in the background, less input required."
