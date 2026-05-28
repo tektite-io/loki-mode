@@ -9,6 +9,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.20] - 2026-05-28
+
+PATCH release. Wakes previously-dead memory code + ships the SessionEnd
+hook installer with the VERIFIED Claude Code schema (deferred from
+v7.7.18). Fourth release in the v7.7.17 through v7.7.24 memory arc.
+
+### Added
+
+- **Cross-project knowledge graph woken** (diagnosis flagged
+  `memory/knowledge_graph.py` + `cross_project.py` as ZERO-call-site
+  dead code):
+  - `autonomy/loki::load_memory_context` now augments local episodic
+    retrieval with `OrganizationKnowledgeGraph.query_patterns(goal)`
+    results under `output['cross_project']`. Best-effort, isolated in
+    its own try/except so a failure never breaks the main retrieval.
+    Opt out with `LOKI_SKIP_CROSS_PROJECT=true`.
+  - `loki memory crossproject [--for <goal>]`: lists cross-project
+    patterns matching a goal.
+  - `loki memory graph [--export <path>]`: dumps/exports the org
+    knowledge graph (read-only).
+  - `loki memory graph rebuild`: the WRITE-side population path
+    (council fix Opus 1). Mines `.loki/memory/semantic/*.json` across
+    all discovered projects, dedups the union with existing patterns,
+    truncate-rewrites the org graph. Idempotent (repeated runs do not
+    accumulate duplicates -- council fix Opus 1). Without this the read
+    side was an inert wake reading an always-empty graph.
+- **`loki memory enable-hook` / `disable-hook`** (deferred from
+  v7.7.18): installs a Claude Code SessionEnd hook using the VERIFIED
+  schema `{matcher: "clear", hooks: [{type: "command", command}]}`
+  (WebSearch-confirmed). Points at the shipped
+  `claude/hooks/loki-session-end.sh`. Idempotent (detects existing
+  entry by command containing `loki-session-end.sh`); atomic tmp+rename;
+  preserves all other settings.json keys. No-op under
+  `LOKI_MEMORY_HOOK_DISABLED=true`. disable-hook removes by the same
+  detection, idempotent on absent.
+- `loki memory help` updated with the new subcommands.
+- `tests/test-memory-wake-dead-code.sh` (9/9 PASS): crossproject CLI,
+  graph dump, graph --export, graph rebuild write-path, rebuild
+  idempotency, enable-hook verified-schema install + idempotent +
+  settings preservation, disable-hook reverse, LOKI_MEMORY_HOOK_DISABLED
+  honored, load_memory_context augmentation wiring.
+
+### Verified
+
+- Council: 2 Opus + 1 Sonnet unanimous APPROVE after 1 fix cycle.
+  Opus 2 APPROVE (verified query_patterns/load_patterns signatures
+  match -- the wake is real, not a swallowed no-op). Sonnet CONCERN on
+  shellcheck SC2016 + stale help text -> both fixed. Opus 1 CONCERN on
+  inert wake (write side had no caller) -> `graph rebuild` population
+  path added + idempotency dedup fix -> re-review APPROVE.
+- Local-CI: 23/23 PASS.
+
+### Known boundaries (non-blocking, follow-up candidates)
+
+- `graph rebuild` is manual / not auto-triggered post-consolidation.
+  The full automatic chain (episode -> consolidate -> semantic pattern
+  -> auto-rebuild -> graph) needs a hook or scheduler; deferred.
+- enable-hook bakes an absolute path to loki-session-end.sh into
+  settings.json. On npm/bun reinstall to a new versioned path the
+  stored path goes stale and the hook silently fails; re-running
+  enable-hook detects the OLD entry as already-installed and does NOT
+  self-heal. Documented; follow-up to re-point stale entries.
+- SessionEnd fires only on /clear (Claude Code limitation), not normal
+  exits.
+
+### NOT tested
+
+- Real Claude Code SessionEnd firing the installed hook end-to-end.
+- Cross-project augmentation surfacing real patterns in a live
+  multi-project session (requires accumulated episodes + consolidation
+  + rebuild; the wiring + population path are verified, the emergent
+  behavior is not).
+
 ## [7.7.19] - 2026-05-28
 
 PATCH release. Hotfix for a v7.7.18 capture wedge regression discovered
