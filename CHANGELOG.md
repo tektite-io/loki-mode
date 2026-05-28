@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.24] - 2026-05-28
+
+PATCH release. Cross-project knowledge "lift" proof + the retrieval fix
+that makes cross-project transfer actually work on natural-language
+goals. Eighth release in the v7.7.17-v7.7.24 memory arc; this one is the
+moat proof.
+
+### Fixed
+
+- **`memory/knowledge_graph.py` query_patterns** now scores by TOKEN
+  OVERLAP, not whole-string substring. The prior code only matched when
+  the entire query string was a literal substring of a pattern field, so
+  a natural-language goal like "make the charge endpoint safe to retry"
+  retrieved nothing from a pattern named "idempotency-key-on-charge".
+  Token overlap (with per-field weights preserved and an exact-substring
+  bonus kept for backward compatibility) lets real goals retrieve real
+  patterns. This silently fixes the two live callers that pass
+  multi-word context: `memory/rag_injector.py` and the in-loop pattern
+  injection at `autonomy/run.sh` -- both previously read an effectively
+  inert cross-project graph on any multi-word query.
+
+### Added
+
+- **`tools/bench_cross_project_lift.py` (NEW)**: the memory moat proof.
+  Seeds two sibling source projects (payments-api, auth-service) and one
+  target project, builds the org knowledge graph in two conditions
+  (target-alone vs target+siblings), and reports retrieval-coverage
+  LIFT over the target's task goals. Measured on the bundled fixture:
+  0/6 goals covered by the target alone -> 3/6 covered once sibling
+  patterns are in the graph (+50 pts, all 3 net-new from siblings).
+  Exits non-zero if lift <= 0 (CI-gateable regression guard).
+- **`tests/test-cross-project-lift.sh` (NEW)**: 4/4 PASS. Covers the
+  query token-overlap fix (NL goal retrieves + exact match preserved),
+  positive lift exit code, lift JSON invariants, and the honesty
+  disclaimer presence.
+
+### Honest scope (no fabrication)
+
+- "Lift" here is a RETRIEVAL-COVERAGE metric using a keyword-overlap
+  relevance proxy. It is NOT a task-success metric: it does not claim
+  fewer iterations, lower cost, or higher correctness on downstream
+  work. Measuring task-success lift needs an end-to-end LLM benchmark,
+  which this offline harness deliberately does not attempt.
+- 3 of the 6 fixture goals still MISS (e.g. "store monetary amounts" vs
+  a pattern phrased "decimal money never float"). These are honest
+  vocabulary-mismatch misses that show the ceiling of keyword retrieval;
+  closing them is what the optional embedding layer is for. The bench
+  does not reword goals to inflate the number.
+
 ## [7.7.23] - 2026-05-28
 
 PATCH release. Speed bench (excellence bar 7) + privacy opt-out (bar 6)
