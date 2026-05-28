@@ -15034,6 +15034,88 @@ except Exception as e:
             echo "  loki memory namespace stats"
             ;;
 
+        ingest)
+            # v7.7.18 capture wedge: ingest a Claude Code session transcript
+            # into the project's .loki/memory/ store. Solves the diagnosis
+            # root cause where memory only captured during `loki start`.
+            #
+            # Usage:
+            #   loki memory ingest --from-claude-transcript <path>
+            #   loki memory ingest --from-stdin   (reads a JSON summary doc)
+            shift  # drop "ingest"
+            local _ingest_mode=""
+            local _ingest_path=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --from-claude-transcript)
+                        _ingest_mode="transcript"
+                        _ingest_path="${2:-}"
+                        if [ $# -ge 2 ]; then shift 2; else shift; fi
+                        ;;
+                    --from-stdin)
+                        _ingest_mode="stdin"
+                        shift
+                        ;;
+                    -h|--help)
+                        echo "Usage: loki memory ingest --from-claude-transcript <path>"
+                        echo "       loki memory ingest --from-stdin   (JSON doc on stdin)"
+                        echo ""
+                        echo "Honors LOKI_MEMORY_CAPTURE_DISABLED=true (escape hatch)."
+                        return 0
+                        ;;
+                    *) shift ;;
+                esac
+            done
+            if [ -z "$_ingest_mode" ]; then
+                echo -e "${RED}Usage: loki memory ingest --from-claude-transcript <path> | --from-stdin${NC}"
+                exit 1
+            fi
+            local _project_root_for_ingest="${SKILL_DIR:-$(pwd)}"
+            local _target_memory_dir
+            _target_memory_dir="$(pwd)/.loki/memory"
+            mkdir -p "$_target_memory_dir" 2>/dev/null || true
+            if [ "$_ingest_mode" = "transcript" ]; then
+                if [ -z "$_ingest_path" ] || [ ! -f "$_ingest_path" ]; then
+                    echo -e "${RED}Transcript not found: $_ingest_path${NC}"
+                    exit 1
+                fi
+                PYTHONPATH="$_project_root_for_ingest" \
+                    python3 -c "
+import sys, json
+from memory.ingest import ingest_from_claude_transcript
+path = ingest_from_claude_transcript(sys.argv[1], sys.argv[2])
+print(json.dumps({'episode_path': path}))
+" "$_ingest_path" "$_target_memory_dir"
+            else
+                PYTHONPATH="$_project_root_for_ingest" \
+                    python3 -c "
+import sys, json
+from memory.ingest import ingest_from_summary
+doc = json.loads(sys.stdin.read())
+path = ingest_from_summary(
+    sys.argv[1],
+    goal=doc.get('goal',''),
+    outcome=doc.get('outcome','success'),
+    files_modified=doc.get('files_modified',[]),
+    files_read=doc.get('files_read',[]),
+    tool_calls_summary=doc.get('tool_calls_summary',''),
+    duration_seconds=int(doc.get('duration_seconds',0) or 0),
+)
+print(json.dumps({'episode_path': path}))
+" "$_target_memory_dir"
+            fi
+            ;;
+
+        # NOTE (v7.7.18 council fix Opus 2): hook installer (enable-hook /
+        # disable-hook) DEFERRED to v7.7.19. Claude Code SessionEnd schema
+        # requires {matcher, hooks:[{type,command}]} nested format -- not
+        # the {id, command} format originally drafted. Also only fires on
+        # /clear (not normal exits), and payload is JSON on stdin (not the
+        # $CLAUDE_TRANSCRIPT_PATH env var). The sample hook script at
+        # claude/hooks/loki-session-end.sh ships for users who want to
+        # install manually; the automated installer comes after we verify
+        # the exact schema empirically against a real Claude Code install.
+
         *)
             echo -e "${RED}Unknown memory command: $subcommand${NC}"
             echo "Run 'loki memory help' for usage."

@@ -9,6 +9,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.18] - 2026-05-28
+
+PATCH release. **Memory capture wedge -- the foundation unlock** for the
+v7.7.17 through v7.7.23 memory improvement arc. Diagnosis at
+~/git/loki-plan/MEMORY-DIAGNOSIS-2026-05-27.md root cause: `auto_capture_
+episode` only fires inside `run_autonomous()` reached via `loki start
+<prd>`. The 167 release sessions in 2026 happened in regular Claude
+Code, never producing episodes. This release adds two voluntary
+capture paths so EVERY developer session can populate `.loki/memory/`.
+
+### Added
+
+- **`memory/ingest.py` (NEW, ~440 LOC)**: two ingest entry points:
+  - `ingest_from_claude_transcript(transcript_path, memory_base)` -> reads
+    a Claude Code session transcript JSONL, extracts tool_use traces,
+    produces an EpisodeTrace with populated action_log + files_read +
+    files_modified. 50 MB file size cap + 50,000 entry cap so a
+    runaway transcript cannot OOM the ingester (council fix Opus 2).
+  - `ingest_from_summary(memory_base, goal, outcome, ...)` -> builds
+    an episode from explicit fields (used by the MCP capture tool).
+  - Secret scrubber + path-aware scrubber on every persisted string
+    (mirrors v7.7.10 + v7.7.17; redacts `.aws/`, `.ssh/`, `.env*`,
+    `id_rsa`, `credentials.json`, etc. with `[REDACTED:sensitive-*]`
+    markers preserving directory context).
+  - Honors `LOKI_MEMORY_CAPTURE_DISABLED=true` escape hatch.
+- **MCP tool `loki_memory_capture_session_summary`** in `mcp/server.py`:
+  agents call voluntarily at iteration close with goal + outcome +
+  files_modified + files_read + tool_calls_summary. Returns
+  `{"episode_path": "<path>"}` JSON.
+- **CLI `loki memory ingest`** in `autonomy/loki`:
+  - `loki memory ingest --from-claude-transcript <path>` reads a JSONL
+    transcript and produces an Episode.
+  - `loki memory ingest --from-stdin` accepts a JSON summary doc on
+    stdin for shell-pipe integration.
+- **Sample hook script `claude/hooks/loki-session-end.sh`** (MANUAL
+  install): supports BOTH stdin JSON payload (`transcript_path` key,
+  Claude Code's documented format) AND `$CLAUDE_TRANSCRIPT_PATH` env
+  var fallback. Install instructions document the correct Claude Code
+  schema `{matcher, hooks:[{type:"command", command}]}` for users who
+  want zero-touch capture.
+
+### Verified
+
+- Council: 2 Opus + 1 Sonnet unanimous APPROVE after 1 fix cycle.
+  Opus 1 CONCERN on hook command quoting + Sonnet APPROVE first pass
+  + Opus 2 CONCERN on hook schema unverified + path-aware scrubber gap
+  + transcript size cap missing -> all fixed -> Opus 1/2 re-review
+  APPROVE.
+- WebSearch empirically validated Opus 2's claim: Claude Code
+  SessionEnd schema is `{matcher, hooks:[{type:"command",command:...}]}`,
+  fires only on `/clear` (not normal exits), payload is JSON on stdin
+  (not env var). The originally-planned `loki memory enable-hook`
+  installer was REMOVED from v7.7.18 to avoid silently shipping a
+  broken hook config. Deferred to v7.7.19 with proper schema.
+- Test `tests/test-memory-capture-wedge.sh` 8/8 PASS:
+  - ingest_from_summary writes episode with populated fields
+  - ingest_from_claude_transcript extracts goal + files + action_log
+  - LOKI_MEMORY_CAPTURE_DISABLED escape hatch blocks ingest
+  - secret scrubber redacts sk- tokens + credential keywords
+  - `loki memory ingest --from-stdin` CLI round-trip
+  - path-aware scrub redacts .aws/.ssh/.env + keeps safe paths
+  - transcript >50MB skipped with .errors.log entry
+  - sample hook script supports both stdin JSON + env var formats
+- Local-CI: 23/23 PASS first attempt.
+
+### Deferred to v7.7.19
+
+- `loki memory enable-hook` / `disable-hook` installer: deferred until
+  the Claude Code SessionEnd schema is verified empirically against a
+  real install. Users wanting zero-touch capture can manually install
+  per the instructions in `claude/hooks/loki-session-end.sh`. The MCP
+  tool + ingest CLI are the verified primary value for v7.7.18.
+
+### NOT tested
+
+- The sample hook script firing inside a real Claude Code SessionEnd
+  event (the script is syntactically clean + locally tested in
+  isolation; end-to-end with Claude Code's hook runner pending v7.7.19).
+- Privacy scrub coverage beyond v7.7.10 + new path-aware redaction.
+- Concurrency: two MCP capture calls firing simultaneously from
+  different agents (storage layer uses atomic per-episode writes with
+  unique IDs so collision is unlikely but not stress-tested).
+
 ## [7.7.17] - 2026-05-28
 
 PATCH release. Memory subsystem observability. First release in the
