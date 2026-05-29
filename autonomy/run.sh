@@ -3973,6 +3973,124 @@ print(json.dumps(data, indent=2))
 }
 
 # Track iteration completion - move task to completed queue
+# v7.8.1: staleness-aware generated-PRD reuse helpers.
+# Hash stdin with whatever digest tool is available (mirrors the existing
+# stat -f%z || stat -c%s dual-probe portability pattern). Echoes a short hash.
+_loki_hash_stdin() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | cut -c1-16
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -c1-16
+    else
+        cksum | tr -d ' ' | cut -c1-16
+    fi
+}
+
+# Compute a cheap, clone-stable signature of the codebase so we can tell whether
+# it changed since the generated PRD was last written. Git repos: HEAD sha +
+# dirty flag (.loki/.git churn filtered out). Non-git: a hash of sorted
+# path+size pairs (size, not mtime, so it is clone-stable). Echoes the signature.
+compute_codebase_signature() {
+    local dir="${1:-.}"
+    ( cd "$dir" 2>/dev/null || exit 0
+      if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          local head dirty porcelain
+          head=$(git rev-parse HEAD 2>/dev/null || echo "nohead")
+          porcelain=$(git status --porcelain 2>/dev/null | grep -vE '(^...?\.loki/|/\.loki/| \.loki/|\.git/)' || true)
+          if [ -z "$porcelain" ]; then
+              dirty="clean"
+          else
+              dirty=$(printf '%s' "$porcelain" | _loki_hash_stdin)
+          fi
+          echo "git:${head}:${dirty}"
+      else
+          local listing count
+          listing=$(find . \
+              -type d \( -name .loki -o -name .git -o -name node_modules -o -name dist \
+                         -o -name build -o -name .next -o -name target -o -name vendor \
+                         -o -name __pycache__ -o -name .venv -o -name venv \) -prune -o \
+              -type f -print 2>/dev/null \
+              | while IFS= read -r f; do
+                    local sz
+                    sz=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
+                    printf '%s\t%s\n' "$f" "$sz"
+                done | LC_ALL=C sort)
+          count=$(printf '%s\n' "$listing" | grep -c . || echo 0)
+          echo "files:$(printf '%s' "$listing" | _loki_hash_stdin):${count}"
+      fi
+    )
+}
+
+# Decide what to do with a previously generated PRD on a no-PRD run.
+# Echoes one of: reuse | update | generate. Never fails the run.
+#   - LOKI_PRD_REGEN=1 (or --regen-prd, which sets it) -> generate (force fresh).
+#   - no generated PRD present -> generate (first run).
+#   - generated PRD present, no recorded signature -> update (have a PRD but no
+#     provenance: reconcile incrementally rather than trust-blindly or discard).
+#   - signature matches current codebase -> reuse (unchanged).
+#   - signature differs -> update (codebase changed; update incrementally).
+decide_generated_prd_action() {
+    local loki_dir="${TARGET_DIR:-.}/.loki"
+    if [ "${LOKI_PRD_REGEN:-}" = "1" ]; then
+        echo "generate"; return 0
+    fi
+    if [ ! -f "$loki_dir/generated-prd.md" ] && [ ! -f "$loki_dir/generated-prd.json" ]; then
+        echo "generate"; return 0
+    fi
+    local sig_file="$loki_dir/state/prd-signature.json"
+    if [ ! -f "$sig_file" ]; then
+        echo "update"; return 0
+    fi
+    local stored current
+    stored=$(LOKI_SIG_FILE="$sig_file" python3 -c "
+import json, os
+try:
+    print(json.load(open(os.environ['LOKI_SIG_FILE'])).get('signature',''))
+except Exception:
+    print('')
+" 2>/dev/null)
+    [ -z "$stored" ] && { echo "update"; return 0; }
+    current=$(compute_codebase_signature "${TARGET_DIR:-.}")
+    if [ "$stored" = "$current" ]; then
+        echo "reuse"
+    else
+        echo "update"
+    fi
+}
+
+# Persist the current codebase signature after a clean no-PRD iteration that has
+# a generated PRD, so the next run can decide reuse vs update. Best-effort; never
+# fails the run. Only records on exit_code==0 (do not bless a broken iteration).
+persist_prd_signature_if_present() {
+    local exit_code="${1:-0}"
+    [ "$exit_code" = "0" ] || return 0
+    # only for no-PRD runs whose generated PRD exists
+    case "${prd_path:-}" in
+        ""|*.loki/generated-prd.md|*.loki/generated-prd.json) ;;
+        *) return 0 ;;
+    esac
+    local loki_dir="${TARGET_DIR:-.}/.loki"
+    [ -f "$loki_dir/generated-prd.md" ] || [ -f "$loki_dir/generated-prd.json" ] || return 0
+    local sig
+    sig=$(compute_codebase_signature "${TARGET_DIR:-.}")
+    [ -n "$sig" ] || return 0
+    mkdir -p "$loki_dir/state" 2>/dev/null || return 0
+    local mode="files"; case "$sig" in git:*) mode="git" ;; esac
+    local tmp="$loki_dir/state/.prd-signature.json.tmp.$$"
+    LOKI_SIG="$sig" LOKI_SIG_MODE="$mode" LOKI_SIG_VER="$(get_version 2>/dev/null || echo unknown)" \
+    python3 -c "
+import json, os, datetime
+rec = {
+  'signature': os.environ['LOKI_SIG'],
+  'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),
+  'prd_path': '.loki/generated-prd.md',
+  'mode': os.environ['LOKI_SIG_MODE'],
+  'loki_version': os.environ['LOKI_SIG_VER'],
+}
+print(json.dumps(rec))
+" > "$tmp" 2>/dev/null && mv -f "$tmp" "$loki_dir/state/prd-signature.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
 track_iteration_complete() {
     local iteration="$1"
     local exit_code="${2:-0}"
@@ -9586,7 +9704,18 @@ build_prompt() {
     local sdlc_instruction="SDLC_PHASES_ENABLED: [$phases]. Execute ALL enabled phases. Log results to .loki/logs/. See .loki/SKILL.md for phase details. Skill modules at .loki/skills/."
 
     # Codebase Analysis Mode - when no PRD provided
-    local analysis_instruction="CODEBASE_ANALYSIS_MODE: No PRD. FIRST: Analyze codebase - scan structure, read package.json/requirements.txt, examine README. THEN: Generate PRD at .loki/generated-prd.md. FINALLY: Execute SDLC phases."
+    # v7.8.1: improved 3-pass instruction. More efficient (no blind full scan)
+    # and more accurate (high-signal files first, fixed PRD section template so
+    # the result is diff-friendly for later incremental updates).
+    local analysis_instruction="CODEBASE_ANALYSIS_MODE: No PRD provided. Reverse-engineer a precise PRD from the existing code in three passes, cheaply and without blind full scans. PASS 1 (orient): list the top two directory levels; read ONLY high-signal manifests that exist (package.json, requirements.txt, pyproject.toml, Cargo.toml, go.mod, pom.xml, build.gradle, composer.json) to identify language, framework, and scripts; read README and any docs index. PASS 2 (locate): from the manifests and conventional layout, identify the entrypoints, the public API or CLI surface, the test directory and runner, and the config or env contract; read those first; skip generated, vendored, and lockfile content; prefer LSP workspace symbols when the lsp-proxy server is available. PASS 3 (write): write .loki/generated-prd.md with these sections: Overview, Detected Stack, Entrypoints and Components, Existing Behavior and Requirements (reverse-engineered, observable), Test and Build Setup, Gaps and TODOs, Out of Scope. Keep it under 200 lines, plain Markdown, no emojis, no em dashes. Do not invent features not evidenced by the code. THEN execute SDLC phases against that PRD."
+
+    # v7.8.1: incremental-update instruction for when a generated PRD already
+    # exists and the codebase changed (GENERATED_PRD_ACTION=update). Reconcile,
+    # do not regenerate, so the PRD stays continuous and the update is cheap.
+    local update_instruction=""
+    if [ "${GENERATED_PRD_ACTION:-}" = "update" ]; then
+        update_instruction="GENERATED_PRD_UPDATE_MODE: A previously generated PRD exists at .loki/generated-prd.md and the codebase has changed since it was written. Do NOT regenerate it from scratch. Read the existing .loki/generated-prd.md first, then reconcile it with the current code: add requirements for new entrypoints, components, or behaviors; remove or mark obsolete requirements whose code was deleted; correct the Detected Stack and Test and Build Setup sections if they drifted. Preserve the existing structure and still-accurate content. Keep edits minimal and evidence-based, under 200 lines, plain Markdown, no emojis, no em dashes. THEN execute SDLC phases against the updated PRD."
+    fi
 
     # Context Memory Instructions (integrated with new memory system)
     local memory_instruction="MEMORY SYSTEM: Relevant context from past sessions is provided below (if any). Your actions will be automatically recorded for future reference. For complex handoffs: create .loki/memory/handoffs/{timestamp}.md. For important decisions: they will be captured in the timeline. Check .loki/CONTINUITY.md for session-level working memory."
@@ -9935,7 +10064,7 @@ except Exception:
         else
             if [ $retry -eq 0 ]; then
                 if [ -n "$prd" ]; then
-                    echo "Loki Mode with PRD at $prd. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $usage_doc_instruction $lsp_grounding_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
+                    echo "Loki Mode with PRD at $prd. $update_instruction $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $rarv_instruction $memory_instruction $usage_doc_instruction $lsp_grounding_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
                 else
                     echo "Loki Mode. $human_directive $gate_failure_context $queue_tasks $bmad_context $openspec_context $mirofish_context $magic_context $checklist_status $app_runner_info $playwright_info $memory_context_section $analysis_instruction $rarv_instruction $memory_instruction $usage_doc_instruction $lsp_grounding_instruction $completion_instruction $sdlc_instruction $autonomous_suffix"
                 fi
@@ -10022,6 +10151,13 @@ except Exception:
     # static prefix so it remains cache-stable.
     if [ -z "$prd" ]; then
         printf '%s\n' "$analysis_instruction"
+    fi
+    # v7.8.1: when reusing a generated PRD whose codebase changed, append the
+    # incremental-update instruction (prd is the generated PRD here, so the
+    # anchor already says "with PRD at .loki/generated-prd.md"). Decided once per
+    # run (GENERATED_PRD_ACTION), so it stays cache-stable across iterations.
+    if [ -n "$update_instruction" ]; then
+        printf '%s\n' "$update_instruction"
     fi
     printf '</loki_system>\n'
     printf '[CACHE_BREAKPOINT]\n'
@@ -10933,13 +11069,33 @@ run_autonomous() {
             if [ -f ".loki/generated-prd.md" ] || [ -f ".loki/generated-prd.json" ]; then
                 log_warn "Using user PRD ($found_prd) instead of generated PRD (.loki/generated-prd.md). Remove generated PRD if no longer needed."
             fi
-        elif [ -f ".loki/generated-prd.md" ]; then
-            log_info "No user PRD found. Using previously generated PRD: .loki/generated-prd.md"
-            prd_path=".loki/generated-prd.md"
-        elif [ -f ".loki/generated-prd.json" ]; then
-            log_info "No user PRD found. Using previously generated PRD: .loki/generated-prd.json"
-            prd_path=".loki/generated-prd.json"
+        elif [ -f ".loki/generated-prd.md" ] || [ -f ".loki/generated-prd.json" ]; then
+            # v7.8.1: staleness-aware reuse. Decide reuse|update|generate ONCE
+            # (the decision must be stable across iterations so the cached static
+            # prompt prefix does not change mid-run). reuse/update both point
+            # prd_path at the existing generated PRD; generate (forced via
+            # LOKI_PRD_REGEN) falls through to Codebase Analysis Mode.
+            GENERATED_PRD_ACTION=$(decide_generated_prd_action)
+            export GENERATED_PRD_ACTION
+            local _gen_prd=".loki/generated-prd.md"
+            [ -f ".loki/generated-prd.md" ] || _gen_prd=".loki/generated-prd.json"
+            case "$GENERATED_PRD_ACTION" in
+                reuse)
+                    log_info "No user PRD found. Reusing generated PRD (codebase unchanged): $_gen_prd"
+                    prd_path="$_gen_prd"
+                    ;;
+                update)
+                    log_info "No user PRD found. Codebase changed since the generated PRD; will update it incrementally: $_gen_prd"
+                    prd_path="$_gen_prd"
+                    ;;
+                *)
+                    log_info "Regenerating PRD from codebase (forced)"
+                    prd_path=""
+                    ;;
+            esac
         else
+            GENERATED_PRD_ACTION="generate"
+            export GENERATED_PRD_ACTION
             log_info "No PRD found - will analyze codebase and generate one"
         fi
     fi
@@ -11657,6 +11813,10 @@ if __name__ == "__main__":
 
         # Auto-track iteration completion (for dashboard task queue)
         track_iteration_complete "$ITERATION_COUNT" "$exit_code"
+        # v7.8.1: record the codebase signature after a clean no-PRD iteration
+        # that has a generated PRD, so the next no-PRD run can decide reuse vs
+        # update. Best-effort, never fails the iteration.
+        persist_prd_signature_if_present "$exit_code"
 
         # Sentrux architectural-drift gate diff + finding emission (opt-in, v7.5.15).
         _loki_sentrux_iteration_end "$ITERATION_COUNT" "${TARGET_DIR:-.}"

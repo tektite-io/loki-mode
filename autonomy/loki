@@ -911,6 +911,13 @@ cmd_start() {
                 args+=("--parallel")
                 shift
                 ;;
+            --regen-prd|--regenerate-prd|--regen)
+                # v7.8.1: force a fresh generated PRD on a no-PRD run, overriding
+                # the staleness-aware reuse (decide_generated_prd_action in
+                # run.sh reads LOKI_PRD_REGEN). Exported so the runner sees it.
+                export LOKI_PRD_REGEN=1
+                shift
+                ;;
             --bg|--background)
                 args+=("--bg")
                 shift

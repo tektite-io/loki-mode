@@ -182,6 +182,9 @@ run_check "tests/test-stop-process-group.sh (group-kill agent teardown)" "bash t
 # --include-partial-messages) gated + with stream-json parser de-dup.
 run_check "tests/test-claude-adoptions.sh (setting-sources + partial-messages)" "bash tests/test-claude-adoptions.sh 2>&1 | tail -3"
 
+# v7.8.1: staleness-aware generated-PRD reuse (codebase signature + decision).
+run_check "tests/test-prd-reuse.sh (codebase signature + PRD reuse decision)" "bash tests/test-prd-reuse.sh 2>&1 | tail -3"
+
 # ---------------------------------------------------------------------------
 # 9. bun-parity local equivalent (mirrors bun-parity.yml matrix)
 # ---------------------------------------------------------------------------

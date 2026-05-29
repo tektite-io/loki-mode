@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.8.1] - 2026-05-29
+
+PATCH release. Makes `loki start` with no PRD smarter: it reuses the previously
+generated PRD instead of regenerating it every run, and the first-run analysis
+is sharper.
+
+### Changed
+
+- **Staleness-aware generated-PRD reuse.** On a no-PRD run, Loki now computes a
+  cheap, clone-stable codebase signature (git HEAD + a dirty-flag, or a
+  path+size file hash off-git; `.loki/` and `.git/` churn excluded) stored at
+  `.loki/state/prd-signature.json`, and decides:
+  - first run (no generated PRD) -> generate a fresh PRD;
+  - signature unchanged -> REUSE the existing `.loki/generated-prd.md` as-is
+    (no regeneration);
+  - codebase changed -> UPDATE the PRD incrementally (reconcile, do not
+    regenerate from scratch);
+  - no recorded signature (older generated PRD) -> update (safe default).
+  Previously every no-PRD run blindly reused the generated PRD with no staleness
+  check, and the first run always regenerated. The decision is made once per run
+  so the cached prompt prefix stays stable across iterations. The user-PRD path
+  is unchanged (no signature is written for user-supplied PRDs).
+- **Sharper first-run codebase analysis.** The CODEBASE_ANALYSIS_MODE
+  instruction is now a focused three-pass prompt (orient on high-signal
+  manifests, locate entrypoints/API/tests, then write a fixed-section PRD)
+  instead of a blind full scan. More efficient and more accurate, and the fixed
+  section template makes later incremental updates tractable.
+
+### Added
+
+- **`loki start --regen-prd`** (alias `--regenerate-prd` / `--regen`, or
+  `LOKI_PRD_REGEN=1`) forces a fresh PRD, overriding reuse.
+
 ## [7.8.0] - 2026-05-29
 
 MINOR release. Two additive Claude Code feature adoptions. Both are gated on
