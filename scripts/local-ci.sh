@@ -169,6 +169,10 @@ run_check "tests/test-autonomy-and-stop.sh (stop responsiveness + agent autonomy
 # populated, not just the title.
 run_check "tests/test-task-modal-fields.sh (task modal field passthrough)" "bash tests/test-task-modal-fields.sh 2>&1 | tail -3"
 
+# v7.7.33: dashboard Stop must be authoritative - reap orchestrators by cwd so a
+# stale loki.pid cannot yield a false "stopped" while the process keeps running.
+run_check "tests/test-dashboard-stop-authoritative.sh (cwd-scoped authoritative stop)" "bash tests/test-dashboard-stop-authoritative.sh 2>&1 | tail -3"
+
 # ---------------------------------------------------------------------------
 # 9. bun-parity local equivalent (mirrors bun-parity.yml matrix)
 # ---------------------------------------------------------------------------

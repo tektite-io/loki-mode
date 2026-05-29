@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.7.33] - 2026-05-29
+
+PATCH release. Makes the dashboard Stop button actually stop the session.
+
+### Fixed
+
+- **Dashboard Stop reported "stopped" while the orchestrator kept running.**
+  `/api/control/stop` (and the per-project `/api/running-projects/stop`) only
+  sent SIGTERM to the pid in `loki.pid`. When that pid was stale (a crashed or
+  restarted session can leave an orphaned `loki-run-*.sh` reparented to init
+  under a NEW pid), the kill was a no-op, yet the endpoint hit its
+  "process already gone" path and reported success, so the dashboard showed
+  STOPPED while the terminal kept iterating. Both stop endpoints now also reap
+  the actual orchestrator process(es) whose working directory IS the target
+  project's directory (the orchestrator temp-script name carries no project
+  identity, but its CWD reliably does), and report stopped only after verifying
+  no orchestrator for that project survives. A zombie/defunct process counts as
+  gone. Reproduced and verified against a live session with a stale `loki.pid`.
+- The orchestrator sweep is strictly scoped by CWD to the targeted project, so
+  stopping one project never reaps another folder's runner (same discipline as
+  the v7.7.30 folder-scoped `loki stop`). Linux reads `/proc/<pid>/cwd`;
+  macOS/BSD falls back to `lsof`.
+
 ## [7.7.32] - 2026-05-29
 
 PATCH release. Fixes the dashboard task-detail modal showing only the title
