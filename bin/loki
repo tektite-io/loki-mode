@@ -117,6 +117,20 @@ case "${1:-}" in
         # v7.5.2: rollback added (wires loki-ts/src/commands/rollback.ts).
         # v7.5.3: internal added for autonomy/run.sh phase1-hooks calls.
         # v7.5.28: kpis added (Phase K MVP: read-only KPI snapshot).
+        #
+        # v7.8.2: emit the cli_command product-analytics event for Bun-routed
+        # commands. The bash CLI fires this from autonomy/loki main(), but the
+        # ported commands above bypass main() entirely, so Bun-routed
+        # invocations were invisible to usage analytics. Fire it here, before
+        # the exec, so it covers every Bun command exactly once (no
+        # double-count: the bash route still emits its own copy in main()).
+        # Fire-and-forget, backgrounded, opt-out honored by loki_telemetry
+        # itself (LOKI_TELEMETRY_DISABLED / DO_NOT_TRACK). The command token is
+        # the subcommand name only -- never args, flags, or paths.
+        if command -v curl &>/dev/null && [ -f "$REPO_ROOT/autonomy/telemetry.sh" ]; then
+            ( SCRIPT_DIR="$REPO_ROOT/autonomy"; source "$SCRIPT_DIR/telemetry.sh" 2>/dev/null && loki_telemetry "cli_command" "command=${1:-}" 2>/dev/null ) &
+            disown 2>/dev/null || true
+        fi
         exec bun "$BUN_CLI" "$@"
         ;;
     *)

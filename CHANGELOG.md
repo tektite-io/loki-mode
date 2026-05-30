@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.8.2] - 2026-05-29
+
+### Added
+- Bun-route usage analytics: the `bin/loki` shim now emits the `cli_command`
+  product-analytics event for Bun-routed commands (version, status, stats,
+  doctor, provider, memory, rollback, internal, kpis). These commands bypass
+  the bash `main()` that fires `cli_command`, so Bun-routed invocations were
+  previously invisible to usage analytics. The emit reuses the existing
+  PostHog client (`autonomy/telemetry.sh`), is fire-and-forget and backgrounded
+  (no added latency), honors the existing opt-out (`LOKI_TELEMETRY_DISABLED=true`
+  / `DO_NOT_TRACK=1`), and sends only the subcommand name (never args, flags,
+  or paths). No double-counting: the bash route still emits its own copy from
+  `main()`, and the two routes are mutually exclusive per invocation.
+
+### Notes
+- No behavior change to any command, no new flags, no new env vars. The
+  existing opt-out continues to suppress all telemetry including this new emit.
+- NOT tested in this release: real end-to-end PostHog ingestion (verified only
+  via a local curl-intercept that the event fires when enabled and is
+  suppressed when opted out); channel detection (docker/homebrew/npm) on a
+  fresh install of each distribution channel.
+
 ## [7.8.1] - 2026-05-29
 
 PATCH release. Makes `loki start` with no PRD smarter: it reuses the previously
