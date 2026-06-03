@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.10.1] - 2026-05-30
+
+### Fixed
+- benchmarks/bench/run.sh had a malformed shellcheck directive
+  (`# shellcheck disable=SC2086 -- comment` on one line), which shellcheck
+  itself cannot parse (SC1072/SC1073 error). The CI Shell-tests job runs
+  shellcheck via tests/run-all-tests.sh and went red on v7.10.0 because of it
+  (local-ci ran bash -n on the file but not the shellcheck linter, so it slipped
+  through). Moved the explanation to its own comment line above a bare
+  `# shellcheck disable=SC2086`. The file is now clean at both -S error and
+  -S warning. No behavior change.
+
 ## [7.10.0] - 2026-05-30
 
 ### Added

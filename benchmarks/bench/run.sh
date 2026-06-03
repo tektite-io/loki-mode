@@ -212,7 +212,8 @@ case "$SUB" in
         # POSITIONALS holds every result file (per-tool runner outputs merge into
         # one leaderboard). Default the output dir to RESULTS_DIR.
         out_dir="${OUT_DIR:-$RESULTS_DIR}"
-        # shellcheck disable=SC2086 -- intentional word-split of accumulated paths.
+        # Intentional word-split of accumulated result-file paths.
+        # shellcheck disable=SC2086
         "$PYTHON" "$REPORT" $POSITIONALS --out-dir "$out_dir"
         exit $?
         ;;
