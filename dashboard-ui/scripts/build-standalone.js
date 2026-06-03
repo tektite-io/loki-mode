@@ -788,6 +788,10 @@ function generateStandaloneHTML(bundleCode) {
           <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           Escalations
         </button>
+        <button class="nav-link" data-section="wiki" id="nav-wiki">
+          <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          Wiki
+        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -1231,6 +1235,14 @@ function generateStandaloneHTML(bundleCode) {
         </div>
         <loki-escalations id="escalations-panel"></loki-escalations>
       </div>
+
+      <!-- Wiki: auto-generated cited codebase wiki + Q&A (R5) -->
+      <div class="section-page" id="page-wiki">
+        <div class="section-page-header">
+          <h2 class="section-page-title">Wiki</h2>
+        </div>
+        <loki-wiki-browser id="wiki-browser"></loki-wiki-browser>
+      </div>
     </main>
   </div>
 
@@ -1417,7 +1429,8 @@ document.addEventListener('DOMContentLoaded', function() {
       'migration-dashboard',
       'analytics-dashboard',
       'escalations-panel',
-      'council-transcripts'
+      'council-transcripts',
+      'wiki-browser'
     ];
     components.forEach(function(id) {
       var el = document.getElementById(id);

@@ -13205,6 +13205,9 @@ main() {
         docs)
             cmd_docs "$@"
             ;;
+        wiki)
+            cmd_wiki "$@"
+            ;;
         magic)
             cmd_magic "$@"
             ;;
@@ -22631,6 +22634,124 @@ run_debate(
     }
 
     log_info "Debate complete"
+}
+
+# =============================================================================
+# loki wiki -- auto-generated, cited per-project codebase wiki + Q&A (R5).
+#
+# Loki's answer to Devin DeepWiki: a persistent, queryable wiki built from the
+# codebase, where every section cites the real source files it came from, plus
+# a grounded `ask` that returns cited answers (file:line). Heavy work lives in
+# the Python core (autonomy/lib/wiki-generator.py, wiki-ask.py, wiki_index.py);
+# this is a thin dispatcher, mirroring how cmd_proof delegates to the proof
+# generator. Generation is incremental (skips when the codebase is unchanged).
+# =============================================================================
+cmd_wiki() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    local lib_dir="${_LOKI_SCRIPT_DIR}/lib"
+
+    case "$subcmd" in
+        generate) _wiki_generate "$lib_dir" "$@" ;;
+        show)     _wiki_show "$@" ;;
+        ask)      _wiki_ask "$lib_dir" "$@" ;;
+        --help|-h|help|"")
+            echo -e "${BOLD}loki wiki${NC} - Auto-generated, cited codebase wiki + Q&A"
+            echo ""
+            echo "Usage: loki wiki <command> [options]"
+            echo ""
+            echo "Commands:"
+            echo "  generate [path] [--force]   Build/refresh the cited wiki in .loki/wiki/"
+            echo "  show [section]              Print the wiki (or one section: architecture|modules|data-flow)"
+            echo "  ask \"<question>\"           Cited answer grounded in the codebase (file:line)"
+            echo ""
+            echo "Each wiki section cites the real source files it was built from."
+            echo "Generation is incremental: it skips when the codebase is unchanged."
+            echo ""
+            echo "Examples:"
+            echo "  loki wiki generate                     # build wiki for current project"
+            echo "  loki wiki show architecture            # show one section"
+            echo "  loki wiki ask \"how does the cli dispatch commands\""
+            return 0
+            ;;
+        *)
+            log_error "Unknown wiki command: $subcmd"
+            echo "Run 'loki wiki --help' for usage."
+            return 1
+            ;;
+    esac
+}
+
+_wiki_generate() {
+    local lib_dir="$1"; shift
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "python3 is required for 'loki wiki generate'"
+        return 1
+    fi
+    python3 "$lib_dir/wiki-generator.py" "$@"
+}
+
+_wiki_show() {
+    local section=""
+    local target="."
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                echo "Usage: loki wiki show [section]"
+                echo "Sections: architecture, modules, data-flow"
+                return 0
+                ;;
+            -*) log_error "Unknown option: $1"; return 1 ;;
+            *) section="$1"; shift ;;
+        esac
+    done
+    local wiki_dir="$target/.loki/wiki"
+    if [ ! -d "$wiki_dir" ]; then
+        log_error "No wiki found. Run 'loki wiki generate' first."
+        return 1
+    fi
+    if [ -n "$section" ]; then
+        local f="$wiki_dir/${section}.md"
+        if [ ! -f "$f" ]; then
+            log_error "No such section: $section (try: architecture, modules, data-flow)"
+            return 1
+        fi
+        cat "$f"
+    else
+        if [ -f "$wiki_dir/index.md" ]; then
+            cat "$wiki_dir/index.md"
+        else
+            log_error "Wiki index not found. Run 'loki wiki generate'."
+            return 1
+        fi
+    fi
+}
+
+_wiki_ask() {
+    local lib_dir="$1"; shift
+    local question=""
+    local extra=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                echo "Usage: loki wiki ask \"<question>\" [--json] [--k N]"
+                return 0
+                ;;
+            --json|--quiet) extra+=("$1"); shift ;;
+            --k) extra+=("--k" "${2:-6}"); shift 2 ;;
+            *) if [ -z "$question" ]; then question="$1"; else question="$question $1"; fi; shift ;;
+        esac
+    done
+    if [ -z "$question" ]; then
+        log_error "Provide a question: loki wiki ask \"how does X work\""
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "python3 is required for 'loki wiki ask'"
+        return 1
+    fi
+    python3 "$lib_dir/wiki-ask.py" --question "$question" "${extra[@]}"
 }
 
 cmd_magic() {

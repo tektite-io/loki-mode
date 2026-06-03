@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.13.0] - 2026-05-30
+
+### Added
+- Auto-wiki + cited codebase Q&A (R5 of the competitive arc): Loki's answer to
+  a per-repo knowledge base. `loki wiki generate | show | ask` builds a
+  persistent per-project wiki (architecture overview, key modules, data flow)
+  from the codebase under `.loki/wiki/`, and `loki wiki ask "<question>"`
+  returns an answer grounded in the actual code with file:line citations.
+- Citation integrity is structural, not best-effort: the model is shown numbered
+  code chunks and cites by index only; each citation is mapped back to the real
+  chunk's file:line and validated against disk before it is surfaced. A
+  fabricated or non-resolving citation cannot survive (it is dropped). Generate
+  citations are derived from the code scanner (real def/class line numbers).
+- Dashboard wiki browser panel (Overview / Architecture / Key Modules / Data
+  Flow / Ask tabs) and wiki API routes, so the wiki is a browsable, shareable
+  team artifact. The `.loki/wiki/` directory (wiki.json + per-section markdown)
+  is portable and readable without the dashboard.
+- Incremental regeneration: the wiki is keyed by a codebase signature (git HEAD
+  + per-file content hash); `loki wiki generate` skips when the codebase is
+  unchanged, with `--force` to override.
+
+### Notes
+- No duplication: token-overlap retrieval reuses the scoring pattern from
+  memory/knowledge_graph.py; the wiki index is intentionally dependency-free and
+  CI-safe (distinct from the optional ChromaDB code index). bash and Bun routes
+  delegate to one shared Python core (generate/ask) for parity.
+- Council: 3-of-3 unanimous (round 2, after a one-line TypeScript test-typing
+  fix). LLM calls are stubbed in tests (zero paid API calls in CI).
+- NOT tested in this release: wiki quality on a very large (>1M LOC) codebase;
+  semantic questions whose terms do not appear literally in the code (token-
+  overlap retrieval, with ChromaDB noted as a future optional backend).
+
 ## [7.12.0] - 2026-05-30
 
 ### Added

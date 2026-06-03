@@ -30,6 +30,8 @@ Phase 2 ported (Bun-native, fast):
                          (subcmds: list | show <id> | to <id> | latest)
   proof <subcmd>         Inspect/share proof-of-run artifacts
                          (subcmds: list | show <id> | open <id> | share <id>)
+  wiki <subcmd>          Auto-generated, cited codebase wiki + Q&A
+                         (subcmds: generate | show [section] | ask "<question>")
 
 All other commands fall through to the bash CLI (autonomy/loki).
 Set LOKI_LEGACY_BASH=1 to force the bash CLI for every command.
@@ -120,6 +122,17 @@ async function dispatch(argv: readonly string[]): Promise<number> {
       // (see loki-ts/tests/commands/proof.test.ts).
       const { runProof } = await import("./commands/proof.ts");
       return runProof(rest);
+    }
+
+    case "wiki": {
+      // R5: auto-generated, cited per-project codebase wiki + Q&A (Loki's
+      // DeepWiki). Bun implements `show` natively (reads .loki/wiki/*.md);
+      // `generate` and `ask` delegate to the bash CLI -> Python core, which
+      // owns the codebase index, provider call, and citation grounding. The
+      // bin/loki shim allowlist includes "wiki", so this is the live route
+      // when bun is installed (see loki-ts/tests/commands/wiki.test.ts).
+      const { runWiki } = await import("./commands/wiki.ts");
+      return runWiki(rest);
     }
 
     case "internal": {
