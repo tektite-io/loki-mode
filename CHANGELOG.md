@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.14.0] - 2026-05-30
+
+### Added
+- 1-click rollback + checkpoint UX (R6 of the competitive arc): deterministic,
+  obvious rollback so autonomous runs can be undone in one action. Enhances the
+  existing checkpoint/rollback in place (no parallel system).
+- `loki rollback latest` and `loki rollback to <id>` (plus `loki rollback list`):
+  one-command restore of `.loki/` state, with a per-iteration "you can undo this"
+  signal and an automatic pre-rollback snapshot so a rollback is itself
+  undoable ("undo your undo"); the snapshot id is printed for the user.
+- Dashboard rollback control: 1-click restore with a confirm, surfacing the
+  pre-rollback snapshot id in a notice so dashboard users can undo the undo too.
+
+### Fixed
+- Rollback safety invariant: if the automatic pre-rollback snapshot fails,
+  rollback now ABORTS by default (preserving current state) instead of silently
+  proceeding to a destructive restore; pass `--force` to roll back without a
+  safety snapshot. Proven by tests that assert state is preserved on snapshot
+  failure.
+
+### Notes
+- The `.loki/` state restore is atomic (tmp + rename). Working-tree code restore
+  is opt-in (`--code` / the surfaced `git stash apply refs/loki/cp/<id>`): a
+  divergent apply aborts or shows conflict markers (exit 1), never a silent
+  half-apply, so uncommitted work is protected.
+- Council: 3-of-3 unanimous (round 2, after fixing the snapshot-failure safety
+  invariant and surfacing the undo handle in the dashboard).
+- NOT tested in this release: rollback across a force-pushed/rewritten git
+  history; restoring newly-added (untracked) files (tracked-files scope is
+  documented in the CLI output).
+
 ## [7.13.0] - 2026-05-30
 
 ### Added

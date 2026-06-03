@@ -5396,6 +5396,100 @@ async def create_checkpoint(body: CheckpointCreate = None):
     return metadata
 
 
+@app.post(
+    "/api/checkpoints/{checkpoint_id}/rollback",
+    dependencies=[Depends(auth.require_scope("control"))],
+)
+async def rollback_checkpoint(checkpoint_id: str):
+    """Restore .loki/ state from a checkpoint (R6: un-deads the dashboard
+    rollback button, which already POSTed here).
+
+    Safety:
+    - require_scope("control"): destructive, so it needs the control scope.
+    - _sanitize_checkpoint_id: blocks path traversal.
+    - Re-undoability invariant: a forced pre-rollback snapshot of current state
+      is captured BEFORE overwriting, so the human can undo the undo. The
+      pre_rollback_snapshot id is returned in the response so the caller can
+      surface it to the user.
+    - Glob-restore: copies back whatever files the checkpoint dir contains, so it
+      works regardless of which writer (run.sh / loki / dashboard) created it.
+    """
+    import shutil
+
+    checkpoint_id = _sanitize_checkpoint_id(checkpoint_id)
+    loki_dir = _get_loki_dir()
+    checkpoints_dir = loki_dir / "state" / "checkpoints"
+    cp_dir = checkpoints_dir / checkpoint_id
+
+    if not cp_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Checkpoint not found")
+
+    # 1. Forced pre-rollback snapshot of current state (re-undoability).
+    now = datetime.now(timezone.utc)
+    pre_id = now.strftime("rb-pre-%Y%m%d-%H%M%S")
+    pre_dir = checkpoints_dir / pre_id
+    pre_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("session.json", "dashboard-state.json", "CONTINUITY.md", "autonomy-state.json"):
+        src = loki_dir / name
+        if src.exists() and src.is_file():
+            try:
+                shutil.copy2(str(src), str(pre_dir / name))
+            except Exception:
+                pass
+    for dname in ("state", "queue"):
+        src = loki_dir / dname
+        if src.exists() and src.is_dir():
+            try:
+                shutil.copytree(str(src), str(pre_dir / dname), dirs_exist_ok=True)
+            except Exception:
+                pass
+    pre_meta = {
+        "id": pre_id,
+        "created_at": now.isoformat(),
+        "message": f"pre-rollback snapshot (before restoring {checkpoint_id})",
+        "created_by": "dashboard rollback",
+    }
+    try:
+        (pre_dir / "metadata.json").write_text(json.dumps(pre_meta, indent=2))
+        with open(str(checkpoints_dir / "index.jsonl"), "a") as f:
+            f.write(json.dumps(pre_meta) + "\n")
+    except Exception:
+        pass
+
+    # 2. Glob-restore the checkpoint contents back into .loki/.
+    # IMPORTANT: never rmtree a destination dir wholesale -- the checkpoint store
+    # itself lives under .loki/state/checkpoints/, so deleting .loki/state/ would
+    # destroy every checkpoint (including the one being restored AND the
+    # pre-rollback snapshot we just made). Merge directories with dirs_exist_ok
+    # so the checkpoints store survives.
+    restored = 0
+    errors = []
+    for item in cp_dir.iterdir():
+        if item.name in ("metadata.json", "worktree-snapshot.txt"):
+            continue
+        dest = loki_dir / item.name
+        try:
+            if item.is_dir():
+                shutil.copytree(str(item), str(dest), dirs_exist_ok=True)
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(item), str(dest))
+            restored += 1
+        except Exception as e:  # noqa: BLE001 -- report, do not abort other files
+            errors.append(f"{item.name}: {e}")
+
+    return {
+        "id": checkpoint_id,
+        "restored": restored,
+        "pre_rollback_snapshot": pre_id,
+        "errors": errors,
+        "message": (
+            f"Restored {restored} item(s) from {checkpoint_id}. "
+            f"Prior state saved as {pre_id} (undo this rollback by restoring it)."
+        ),
+    }
+
+
 # =============================================================================
 # Agent Management API (v5.25.0)
 # =============================================================================

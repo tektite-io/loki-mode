@@ -13111,6 +13111,9 @@ main() {
         checkpoint|cp)
             cmd_checkpoint "$@"
             ;;
+        rollback)
+            cmd_rollback "$@"
+            ;;
         council)
             cmd_council "$@"
             ;;
@@ -16438,12 +16441,19 @@ SHOW_EOF
             local restored=0
             for item in "$cp_dir"/*; do
                 [ -e "$item" ] || continue
-                local name=$(basename "$item")
+                local name
+                name=$(basename "$item")
                 [ "$name" = "metadata.json" ] && continue
+                # R6: do not restore the worktree-snapshot sidecar as state.
+                [ "$name" = "worktree-snapshot.txt" ] && continue
 
                 if [ -d "$item" ]; then
-                    rm -rf ".loki/$name"
-                    cp -r "$item" ".loki/$name" 2>/dev/null && restored=$((restored + 1))
+                    # R6 data-loss fix: NEVER `rm -rf ".loki/$name"` -- the
+                    # checkpoint store lives under .loki/state/checkpoints/, so
+                    # blowing away .loki/state/ would destroy every checkpoint
+                    # (including this one). Merge-copy directory contents instead.
+                    mkdir -p ".loki/$name"
+                    cp -r "$item"/. ".loki/$name"/ 2>/dev/null && restored=$((restored + 1))
                 else
                     cp "$item" ".loki/$name" 2>/dev/null && restored=$((restored + 1))
                 fi
@@ -16451,17 +16461,28 @@ SHOW_EOF
 
             echo -e "  Restored: ${GREEN}$restored${NC} state items from $cp_id"
 
-            # Show git info for manual code rollback
-            local cp_sha=$(_CP_METADATA="$metadata" python3 -c "import json, os; d=json.load(open(os.environ['_CP_METADATA'])); print(d.get('git_sha','unknown'))" 2>/dev/null)
-            if [ -n "$cp_sha" ] && [ "$cp_sha" != "unknown" ] && [ "$cp_sha" != "not-a-git-repo" ]; then
+            # Show how to also restore code. R6: prefer the anchored working-tree
+            # snapshot over `git reset --hard <git_sha>`. git_sha is HEAD (the last
+            # commit), and Loki does not commit per iteration, so a hard reset
+            # discards the iteration's work instead of reconstructing it -- the old
+            # hint was misleading.
+            if git rev-parse --verify "refs/loki/cp/${cp_id}" >/dev/null 2>&1; then
                 echo ""
-                echo -e "  ${YELLOW}Note:${NC} Session state has been restored, but code is unchanged."
-                echo "  To also roll back code to the checkpoint's git state:"
+                echo -e "  ${YELLOW}Note:${NC} Session state restored. Code is unchanged."
+                echo "  To also restore the working tree to this checkpoint's snapshot:"
                 echo ""
-                echo -e "    ${DIM}git reset --hard ${cp_sha:0:8}${NC}"
+                echo -e "    ${DIM}git stash apply refs/loki/cp/${cp_id}${NC}"
                 echo ""
-                echo -e "  ${RED}Warning:${NC} git reset --hard will discard uncommitted changes."
-                echo "  Consider 'git stash' first to preserve current work."
+                echo -e "  ${DIM}(restores tracked files; newly-added files are not removed)${NC}"
+            else
+                local cp_sha
+                cp_sha=$(_CP_METADATA="$metadata" python3 -c "import json, os; d=json.load(open(os.environ['_CP_METADATA'])); print(d.get('git_sha','unknown'))" 2>/dev/null)
+                if [ -n "$cp_sha" ] && [ "$cp_sha" != "unknown" ] && [ "$cp_sha" != "not-a-git-repo" ]; then
+                    echo ""
+                    echo -e "  ${YELLOW}Note:${NC} Session state restored, but no working-tree snapshot"
+                    echo "  was captured for this checkpoint, so code changes since the last"
+                    echo -e "  commit (${cp_sha:0:8}) are not restorable from here."
+                fi
             fi
             ;;
 
@@ -16492,6 +16513,157 @@ SHOW_EOF
         *)
             echo -e "${RED}Unknown checkpoint command: $subcommand${NC}"
             echo "Run 'loki checkpoint help' for usage."
+            return 1
+            ;;
+    esac
+}
+
+# R6: one-command rollback. Top-level, obvious entry point that mirrors the Bun
+# `loki rollback` subcommands (list/show/to/latest) so both routes are at parity.
+# Restore is destructive on .loki/ state, so it ALWAYS captures a forced
+# pre-rollback snapshot first (re-undoability invariant) and then glob-restores
+# whatever the checkpoint dir contains (works across all three checkpoint writers).
+cmd_rollback() {
+    local subcommand="${1:-help}"
+    shift 2>/dev/null || true
+
+    local checkpoints_dir=".loki/state/checkpoints"
+    local index_file="$checkpoints_dir/index.jsonl"
+
+    # Resolve the most recent checkpoint id from on-disk cp-*/chk-* dirs, sorted
+    # by mtime (newest last). Mirrors the Bun "latest = last entry" semantics but
+    # is robust to the three differing id formats.
+    _rollback_latest_id() {
+        [ -d "$checkpoints_dir" ] || return 1
+        ls -1dt "$checkpoints_dir"/*/ 2>/dev/null | head -1 | sed 's#/$##' | xargs -I{} basename {} 2>/dev/null
+    }
+
+    # Force a pre-rollback snapshot of current state, then glob-restore the target.
+    # Delegates the actual restore to `cmd_checkpoint rollback`, which already
+    # glob-restores and is shared with the manual path (no duplication).
+    _rollback_restore() {
+        local target_id="$1"
+        local want_code="$2"
+
+        # Validate id (defense in depth; cmd_checkpoint validates again).
+        if [[ ! "$target_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo -e "${RED}Error: Invalid checkpoint ID${NC}"
+            return 1
+        fi
+        if [ ! -d "$checkpoints_dir/$target_id" ]; then
+            echo -e "${RED}Error: Checkpoint not found: $target_id${NC}"
+            echo "Run 'loki rollback list' to see available checkpoints."
+            return 1
+        fi
+
+        # Re-undoability: snapshot current state before overwriting it.
+        local pre_id
+        pre_id="rb-pre-$(date -u '+%Y%m%d-%H%M%S')"
+        local pre_dir="$checkpoints_dir/$pre_id"
+        mkdir -p "$pre_dir"
+        local saved=0
+        for item in .loki/session.json .loki/dashboard-state.json .loki/CONTINUITY.md .loki/autonomy-state.json .loki/state .loki/queue; do
+            if [ -e "$item" ]; then
+                cp -r "$item" "$pre_dir/" 2>/dev/null && saved=$((saved + 1))
+            fi
+        done
+        _RB_PID="$pre_id" _RB_TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" _RB_DIR="$pre_dir" \
+        _RB_INDEX="$index_file" _RB_CHKDIR="$checkpoints_dir" python3 << 'RB_PRE_EOF' 2>/dev/null || true
+import json, os
+meta = {"id": os.environ["_RB_PID"], "timestamp": os.environ["_RB_TS"],
+        "message": "pre-rollback snapshot", "created_by": "loki rollback"}
+d = os.environ["_RB_DIR"]
+os.makedirs(d, exist_ok=True)
+with open(os.path.join(d, "metadata.json"), "w") as f:
+    json.dump(meta, f, indent=2)
+os.makedirs(os.environ["_RB_CHKDIR"], exist_ok=True)
+with open(os.environ["_RB_INDEX"], "a") as f:
+    f.write(json.dumps({"id": meta["id"], "timestamp": meta["timestamp"], "message": meta["message"]}) + "\n")
+RB_PRE_EOF
+        echo -e "  ${DIM}Saved prior state as ${pre_id} (undo this rollback with: loki rollback to ${pre_id})${NC}"
+
+        # Perform the actual state restore via the shared glob-restore path.
+        cmd_checkpoint rollback "$target_id"
+
+        # Optional code restore from the anchored working-tree snapshot.
+        if [ "$want_code" = "1" ]; then
+            if git rev-parse --verify "refs/loki/cp/${target_id}" >/dev/null 2>&1; then
+                echo ""
+                echo -e "  ${YELLOW}Restoring working tree from snapshot refs/loki/cp/${target_id}...${NC}"
+                if git stash apply "refs/loki/cp/${target_id}" 2>/dev/null; then
+                    echo -e "  ${GREEN}Working tree restored.${NC} (tracked files only; newly-added files were not removed)"
+                else
+                    echo -e "  ${RED}Could not apply snapshot cleanly.${NC} Resolve conflicts, or run: git stash apply refs/loki/cp/${target_id}"
+                fi
+            else
+                echo ""
+                echo -e "  ${YELLOW}No working-tree snapshot anchored for ${target_id}; code not restored.${NC}"
+            fi
+        fi
+    }
+
+    case "$subcommand" in
+        list|ls)
+            cmd_checkpoint list
+            ;;
+        show)
+            cmd_checkpoint show "$@"
+            ;;
+        to)
+            local target="${1:-}"
+            local want_code=0
+            shift 2>/dev/null || true
+            for a in "$@"; do [ "$a" = "--code" ] && want_code=1; done
+            if [ -z "$target" ]; then
+                echo -e "${RED}Error: Specify a checkpoint ID${NC}"
+                echo "Usage: loki rollback to <id> [--code]"
+                echo "Run 'loki rollback list' to see available checkpoints."
+                return 1
+            fi
+            echo -e "${BOLD}Rolling back to checkpoint: $target${NC}"
+            echo ""
+            _rollback_restore "$target" "$want_code"
+            ;;
+        latest)
+            local want_code=0
+            for a in "$@"; do [ "$a" = "--code" ] && want_code=1; done
+            local latest_id
+            latest_id=$(_rollback_latest_id)
+            if [ -z "$latest_id" ]; then
+                echo -e "${RED}No checkpoints found to roll back to.${NC}"
+                return 1
+            fi
+            echo -e "${BOLD}Rolling back to latest checkpoint: $latest_id${NC}"
+            echo ""
+            _rollback_restore "$latest_id" "$want_code"
+            ;;
+        help|--help|-h)
+            echo -e "${BOLD}loki rollback${NC} - One-command rollback to a checkpoint"
+            echo ""
+            echo "Restore .loki/ state and iteration/conversation context to a"
+            echo "previous checkpoint. Every rollback first saves your current state"
+            echo "as a pre-rollback snapshot, so you can always undo the undo."
+            echo ""
+            echo "Usage: loki rollback <command> [args]"
+            echo ""
+            echo "Commands:"
+            echo "  list              List recent checkpoints"
+            echo "  show <id>         Show checkpoint details"
+            echo "  to <id> [--code]  Restore to checkpoint <id>"
+            echo "  latest [--code]   Restore to the most recent checkpoint"
+            echo ""
+            echo "  --code            Also restore the working tree from the anchored"
+            echo "                    git snapshot (tracked files only; overwrites them)."
+            echo ""
+            echo "Examples:"
+            echo "  loki rollback list"
+            echo "  loki rollback latest"
+            echo "  loki rollback to cp-3-1717000000"
+            echo "  loki rollback to cp-3-1717000000 --code"
+            ;;
+        *)
+            echo -e "${RED}Unknown rollback command: $subcommand${NC}"
+            echo "Run 'loki rollback help' for usage."
             return 1
             ;;
     esac

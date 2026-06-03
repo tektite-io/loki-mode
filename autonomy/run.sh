@@ -7443,10 +7443,18 @@ create_checkpoint() {
 
     mkdir -p "$checkpoint_dir"
 
-    # Only checkpoint if there are uncommitted changes
-    if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
-        log_info "No uncommitted changes to checkpoint"
-        return 0
+    # Only checkpoint if there are uncommitted changes.
+    # R6: _LOKI_CP_FORCE=1 bypasses this guard. Used by rollback to guarantee a
+    # pre-rollback snapshot of .loki/ state even when the git tree is clean (the
+    # .loki/ state files about to be overwritten are not git-tracked, so the
+    # clean-tree guard would otherwise skip the safety snapshot). Mirrors the
+    # Bun `forceCreate` seam in checkpoint.ts.
+    if [ "${_LOKI_CP_FORCE:-0}" != "1" ]; then
+        if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
+            log_info "No uncommitted changes to checkpoint"
+            _LAST_CHECKPOINT_ID=""
+            return 0
+        fi
     fi
 
     # Capture git state
@@ -7465,13 +7473,32 @@ create_checkpoint() {
 
     # Copy critical state files (lightweight -- not full .loki/)
     # BUG-ST-009: Include autonomy-state.json in checkpoint backup
-    for f in state/orchestrator.json autonomy-state.json queue/pending.json queue/completed.json queue/in-progress.json queue/current-task.json; do
+    # R6: Include CONTINUITY.md so a rollback also restores iteration/conversation
+    # handoff context, not just machine state. Mirrors Bun COPIED_FILES.
+    for f in state/orchestrator.json autonomy-state.json queue/pending.json queue/completed.json queue/in-progress.json queue/current-task.json CONTINUITY.md; do
         if [ -f ".loki/$f" ]; then
             local target_dir="$cp_dir/$(dirname "$f")"
             mkdir -p "$target_dir"
             cp ".loki/$f" "$cp_dir/$f" 2>/dev/null || true
         fi
     done
+
+    # R6: capture a real working-tree snapshot so code can be truly undone later.
+    # Loki does not commit per iteration, so git_sha (HEAD) cannot reconstruct
+    # this iteration's working tree. `git stash create` builds a commit object
+    # capturing tracked changes WITHOUT disturbing the tree; we then anchor it
+    # under refs/loki/cp/<id> so `git gc` cannot prune the dangling commit. The
+    # snapshot sha goes in a sidecar (worktree-snapshot.txt), NOT metadata.json,
+    # to preserve byte-for-byte parity with the Bun port.
+    # Honest limit: captures tracked changes only (not untracked/ignored files).
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local snap_sha
+        snap_sha=$(git stash create "loki checkpoint ${checkpoint_id}" 2>/dev/null || echo "")
+        if [ -n "$snap_sha" ]; then
+            git update-ref "refs/loki/cp/${checkpoint_id}" "$snap_sha" 2>/dev/null \
+                && printf '%s\n' "$snap_sha" > "$cp_dir/worktree-snapshot.txt" 2>/dev/null || true
+        fi
+    fi
 
     # Write checkpoint metadata (use python3 json.dumps for safe serialization)
     local phase_val
@@ -7531,6 +7558,10 @@ print(json.dumps({'id':m['id'],'ts':m['timestamp'],'iter':m['iteration'],'task':
     fi
 
     log_info "Checkpoint created: ${checkpoint_id} (git: ${git_sha:0:8})"
+    # R6: expose the id via a global so callers (rollback, run loop) can reference
+    # it without parsing stdout (log_info writes to stdout, so command-substitution
+    # capture would include log lines).
+    _LAST_CHECKPOINT_ID="$checkpoint_id"
 }
 
 rollback_to_checkpoint() {
@@ -7558,11 +7589,18 @@ rollback_to_checkpoint() {
 
     log_warn "Rolling back to checkpoint: ${checkpoint_id}"
 
-    # Create a pre-rollback checkpoint first
-    create_checkpoint "pre-rollback snapshot" "rollback"
+    # R6 re-undoability invariant: force a pre-rollback snapshot of CURRENT state
+    # before overwriting, even if the git tree is clean (the .loki/ state we are
+    # about to clobber is not git-tracked). _LOKI_CP_FORCE bypasses the clean-tree
+    # guard. Capture the snapshot id so we can tell the user how to undo the undo.
+    _LOKI_CP_FORCE=1 create_checkpoint "pre-rollback snapshot (before restoring ${checkpoint_id})" "rollback"
+    local pre_rollback_id="${_LAST_CHECKPOINT_ID:-}"
+    if [ -n "$pre_rollback_id" ]; then
+        log_info "Saved prior state as ${pre_rollback_id} (undo this rollback with: loki rollback to ${pre_rollback_id})"
+    fi
 
-    # Restore state files
-    for f in state/orchestrator.json queue/pending.json queue/completed.json queue/in-progress.json queue/current-task.json; do
+    # Restore state files (R6: CONTINUITY.md restores iteration/conversation context)
+    for f in state/orchestrator.json queue/pending.json queue/completed.json queue/in-progress.json queue/current-task.json CONTINUITY.md; do
         if [ -f "${cp_dir}/${f}" ]; then
             local target_dir=".loki/$(dirname "$f")"
             mkdir -p "$target_dir"
@@ -7599,9 +7637,17 @@ print(json.dumps({'event':'rollback','checkpoint':os.environ['_RB_CPID'],'git_sh
 
     log_info "State files restored from checkpoint: ${checkpoint_id}"
 
-    if [ -n "$git_sha" ] && [ "$git_sha" != "no-git" ]; then
-        log_info "Git SHA at checkpoint: ${git_sha}"
-        log_info "To rollback code: git reset --hard ${git_sha}"
+    # R6: the prior hint `git reset --hard ${git_sha}` was MISLEADING. git_sha is
+    # HEAD (the last commit), and Loki does not commit per iteration, so a hard
+    # reset would discard the iteration's work rather than reconstruct it. The
+    # correct, durable recovery is the anchored working-tree snapshot, if present.
+    if [ -f "${cp_dir}/worktree-snapshot.txt" ]; then
+        log_info "To also restore the working tree to this checkpoint:"
+        log_info "  git stash apply refs/loki/cp/${checkpoint_id}"
+    elif [ -n "$git_sha" ] && [ "$git_sha" != "no-git" ]; then
+        log_info "Git SHA at checkpoint (last commit): ${git_sha}"
+        log_info "Note: no working-tree snapshot was captured for this checkpoint;"
+        log_info "code changes since the last commit are not restorable from here."
     fi
 }
 
@@ -12001,6 +12047,10 @@ if __name__ == "__main__":
 
         # Checkpoint after each iteration (v5.57.0)
         create_checkpoint "iteration-${ITERATION_COUNT} complete" "iteration-${ITERATION_COUNT}"
+        # R6: prominent "you can safely undo this" signal so users run boldly.
+        if [ -n "${_LAST_CHECKPOINT_ID:-}" ]; then
+            log_info "Safety net: checkpoint ${_LAST_CHECKPOINT_ID} saved. Undo this iteration with: loki rollback to ${_LAST_CHECKPOINT_ID}"
+        fi
 
         # Quality gates (v6.10.0 - escalation ladder)
         log_step "Post-iteration: running quality gates..."
