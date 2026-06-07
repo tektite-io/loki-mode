@@ -9833,10 +9833,24 @@ except (json.JSONDecodeError, KeyError, TypeError, OSError):
             # BUG-RUN-003: Restore ITERATION_COUNT from persisted state
             ITERATION_COUNT=$(python3 -c "import json; print(json.load(open('.loki/autonomy-state.json')).get('iterationCount', 0))" 2>/dev/null || echo "0")
 
-            # Reset retry count if previous session ended in a terminal state
-            # This allows new sessions to start fresh after failures
+            # Reset retry count + iteration count if previous session ended in a
+            # terminal state. A fresh `loki start` after a terminal run is a NEW
+            # run and must start from a fresh baseline. This matters for the
+            # verified-completion evidence gate (v7.19.1): the run-start SHA
+            # recapture in run_autonomous is gated on ITERATION_COUNT==0, so a
+            # stale count here would leave the gate diffing against the PRIOR
+            # run's start SHA (toothless). Terminal states covered:
+            #   - failure terminals: failed|max_iterations_reached|
+            #     max_retries_exceeded|exited
+            #   - success terminals: council_approved|council_force_approved|
+            #     completion_promise_fulfilled (the run finished; a re-run is new)
+            #   - running: previous process died mid-run (crash); nothing resumes
+            #     from "running" (paused/interrupted are the explicit resume
+            #     signals), so this closes the crash-rerun toothless-gate path.
+            # Deliberately NOT reset (genuine resume / user re-run expecting to
+            # continue): paused, interrupted, budget_exceeded, stopped.
             case "$prev_status" in
-                failed|max_iterations_reached|max_retries_exceeded|exited)
+                failed|max_iterations_reached|max_retries_exceeded|exited|council_approved|council_force_approved|completion_promise_fulfilled|running)
                     log_info "Previous session ended with status: $prev_status. Resetting for new session."
                     RETRY_COUNT=0
                     ITERATION_COUNT=0
@@ -11412,6 +11426,21 @@ run_autonomous() {
     load_state
     local retry=$RETRY_COUNT
 
+    # Capture run-start SHA for the evidence hard gate (v7.19.1).
+    # Fresh-run-aware: recapture HEAD when ITERATION_COUNT==0 (fresh invocation,
+    # reset, or corrupted/missing baseline); preserve only on a genuine resume
+    # (ITERATION_COUNT>0) so the diff window is not moved mid-run. A naive
+    # set-if-absent would leave a stale first-run baseline on every later run,
+    # making the gate toothless. Non-git or zero-commit repos write an empty
+    # file, which the gate treats as inconclusive (pass-through).
+    local _start_sha_file=".loki/state/start-sha"
+    mkdir -p ".loki/state"
+    if [ "${ITERATION_COUNT:-0}" -eq 0 ] || [ ! -s "$_start_sha_file" ]; then
+        (cd "${TARGET_DIR:-.}" && git rev-parse HEAD 2>/dev/null) > "$_start_sha_file" 2>/dev/null || true
+    fi
+    _LOKI_RUN_START_SHA="$(cat "$_start_sha_file" 2>/dev/null || echo "")"
+    export _LOKI_RUN_START_SHA
+
     # Notify dashboard of active project directory (for AI Chat cross-directory usage)
     if command -v curl &>/dev/null; then
         local project_cwd
@@ -12413,6 +12442,20 @@ if __name__ == "__main__":
                 log_warn "  Review details under .loki/quality/reviews/ ; gate_failures=${gate_failures}"
                 _gate_block_for_completion=""
                 # Fall through; the gate-failed loop continues normally
+            # v7.19.1: the verified-completion evidence gate must also guard the
+            # DEFAULT completion route (a completion claim via loki_complete_task
+            # / the completion-promise text), not only the interval-gated council
+            # path. Otherwise an agent can self-assert "done" with an empty diff
+            # and red tests and exit as completion_promise_fulfilled, bypassing
+            # the gate entirely -- exactly the fabrication this feature prevents.
+            # Mirrors the code_review block above (B-17). Opt-out: the gate's own
+            # LOKI_EVIDENCE_GATE=0 (council_evidence_gate returns 0 immediately
+            # when disabled, so this branch never fires). Gate output (reason +
+            # opt-out hint) is printed by council_evidence_gate itself.
+            elif check_completion_promise "$iter_output" && type council_evidence_gate &>/dev/null && ! council_evidence_gate; then
+                log_warn "Completion claim rejected: evidence gate found no proof of completion (empty diff vs run-start SHA, or red tests)."
+                log_warn "  Details under .loki/council/evidence-block.json ; opt out with LOKI_EVIDENCE_GATE=0"
+                # Fall through; keep iterating until there is real evidence.
             elif check_completion_promise "$iter_output"; then
                 echo ""
                 if [ -n "$COMPLETION_PROMISE" ]; then
@@ -12765,6 +12808,8 @@ check_human_intervention() {
         rm -f "$loki_dir/signals/COUNCIL_REVIEW_REQUESTED"
         if type council_checklist_gate &>/dev/null && ! council_checklist_gate; then
             log_info "Council force-review: blocked by checklist hard gate"
+        elif type council_evidence_gate &>/dev/null && ! council_evidence_gate; then
+            log_info "Council force-review: blocked by evidence hard gate"
         elif type council_vote &>/dev/null && council_vote; then
             log_header "COMPLETION COUNCIL: FORCE REVIEW - PROJECT COMPLETE"
             # BUG #17 fix: Write COMPLETED marker, generate council report, and

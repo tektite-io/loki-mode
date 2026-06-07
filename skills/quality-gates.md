@@ -110,6 +110,36 @@ LOKI_HANDOFF_MD=1          # write a structured handoff doc to
 Optional: `LOKI_AUTO_LEARNINGS_EPISODE=1` also writes the learning into
 the Python episodic memory layer via `memory.engine.save_episode`.
 
+## Verified-completion evidence gate (v7.19.1, default-on)
+
+The completion council will not accept a "done" claim without evidence. Before
+completion is honored (on BOTH the council path AND the default
+completion-promise route), `council_evidence_gate` requires:
+
+- a nonzero git diff vs the run-start SHA (something was actually shipped), AND
+- green tests (`.loki/quality/test-results.json` shows the runner passed).
+
+The diff is the union of committed, staged, unstaged, and untracked changes
+(`--exclude-standard`, so gitignored artifacts do not count), with `.loki/`
+runtime state excluded. Inconclusive cases (no git repo, no baseline, no
+test-results file, `runner=none`) pass through and never false-block a
+legitimate first run.
+
+```bash
+LOKI_EVIDENCE_GATE=0       # opt out: completion is honored without the
+                           # evidence check (byte-identical to pre-v7.19.1).
+                           # Default is on (1).
+```
+
+When the gate blocks, it prints the reason and this opt-out to the terminal,
+writes `.loki/council/evidence-block.json`, and surfaces in the dashboard
+(`/api/council/gate` -> `evidence`; the Quality Gates panel shows a banner). A
+persistent block keeps iterating only up to `MAX_ITERATIONS`, then stops
+cleanly; it cannot hang. Honest limit: this proves something-changed-and-tests-
+pass, not PRD-semantic correctness (the council vote is the semantic check).
+The common false-block is a project that was ALREADY red before the run; the
+one-step opt-out is the escape hatch.
+
 **Override-judge knobs (v7.5.4+):**
 
 ```bash

@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.19.1] - 2026-06-07
+
+### Added
+- Verified-completion evidence gate (default-on, opt out with
+  `LOKI_EVIDENCE_GATE=0`). Loki no longer accepts a "done" claim without real
+  evidence: the completion council blocks completion unless there is a nonzero
+  git diff vs the run-start SHA (something was actually shipped) AND tests are
+  green. This kills fabricated completion. The gate runs on BOTH completion
+  paths: the interval-gated council path AND the default completion-promise
+  route (an agent invoking `loki_complete_task` or emitting the promise text),
+  so a self-asserted "done" with an empty diff or red tests cannot slip through.
+  Diff evidence is the union of committed, staged, unstaged, and untracked work
+  (`--exclude-standard`, so gitignored build artifacts do not count), with
+  Loki's own `.loki/` runtime state excluded so it is never mistaken for shipped
+  work. Inconclusive cases (no git repo, no baseline, no test-results file,
+  `runner=none`) pass through and never false-block a legitimate first run. When
+  the gate blocks, it prints the reason and the `LOKI_EVIDENCE_GATE=0` opt-out
+  to the terminal AND surfaces it in the dashboard (`/api/council/gate` now
+  reports an `evidence` block; the Quality Gates panel shows a banner).
+- Bounded by design: a persistent block keeps iterating only up to
+  `MAX_ITERATIONS`, then stops cleanly. It can never hang.
+
+### Fixed
+- Stale-baseline bug on run 2+: a fresh `loki start` after a terminal run
+  (success, failure, or crash) now resets the iteration baseline so the
+  evidence gate diffs against the new run's HEAD, not the prior run's start SHA
+  (which would have made the gate toothless). Genuine resume states (paused,
+  interrupted, budget_exceeded, stopped) are deliberately preserved.
+- Removed two SC2034 dead variables in the gate (the linter was red); the block
+  decision is unchanged.
+
+### NOT tested in this release (honest disclosure)
+- The gate proves "something changed and tests pass", NOT PRD-semantic
+  correctness. A diff that compiles and is green but does not satisfy the spec
+  still passes the gate; the council vote is the semantic check, not this gate.
+- `tests_red` fires whenever a test runner ran and reported failure, including a
+  project that was ALREADY red before this run. That is the expected
+  false-block vector; the one-step `LOKI_EVIDENCE_GATE=0` opt-out at the block
+  site is the escape hatch.
+- No live end-to-end autonomous run was used to validate the gate; verification
+  is via the gate function against per-case throwaway git repos (33 assertions),
+  the two-run lifecycle test (16 assertions), and the completion-route test
+  (4 cases), all wired into the test suite.
+- The Bun route is unchanged for this gate (the completion council is
+  bash-only); this is a bash-route feature.
+
 ## [7.19.0] - 2026-06-07
 
 ### Added

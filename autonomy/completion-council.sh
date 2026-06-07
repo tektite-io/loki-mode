@@ -894,6 +894,200 @@ GATE_EOF
 }
 
 #===============================================================================
+# Council Evidence Hard Gate (v7.19.1) - "verified completion"
+#===============================================================================
+# Block the completion-approval path unless there is real on-disk evidence that
+# the run actually shipped: a nonzero git diff vs the run-start SHA AND a green
+# test signal (where a test suite exists). Cloned from council_checklist_gate:
+# return 0 = pass (OK to complete), return 1 = block (treated as CONTINUE).
+# Blocks ONLY on positive fabrication evidence (empty diff, or a runner that
+# actually ran and was red); every inconclusive case passes through so a
+# legitimate completion is never falsely stopped. Default-on; opt out with
+# LOKI_EVIDENCE_GATE=0 (byte-identical to prior behavior, no read/write).
+council_evidence_gate() {
+    # Knob first: opt-out is exact-as-today, before any file read or write.
+    [ "${LOKI_EVIDENCE_GATE:-1}" = "0" ] && return 0
+
+    # The gate may run even when the completion council is disabled
+    # (LOKI_COUNCIL_ENABLED=false leaves COUNCIL_STATE_DIR unset by council_init),
+    # because it now also guards the default completion-promise route. Default
+    # the block-report dir to .loki/council so we never write to filesystem root.
+    if [ -z "${COUNCIL_STATE_DIR:-}" ]; then
+        COUNCIL_STATE_DIR="${TARGET_DIR:-.}/.loki/council"
+    fi
+
+    # --- Evidence check (a): nonzero diff vs run-start SHA (committed UNION working tree) ---
+    local base_sha=""
+    if [ -n "${_LOKI_RUN_START_SHA:-}" ]; then
+        base_sha="$_LOKI_RUN_START_SHA"
+    elif [ -f ".loki/state/start-sha" ]; then
+        base_sha="$(cat .loki/state/start-sha 2>/dev/null || echo "")"
+    fi
+
+    # diff_fails stays "false" in every inconclusive branch below (no git repo,
+    # no baseline). The block decision (block iff diff_fails OR test_fails) thus
+    # treats inconclusive as pass-through by construction; no separate flag is
+    # read, so none is tracked (avoids SC2034 dead-assignment).
+    local diff_fails="false"
+    local diff_files=0
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        # No git repo => cannot prove fabrication => inconclusive => pass-through.
+        :
+    elif [ -z "$base_sha" ]; then
+        # No baseline captured (non-git/zero-commit run, or never set) =>
+        # inconclusive => pass-through. Never false-block a legit first run.
+        :
+    else
+        # Count the UNION of three change sources (auto-commit is not guaranteed,
+        # so committed-only would false-block a dirty-but-real working tree):
+        #   committed since baseline, unstaged, staged.
+        local committed_files unstaged_files staged_files untracked_files
+        if committed_files=$(git diff --name-only "$base_sha" HEAD 2>/dev/null); then
+            :
+        else
+            # Base present but unreachable (e.g. shallow clone): fall back to
+            # working-tree diff vs HEAD (mirrors proof-generator.py fallback).
+            committed_files=$(git diff --name-only HEAD 2>/dev/null || echo "")
+        fi
+        unstaged_files=$(git diff --name-only HEAD 2>/dev/null || echo "")
+        staged_files=$(git diff --cached --name-only 2>/dev/null || echo "")
+        # Untracked new files: a greenfield first run creates files that are not
+        # yet committed, staged, or seen by diff HEAD. Without this fourth source
+        # the union would be empty and the gate would false-block legitimate new
+        # work. --exclude-standard respects .gitignore so build artifacts and
+        # node_modules do not count as evidence.
+        untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+        # Exclude Loki's own runtime state from the union: .loki/ holds the
+        # gate's inputs (e.g. .loki/quality/test-results.json is always present
+        # at gate time) and other runtime files that are not gitignored, so
+        # counting them would make the gate toothless (the union would never be
+        # empty). Loki's own state is not project work / completion evidence.
+        local union_files
+        union_files=$(printf '%s\n%s\n%s\n%s\n' "$committed_files" "$unstaged_files" "$staged_files" "$untracked_files" | grep -v '^$' | grep -vE '^\.loki/' | sort -u)
+        if [ -n "$union_files" ]; then
+            diff_files=$(printf '%s\n' "$union_files" | wc -l | tr -d ' ')
+        else
+            diff_files=0
+        fi
+        if [ "$diff_files" -eq 0 ]; then
+            diff_fails="true"
+        fi
+    fi
+
+    # --- Evidence check (b): tests green ---
+    local tr_file=".loki/quality/test-results.json"
+    # Like diff_fails, test_fails stays "false" on INCONCLUSIVE / missing-file
+    # branches, so inconclusive is pass-through by construction and no separate
+    # flag is read (avoids SC2034 dead-assignment).
+    local test_fails="false"
+    local test_runner="none"
+    local test_pass="true"
+    if [ -f "$tr_file" ]; then
+        local test_status
+        test_status=$(_TR_FILE="$tr_file" python3 -c "
+import json, os, sys
+tr_file = os.environ['_TR_FILE']
+try:
+    with open(tr_file) as f:
+        d = json.load(f)
+except (json.JSONDecodeError, IOError, KeyError, ValueError):
+    print('INCONCLUSIVE:none:true')
+    sys.exit(0)
+runner = d.get('runner', 'none')
+passed = d.get('pass', True)
+if runner == 'none':
+    print('PASS:none:true')
+elif passed is False:
+    print('FAIL:%s:false' % runner)
+else:
+    print('PASS:%s:true' % runner)
+" 2>/dev/null || echo "INCONCLUSIVE:none:true")
+        local _verdict="${test_status%%:*}"
+        local _rest="${test_status#*:}"
+        test_runner="${_rest%%:*}"
+        test_pass="${_rest#*:}"
+        if [ "$_verdict" = "FAIL" ]; then
+            test_fails="true"
+        fi
+        # INCONCLUSIVE => test_fails stays "false" => pass-through.
+    fi
+    # Missing test-results.json (the else of the -f check) likewise leaves
+    # test_fails="false" => inconclusive => pass-through (no file = no gate).
+
+    # --- Block decision: block iff DIFF FAILS or TEST FAILS ---
+    if [ "$diff_fails" != "true" ] && [ "$test_fails" != "true" ]; then
+        # Gate passes: remove any stale block report.
+        if [ -f "$COUNCIL_STATE_DIR/evidence-block.json" ]; then
+            rm -f "$COUNCIL_STATE_DIR/evidence-block.json"
+        fi
+        return 0
+    fi
+
+    # Determine reason and build human-readable failure list.
+    local reason="no_evidence_of_completion"
+    if [ "$diff_fails" = "true" ] && [ "$test_fails" = "true" ]; then
+        reason="empty_diff_and_tests_red"
+    elif [ "$diff_fails" = "true" ]; then
+        reason="empty_diff"
+    elif [ "$test_fails" = "true" ]; then
+        reason="tests_red"
+    fi
+
+    local failures=""
+    if [ "$diff_fails" = "true" ]; then
+        failures="empty git diff vs run-start SHA (nothing shipped)"
+        log_warn "[Council] Evidence gate BLOCKED: empty git diff vs run-start SHA"
+    fi
+    if [ "$test_fails" = "true" ]; then
+        if [ -n "$failures" ]; then
+            failures="${failures}|test runner '${test_runner}' ran and was red"
+        else
+            failures="test runner '${test_runner}' ran and was red"
+        fi
+        log_warn "[Council] Evidence gate BLOCKED: test runner '${test_runner}' was red"
+    fi
+
+    # Rail 3 (one-step self-rescue): the terminal user (no dashboard open) must
+    # be told, right at the block site, how to opt out of the gate. A false
+    # block (e.g. a pre-existing red test the run cannot fix) is otherwise a
+    # dead-end until max-iterations. This single line keeps the gate safe to
+    # ship default-on.
+    log_warn "[Council] Run will keep iterating until there is real evidence of completion. To opt out: set LOKI_EVIDENCE_GATE=0"
+
+    # Write block report (atomic temp+mv, mirroring gate-block.json).
+    mkdir -p "$COUNCIL_STATE_DIR" 2>/dev/null || true
+    local ev_file="$COUNCIL_STATE_DIR/evidence-block.json"
+    local ev_tmp="${ev_file}.tmp"
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local failures_json diff_ok tests_ok base_for_json
+    failures_json=$(_FAILURES="$failures" python3 -c "
+import json, os
+items = [s for s in os.environ['_FAILURES'].split('|') if s]
+print(json.dumps(items[:5]))
+" 2>/dev/null || echo '[]')
+    if [ "$diff_fails" = "true" ]; then diff_ok="false"; else diff_ok="true"; fi
+    if [ "$test_fails" = "true" ]; then tests_ok="false"; else tests_ok="true"; fi
+    base_for_json="${base_sha:-}"
+    cat > "$ev_tmp" << EVIDENCE_EOF
+{
+    "status": "blocked",
+    "blocked": true,
+    "blocked_at": "$timestamp",
+    "iteration": ${ITERATION_COUNT:-0},
+    "reason": "$reason",
+    "checks": {
+        "diff": {"ok": $diff_ok, "base_sha": "$base_for_json", "files_changed": $diff_files, "sources": "committed|unstaged|staged|untracked union"},
+        "tests": {"ok": $tests_ok, "runner": "$test_runner", "pass": $test_pass}
+    },
+    "failures": $failures_json
+}
+EVIDENCE_EOF
+    mv "$ev_tmp" "$ev_file"
+    return 1
+}
+
+#===============================================================================
 # Council Member Review - Individual member evaluation
 #===============================================================================
 
@@ -1522,6 +1716,13 @@ council_evaluate() {
     if ! council_checklist_gate; then
         log_info "[Council] Completion blocked by checklist hard gate"
         return 1  # CONTINUE - can't complete with critical failures
+    fi
+
+    # Phase 2.5 (v7.19.1): evidence hard gate - block completion unless there is
+    # real evidence that files changed AND tests are green.
+    if ! council_evidence_gate; then
+        log_info "[Council] Completion blocked by evidence hard gate"
+        return 1  # CONTINUE - cannot complete without real evidence
     fi
 
     # Compute threshold using the same ceiling(2/3) formula as council_vote and council_aggregate_votes
