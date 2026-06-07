@@ -124,6 +124,26 @@
 #   LOKI_NOTIFICATIONS   - Enable desktop notifications (default: true)
 #   LOKI_NOTIFICATION_SOUND - Play sound with notifications (default: true)
 #
+# Uncertainty-Gated Escalation (v7.19.2, default-on):
+#   LOKI_UNCERTAINTY_ESCALATION  - Master on/off for proactive stuck-escalation (default: 1; set 0 to
+#                                  disable; byte-identical when off). Decision lives in
+#                                  completion-council.sh (uncertainty_should_escalate); action in run.sh.
+#                                  NOTE: AUTONOMY_MODE defaults to "perpetual"; in perpetual mode PAUSE
+#                                  is auto-cleared by check_human_intervention, so escalation degrades
+#                                  to notify-only (notification fires, run does NOT halt).
+#   LOKI_UNCERTAINTY_ROUNDS      - Consecutive rounds where >=2 of 3 proxies must co-occur before
+#                                  escalating (default: 2; recommended range 2-3). Debounces transient
+#                                  noise: a single hot proxy never escalates alone.
+#   LOKI_UNCERTAINTY_NOCHANGE_MIN - Proxy 1 threshold: consecutive_no_change value that marks p1 hot.
+#                                  (default: COUNCIL_STAGNATION_LIMIT - 1, i.e. one below the circuit-
+#                                  breaker limit so escalation fires before the breaker ends the run).
+#                                  Floored at 1 at runtime.
+#   LOKI_UNCERTAINTY_SPLIT_ROUNDS - Proxy 3 threshold: number of consecutive trailing council verdicts
+#                                  that must be REJECTED-with-approver (split) to mark p3 hot
+#                                  (default: 2). Between council votes p3 may be stale; it is always
+#                                  fresh when proxy 1 is hot because proxy 1 hot forces a circuit-
+#                                  breaker vote that refreshes verdicts.
+#
 # Human Intervention (Auto-Claude pattern):
 #   PAUSE file:          touch .loki/PAUSE - pauses after current session
 #   HUMAN_INPUT.md:      echo "instructions" > .loki/HUMAN_INPUT.md
@@ -286,6 +306,10 @@ parse_simple_yaml() {
     set_from_yaml "$file" "completion.council.check_interval" "LOKI_COUNCIL_CHECK_INTERVAL"
     set_from_yaml "$file" "completion.council.min_iterations" "LOKI_COUNCIL_MIN_ITERATIONS"
     set_from_yaml "$file" "completion.council.stagnation_limit" "LOKI_COUNCIL_STAGNATION_LIMIT"
+    set_from_yaml "$file" "completion.uncertainty.escalation" "LOKI_UNCERTAINTY_ESCALATION"
+    set_from_yaml "$file" "completion.uncertainty.rounds" "LOKI_UNCERTAINTY_ROUNDS"
+    set_from_yaml "$file" "completion.uncertainty.nochange_min" "LOKI_UNCERTAINTY_NOCHANGE_MIN"
+    set_from_yaml "$file" "completion.uncertainty.split_rounds" "LOKI_UNCERTAINTY_SPLIT_ROUNDS"
 
     # Model
     set_from_yaml "$file" "model.prompt_repetition" "LOKI_PROMPT_REPETITION"
@@ -428,6 +452,10 @@ parse_yaml_with_yq() {
         "completion.council.check_interval:LOKI_COUNCIL_CHECK_INTERVAL"
         "completion.council.min_iterations:LOKI_COUNCIL_MIN_ITERATIONS"
         "completion.council.stagnation_limit:LOKI_COUNCIL_STAGNATION_LIMIT"
+        "completion.uncertainty.escalation:LOKI_UNCERTAINTY_ESCALATION"
+        "completion.uncertainty.rounds:LOKI_UNCERTAINTY_ROUNDS"
+        "completion.uncertainty.nochange_min:LOKI_UNCERTAINTY_NOCHANGE_MIN"
+        "completion.uncertainty.split_rounds:LOKI_UNCERTAINTY_SPLIT_ROUNDS"
         "model.prompt_repetition:LOKI_PROMPT_REPETITION"
         "model.confidence_routing:LOKI_CONFIDENCE_ROUTING"
         "model.autonomy_mode:LOKI_AUTONOMY_MODE"
@@ -12388,6 +12416,33 @@ if __name__ == "__main__":
         # BUG-QG-008: Track iteration for convergence regardless of exit code
         if type council_track_iteration &>/dev/null; then
             council_track_iteration "$log_file"
+        fi
+
+        # Uncertainty-gated escalation (v7.19.2, Slice B action).
+        # The decision lives in completion-council.sh:uncertainty_should_escalate
+        # (pure, debounced once-per-stuck-episode, knob-first on
+        # LOKI_UNCERTAINTY_ESCALATION). This block only ACTS when the function
+        # returns rc 0. The type guard keeps it a silent no-op if the decision
+        # function is not present (byte-identical when the feature is absent/off).
+        if type uncertainty_should_escalate &>/dev/null && uncertainty_should_escalate; then
+            log_error "[Uncertainty] Escalating to human: >=2 of 3 stuck-signals co-occurred for N rounds (no-change / oscillation / council-split). PAUSE written; handoff saved."
+            log_warn  "[Uncertainty] To opt out of proactive escalation: set LOKI_UNCERTAINTY_ESCALATION=0"
+            # Structured handoff doc before the bare PAUSE (mirrors GATE precedent).
+            write_structured_handoff "uncertainty_escalation"
+            notify_intervention_needed "Uncertainty escalation: >=2 of 3 stuck-signals co-occurred for N rounds"
+            # Marker file for dashboard / external consumers. Empty touch has no
+            # partial-write window, so atomic temp+mv is not required here.
+            mkdir -p "${TARGET_DIR:-.}/.loki/signals"
+            touch "${TARGET_DIR:-.}/.loki/signals/UNCERTAINTY_ESCALATION"
+            # PAUSE is consumed by check_human_intervention: it halts in
+            # non-perpetual mode; in perpetual mode it auto-clears + notifies.
+            # That degrade is free; we add no consumer logic here.
+            touch "${TARGET_DIR:-.}/.loki/PAUSE"
+            # Perpetual-mode honesty: detect with the SAME vars the existing PAUSE
+            # consumer uses (run.sh check_human_intervention), print-only.
+            if [ "$AUTONOMY_MODE" = "perpetual" ] || [ "$PERPETUAL_MODE" = "true" ]; then
+                log_warn "[Uncertainty] Perpetual mode: PAUSE will be auto-cleared; this is notify-only and will NOT halt the run."
+            fi
         fi
 
         # Check for success - ONLY stop on explicit completion promise

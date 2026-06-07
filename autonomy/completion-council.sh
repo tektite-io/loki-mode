@@ -28,6 +28,10 @@
 #   LOKI_COUNCIL_CONVERGENCE_WINDOW - Iterations to track for convergence (default: 3)
 #   LOKI_COUNCIL_STAGNATION_LIMIT - Max iterations with no git changes (default: 5)
 #   LOKI_COUNCIL_DONE_SIGNAL_LIMIT - Max total done signals before force stop (default: 10)
+#   LOKI_UNCERTAINTY_ESCALATION   - Proactive stuck-escalation decision (default: 1; set 0 to disable, byte-identical)
+#   LOKI_UNCERTAINTY_ROUNDS       - Consecutive co-occurrence rounds before escalate (default: 2)
+#   LOKI_UNCERTAINTY_NOCHANGE_MIN - Proxy 1 threshold on consecutive_no_change (default: COUNCIL_STAGNATION_LIMIT - 1)
+#   LOKI_UNCERTAINTY_SPLIT_ROUNDS - Proxy 3 trailing split-round run length (default: 2)
 #
 # Usage:
 #   source autonomy/completion-council.sh
@@ -221,6 +225,7 @@ council_track_iteration() {
     _COUNCIL_TOTAL_DONE_SIGNALS="$COUNCIL_TOTAL_DONE_SIGNALS" \
     _COUNCIL_ITERATION="${ITERATION_COUNT:-0}" \
     _COUNCIL_FILES_CHANGED="$files_changed" \
+    _COUNCIL_DIFF_HASH="$combined_hash" \
     python3 -c "
 import json, os
 state_file = os.environ['_COUNCIL_STATE_FILE']
@@ -234,6 +239,7 @@ state['done_signals'] = int(os.environ['_COUNCIL_DONE_SIGNALS'])
 state['total_done_signals'] = int(os.environ['_COUNCIL_TOTAL_DONE_SIGNALS'])
 state['last_track_iteration'] = int(os.environ['_COUNCIL_ITERATION'])
 state['files_changed'] = int(os.environ['_COUNCIL_FILES_CHANGED'])
+state['last_diff_hash'] = os.environ['_COUNCIL_DIFF_HASH']
 with open(state_file, 'w') as f:
     json.dump(state, f, indent=2)
 " || log_warn "Failed to update council tracking state"
@@ -261,6 +267,282 @@ council_circuit_breaker_triggered() {
     fi
 
     return 1
+}
+
+#===============================================================================
+# Uncertainty-Gated Escalation - pure stuck-detection DECISION function
+#
+# Returns 0 = escalate now, 1 = do not escalate. Reads ONLY persisted state
+# (the council state.json for the three proxies, plus its own uncertainty.json
+# for the ring buffer + co-occurrence streak + debounce flag). Mutates only its
+# own uncertainty.json (atomic temp+mv). Fires NO notifications and touches NO
+# PAUSE file: the run.sh action site interprets the return code and performs the
+# side effects. This keeps the function sourceable and testable in isolation.
+#
+# Three proxies (all read from state, no live shell vars, no git calls):
+#   P1 (no-change)   : state.json consecutive_no_change >= NOCHANGE_MIN
+#                      (default COUNCIL_STAGNATION_LIMIT - 1, i.e. approaching
+#                      the circuit-breaker limit).
+#   P2 (oscillation) : current state.json last_diff_hash recurs at distance >= 2
+#                      in the ring buffer (A -> B -> A). Immediate repeat (A -> A)
+#                      is P1's territory and is excluded.
+#   P3 (council split): the trailing SPLIT_ROUNDS entries of state.json verdicts
+#                      are all result == "REJECTED" with approve >= 1.
+# Escalate iff >= 2 proxies are hot AND that has held for ROUNDS consecutive
+# rounds AND we have not already escalated this episode (debounce). Re-arm when
+# co-occurrence drops below 2 in any later round.
+#===============================================================================
+
+# Resolve the uncertainty.json path co-located with the council state root so a
+# sourced test (which sets COUNCIL_STATE_DIR to a throwaway dir) reads and writes
+# in that same throwaway dir, never the developer's real cwd. In production
+# COUNCIL_STATE_DIR is "${TARGET_DIR}/.loki/council", so its parent is the right
+# ".loki" and this lands at ".loki/state/uncertainty.json".
+_uncertainty_state_path() {
+    local base_dir="${COUNCIL_STATE_DIR:-${TARGET_DIR:-.}/.loki/council}"
+    local loki_root
+    loki_root="$(dirname "$base_dir")"
+    echo "$loki_root/state/uncertainty.json"
+}
+
+# Read uncertainty.json (or emit a default object if missing/corrupt) to stdout.
+_uncertainty_read_state() {
+    local file="$1"
+    _UNC_FILE="$file" python3 -c "
+import json, os
+f = os.environ['_UNC_FILE']
+default = {
+    'schema_version': '1.0.0',
+    'consecutive_co_occur': 0,
+    'escalated_episode': False,
+    'escalated_at_iteration': 0,
+    'diff_hash_ring': [],
+    'last_round_iteration': -1,
+    'last_proxies': {'p1': False, 'p2': False, 'p3': False},
+}
+try:
+    with open(f) as fh:
+        state = json.load(fh)
+    if not isinstance(state, dict):
+        state = {}
+except (json.JSONDecodeError, FileNotFoundError, OSError):
+    state = {}
+for k, v in default.items():
+    state.setdefault(k, v)
+print(json.dumps(state))
+" 2>/dev/null || echo '{}'
+}
+
+# Write a JSON string (read from _UNC_PAYLOAD) to uncertainty.json atomically
+# (temp + mv), mirroring evidence-block.json.
+_uncertainty_write_state() {
+    local file="$1"
+    local payload="$2"
+    local dir tmp
+    dir="$(dirname "$file")"
+    mkdir -p "$dir" 2>/dev/null || true
+    tmp="${file}.tmp.$$"
+    if _UNC_PAYLOAD="$payload" _UNC_TMP="$tmp" python3 -c "
+import json, os
+payload = os.environ['_UNC_PAYLOAD']
+tmp = os.environ['_UNC_TMP']
+state = json.loads(payload)
+with open(tmp, 'w') as fh:
+    json.dump(state, fh, indent=2)
+" 2>/dev/null; then
+        mv "$tmp" "$file" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+
+uncertainty_should_escalate() {
+    # Knob first: opt-out is byte-identical to prior behavior. No read, no write,
+    # no state-file creation when disabled.
+    [ "${LOKI_UNCERTAINTY_ESCALATION:-1}" = "0" ] && return 1
+
+    # Tunable knobs (read inline; defaults documented in the env-var block).
+    local rounds_needed="${LOKI_UNCERTAINTY_ROUNDS:-2}"
+    local split_rounds="${LOKI_UNCERTAINTY_SPLIT_ROUNDS:-2}"
+    local nochange_min="${LOKI_UNCERTAINTY_NOCHANGE_MIN:-}"
+    if [ -z "$nochange_min" ]; then
+        nochange_min=$(( ${COUNCIL_STAGNATION_LIMIT:-5} - 1 ))
+        [ "$nochange_min" -lt 1 ] && nochange_min=1
+    fi
+    # Bounded constants.
+    local ring_size=6
+
+    # Resolve state file locations (council state root co-located).
+    local council_dir="${COUNCIL_STATE_DIR:-${TARGET_DIR:-.}/.loki/council}"
+    local state_json="$council_dir/state.json"
+    local unc_file
+    unc_file="$(_uncertainty_state_path)"
+    local iteration="${ITERATION_COUNT:-0}"
+
+    # Load prior uncertainty state.
+    local prior
+    prior="$(_uncertainty_read_state "$unc_file")"
+
+    # Compute the new state and decision entirely in python from persisted inputs.
+    # Echoes one line: "<rc> <new_json>" where rc is 0 (escalate) or 1 (no).
+    local result
+    result=$(_UNC_PRIOR="$prior" \
+             _UNC_STATE_JSON="$state_json" \
+             _UNC_ITERATION="$iteration" \
+             _UNC_ROUNDS="$rounds_needed" \
+             _UNC_SPLIT_ROUNDS="$split_rounds" \
+             _UNC_NOCHANGE_MIN="$nochange_min" \
+             _UNC_RING_SIZE="$ring_size" \
+             python3 -c "
+import json, os
+
+prior = json.loads(os.environ['_UNC_PRIOR'])
+iteration = int(os.environ['_UNC_ITERATION'])
+rounds_needed = int(os.environ['_UNC_ROUNDS'])
+split_rounds = int(os.environ['_UNC_SPLIT_ROUNDS'])
+nochange_min = int(os.environ['_UNC_NOCHANGE_MIN'])
+ring_size = int(os.environ['_UNC_RING_SIZE'])
+
+# Load council state.json (proxies). Missing/corrupt -> proxies cold.
+try:
+    with open(os.environ['_UNC_STATE_JSON']) as fh:
+        cstate = json.load(fh)
+    if not isinstance(cstate, dict):
+        cstate = {}
+except (json.JSONDecodeError, FileNotFoundError, OSError):
+    cstate = {}
+
+ring = prior.get('diff_hash_ring', [])
+if not isinstance(ring, list):
+    ring = []
+last_round = prior.get('last_round_iteration', -1)
+try:
+    last_round = int(last_round)
+except (TypeError, ValueError):
+    last_round = -1
+
+# Idempotency: a repeated call at the same iteration must not double-mutate.
+# Recompute proxies and re-emit the prior decision without pushing the ring or
+# advancing the streak again.
+same_round = (iteration == last_round)
+
+# --- Proxy 1: no-change approaching circuit breaker ---
+try:
+    no_change = int(cstate.get('consecutive_no_change', 0))
+except (TypeError, ValueError):
+    no_change = 0
+p1 = no_change >= nochange_min
+
+# --- Proxy 2: diff-hash recurrence at distance >= 2 (genuine oscillation) ---
+cur_hash = cstate.get('last_diff_hash', '')
+p2 = False
+if cur_hash:
+    # Genuine oscillation (A -> B -> A) requires TWO things:
+    #   1. cur_hash recurs in the ring excluding the most-recent entry
+    #      (distance >= 2; distance 1 immediate-repeat is P1's territory), AND
+    #   2. the most-recent ring entry (the previous round's hash) is DIFFERENT
+    #      from cur_hash, i.e. there is an intervening distinct hash.
+    # Without (2), pure stagnation (A, A, A, ...) fills the ring with the same
+    # hash and would falsely fire P2 from the SAME root condition as P1, letting
+    # a single condition (no-change) light two proxies and escalate alone. That
+    # contradicts the 2-of-3 independent-proxy safety guarantee. Requiring an
+    # intervening distinct hash keeps A,B,A hot and A,A,A cold.
+    prev_hash = ring[-1] if ring else ''
+    if prev_hash != cur_hash:
+        for h in ring[:-1]:
+            if h == cur_hash:
+                p2 = True
+                break
+
+# --- Proxy 3: persistent council split (trailing REJECTED with approve>=1) ---
+verdicts = cstate.get('verdicts', [])
+if not isinstance(verdicts, list):
+    verdicts = []
+split_run = 0
+for v in reversed(verdicts):
+    if not isinstance(v, dict):
+        break
+    try:
+        approve = int(v.get('approve', 0))
+    except (TypeError, ValueError):
+        approve = 0
+    if v.get('result') == 'REJECTED' and approve >= 1:
+        split_run += 1
+    else:
+        break
+p3 = split_run >= split_rounds
+
+hot_count = (1 if p1 else 0) + (1 if p2 else 0) + (1 if p3 else 0)
+co_occur = hot_count >= 2
+
+streak = prior.get('consecutive_co_occur', 0)
+try:
+    streak = int(streak)
+except (TypeError, ValueError):
+    streak = 0
+escalated_episode = bool(prior.get('escalated_episode', False))
+escalated_at = prior.get('escalated_at_iteration', 0)
+try:
+    escalated_at = int(escalated_at)
+except (TypeError, ValueError):
+    escalated_at = 0
+
+new_state = dict(prior)
+new_state['schema_version'] = prior.get('schema_version', '1.0.0')
+new_state['last_proxies'] = {'p1': p1, 'p2': p2, 'p3': p3}
+
+if same_round:
+    # No mutation of ring/streak; report no-escalate on the repeat call so we
+    # never fire twice for one round. Proxy snapshot is refreshed (harmless).
+    new_state['diff_hash_ring'] = ring
+    new_state['consecutive_co_occur'] = streak
+    new_state['escalated_episode'] = escalated_episode
+    new_state['escalated_at_iteration'] = escalated_at
+    new_state['last_round_iteration'] = last_round
+    rc = 1
+else:
+    # Advance the ring with this round's hash (bounded).
+    if cur_hash:
+        ring = ring + [cur_hash]
+        if len(ring) > ring_size:
+            ring = ring[-ring_size:]
+
+    if co_occur:
+        streak += 1
+    else:
+        # Re-arm on clear: a resolved episode may legitimately re-escalate later.
+        streak = 0
+        escalated_episode = False
+
+    rc = 1
+    if co_occur and streak >= rounds_needed and not escalated_episode:
+        rc = 0
+        escalated_episode = True
+        escalated_at = iteration
+
+    new_state['diff_hash_ring'] = ring
+    new_state['consecutive_co_occur'] = streak
+    new_state['escalated_episode'] = escalated_episode
+    new_state['escalated_at_iteration'] = escalated_at
+    new_state['last_round_iteration'] = iteration
+
+print(str(rc) + ' ' + json.dumps(new_state))
+" 2>/dev/null) || return 1
+
+    [ -z "$result" ] && return 1
+
+    local rc new_json
+    rc="${result%% *}"
+    new_json="${result#* }"
+
+    # Persist the new state atomically (failure to persist must not escalate).
+    _uncertainty_write_state "$unc_file" "$new_json" || return 1
+
+    case "$rc" in
+        0) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 #===============================================================================

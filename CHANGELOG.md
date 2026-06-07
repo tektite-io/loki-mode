@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.19.2] - 2026-06-07
+
+### Added
+- Uncertainty-gated escalation (default-on, opt out with
+  `LOKI_UNCERTAINTY_ESCALATION=0`). When Loki looks stuck, it now proactively
+  escalates to the human (writes a structured handoff, fires an intervention
+  notification, drops a `.loki/signals/UNCERTAINTY_ESCALATION` marker, and
+  touches `.loki/PAUSE`) instead of silently burning iterations until
+  max-iterations. The trigger reuses three signals already in the loop, with no
+  new metacognition: P1 the circuit-breaker no-change counter, P2 diff-hash
+  oscillation (a recurrence A -> B -> A, NOT a trivial A -> A repeat, which is
+  P1's territory), and P3 a persistent council split (trailing rounds rejected
+  with at least one approver). Escalation fires only when at least two of the
+  three co-occur for N consecutive rounds (`LOKI_UNCERTAINTY_ROUNDS`, default 2),
+  so a single noisy proxy cannot escalate alone, and it debounces to once per
+  stuck-episode (re-arms when the co-occurrence clears) so it never spams. When
+  it fires it prints a loud terminal line naming the opt-out.
+
+### NOT tested in this release (honest disclosure)
+- Default autonomy mode is "perpetual", where `.loki/PAUSE` auto-clears, so by
+  DEFAULT this feature is NOTIFY-ONLY: it surfaces the stuck state and saves a
+  handoff but does not halt the run. It halts only in checkpoint/supervised
+  modes. This is disclosed at the escalation site and in the docs.
+- The three proxies are heuristics, not true metacognition: they can false-fire
+  (escalate when Loki is actually fine) and miss (stay quiet when it is stuck).
+  The 2-of-3 + N-round gate reduces but does not eliminate false fires.
+- P3 (council split) is stale between council votes (verdicts only append when
+  the council actually votes), so the split signal can lag.
+- No live multi-iteration autonomous run was used; verification is the decision
+  function against per-case throwaway fixtures (42 assertions, including a
+  pure-stagnation guard proving P2 does not fire without genuine oscillation)
+  plus an end-to-end decision-then-action behavioral check.
+- This is a bash-route feature (the completion council is bash-only).
+
 ## [7.19.1] - 2026-06-07
 
 ### Added

@@ -124,6 +124,12 @@ run_test "State Baseline Lifecycle (run 2+ freshness)" "$SCRIPT_DIR/test-state-b
 # a fabricated completion (empty diff or red tests) must be rejected there too.
 run_test "Completion-route Evidence Gate (default path)" "$SCRIPT_DIR/test-completion-route-evidence-gate.sh"
 
+# Uncertainty-gated escalation: when >=2 of 3 reused proxies (no-change,
+# diff-hash oscillation, council split) co-occur for N rounds, the decision
+# function escalates once per stuck-episode (debounced); a single noisy proxy
+# must NOT escalate. Regression guard for the v7.19.2 escalation ladder.
+run_test "Uncertainty Escalation (2-of-3 proxies)" "$SCRIPT_DIR/test-uncertainty-escalation.sh"
+
 # Linting
 run_test "ShellCheck Linting" "$SCRIPT_DIR/run-shellcheck.sh"
 
