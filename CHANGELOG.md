@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.18.3] - 2026-06-06
+
+### Changed
+- First-run experience: `loki` with no arguments now leads with a "New here?"
+  getting-started block (loki doctor, loki quick, loki demo, loki start) so a
+  new user has an obvious next step instead of a wall of 30+ commands. Reduces
+  time-to-first-value. Help text only, no behavior change.
+
+### Fixed
+- Honest `loki demo` description. The command help and the no-arg command list
+  previously called demo a "~60s simulated session," but `loki demo` runs a
+  real end-to-end build of a sample todo app. All three descriptions now say
+  "Build a sample todo app end to end (real run)" so the copy matches behavior.
+- The crash-report channel (`loki crash submit` prefilled GitHub issue URL, and
+  the references in docs/PRIVACY.md) now resolves: GitHub issues were
+  re-enabled on the repository, so the v7.18.2 crash-report promise works.
+
 ## [7.18.2] - 2026-06-06
 
 ### Added
