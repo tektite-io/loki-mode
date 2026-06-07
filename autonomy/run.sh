@@ -9042,6 +9042,7 @@ retrieve_memory_context() {
     # Pass parameters via environment variables to prevent command injection
     _LOKI_PROJECT_DIR="$PROJECT_DIR" _LOKI_TARGET_DIR="$target_dir" \
     _LOKI_GOAL="$goal" _LOKI_PHASE="$phase" \
+    _LOKI_FAILURE_MEMORY="${LOKI_FAILURE_MEMORY:-1}" \
     python3 << 'PYEOF' 2>/dev/null
 import sys
 import os
@@ -9066,6 +9067,56 @@ try:
             summary = r.get('summary', r.get('pattern', ''))[:100]
             source = r.get('source', 'memory')
             print(f'- [{source}] {summary}')
+    # CONNECTOR B (failure-memory loop): surface the most recent FAILURE
+    # episodes by recency. Within a run the goal is constant, so the correct
+    # retrieval key is "what did I just fail at" (recency), not goal-similarity.
+    # Default-on knob LOKI_FAILURE_MEMORY; no-op when 0.
+    if os.environ.get('_LOKI_FAILURE_MEMORY', '1') != '0':
+        try:
+            from memory.storage import MemoryStorage as _MS
+            from memory.schemas import EpisodeTrace as _ET
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _s = storage if 'storage' in dir() else _MS(f'{target_dir}/.loki/memory')
+            _since = _dt.now(_tz.utc) - _td(hours=24)
+            _lessons = []
+            for _eid in _s.list_episodes(since=_since, limit=50):
+                _data = _s.load_episode(_eid)
+                _ep = _ET.from_dict(_data) if isinstance(_data, dict) else _data
+                if getattr(_ep, 'outcome', '') != 'failure':
+                    continue
+                # Sort key: the episode's own timestamp (wall-clock), NOT the
+                # list_episodes order. list_episodes is newest-DAY first, but
+                # within a day files sort by a random uuid suffix in the id
+                # (schemas.py id = date + uuid8), so same-day order does NOT
+                # follow wall-clock. In a long run with >3 same-day failures
+                # (the target scenario) that would drop the most-recent lesson.
+                # Sorting by the timestamp field gives true recency.
+                _ts = getattr(_ep, 'timestamp', None)
+                _ts_key = _ts.isoformat() if hasattr(_ts, 'isoformat') else str(_ts or '')
+                for _e in getattr(_ep, 'errors_encountered', []):
+                    _lessons.append((_ts_key, _e.error_type, _e.message))
+            # Newest first by true wall-clock timestamp, then take 3.
+            _lessons.sort(key=lambda _x: _x[0], reverse=True)
+            _lessons = [(_t, _m) for (_k, _t, _m) in _lessons[:3]]
+            if _lessons:
+                print('')
+                print('PAST FAILURES TO AVOID:')
+                for _t, _m in _lessons:
+                    _line = '- ' + str(_t)[:80]
+                    if _m:
+                        _line += ': ' + str(_m)[:160]
+                    print(_line)
+        except Exception:
+            pass
+        # Best-effort cross-run secondary (mostly empty locally; harmless).
+        try:
+            _anti = retriever.retrieve_anti_patterns((goal + ' ' + phase).strip() or goal, top_k=3)
+            for _a in _anti[:3]:
+                _w = _a.get('what_fails') or _a.get('incorrect_approach') or _a.get('pattern', '')
+                if _w:
+                    print('- (prior) ' + str(_w)[:120])
+        except Exception:
+            pass
 except Exception as e:
     pass  # Silently fail if memory not available
 PYEOF
@@ -9417,6 +9468,13 @@ auto_capture_episode() {
     # optionally shadow-write it to the managed store if importance >= 0.6.
     local episode_path_file="/tmp/loki-episode-path-$$"
     : > "$episode_path_file"
+    # CONNECTOR A (failure-memory loop): locate this iteration's scrubbed crash
+    # file (failure only). Default-on knob LOKI_FAILURE_MEMORY; no-op when 0.
+    local _crash_json=""
+    if [ "${LOKI_FAILURE_MEMORY:-1}" != "0" ] && [ "$exit_code" -ne 0 ] \
+        && [ -d "$target_dir/.loki/crash" ]; then
+        _crash_json=$(ls -t "$target_dir/.loki/crash/"*.json 2>/dev/null | head -1 || true)
+    fi
     _LOKI_PROJECT_DIR="$PROJECT_DIR" _LOKI_TARGET_DIR="$target_dir" \
     _LOKI_ITERATION="$iteration" _LOKI_EXIT_CODE="$exit_code" \
     _LOKI_RARV_PHASE="$rarv_phase" _LOKI_GOAL="$goal" \
@@ -9425,6 +9483,7 @@ auto_capture_episode() {
     _LOKI_EPISODE_PATH_FILE="$episode_path_file" \
     _LOKI_TOKENS_IN="$_iter_tokens_in" _LOKI_TOKENS_OUT="$_iter_tokens_out" \
     _LOKI_TOKENS_TOTAL="$_iter_tokens_total" _LOKI_COST_USD="$_iter_cost" \
+    _LOKI_FAILURE_MEMORY="${LOKI_FAILURE_MEMORY:-1}" _LOKI_CRASH_JSON="$_crash_json" \
     python3 << 'PYEOF' 2>/dev/null || true
 import sys
 import os
@@ -9487,6 +9546,45 @@ try:
             trace.artifacts_produced = list(trace.files_modified)
     except AttributeError:
         pass
+
+    # CONNECTOR A (failure-memory loop): attach a scrubbed (or non-sensitive
+    # fallback) ErrorEntry to the failed episode so the next iteration can learn
+    # from it. Reuses the Phase 0 scrubbed crash file; never reads raw data.
+    # Wrapped in try/except so it can never block episode capture.
+    if os.environ.get('_LOKI_FAILURE_MEMORY', '1') != '0' and outcome == 'failure':
+        try:
+            from memory.schemas import ErrorEntry
+            crash_json_path = os.environ.get('_LOKI_CRASH_JSON', '')
+            _err_type = 'IterationError'
+            _message = ''
+            if crash_json_path:
+                with open(crash_json_path, 'r', encoding='utf-8') as _cf:
+                    _crash = json.load(_cf)
+                _err_type = (_crash.get('error_class')
+                             or _crash.get('friction_kind') or 'IterationError')
+                _sig = _crash.get('stack_signature') or []
+                _sig_str = ' > '.join(str(s) for s in _sig[:5]) if isinstance(_sig, list) else str(_sig)
+                _phase = _crash.get('rarv_phase') or rarv_phase or ''
+                _parts = []
+                if _phase:
+                    _parts.append('phase=' + str(_phase))
+                if _crash.get('friction_kind'):
+                    _parts.append('friction=' + str(_crash['friction_kind']))
+                if _sig_str:
+                    _parts.append('signature: ' + _sig_str)
+                if _crash.get('fingerprint'):
+                    _parts.append('fp=' + str(_crash['fingerprint'])[:12])
+                _message = '; '.join(_parts) or 'iteration failed'
+            else:
+                # Telemetry-independent fallback: no crash file (e.g. telemetry
+                # off). Synthesize from non-sensitive fields only. Nothing raw,
+                # no scrub needed.
+                _ec = os.environ.get('_LOKI_EXIT_CODE', '')
+                _message = 'phase=' + str(rarv_phase or '') + '; exit=' + str(_ec)
+            trace.errors_encountered.append(ErrorEntry(
+                error_type=str(_err_type), message=_message, resolution=''))
+        except Exception:
+            pass  # never block episode capture
 
     engine.store_episode(trace)
 

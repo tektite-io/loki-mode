@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.19.0] - 2026-06-07
+
+### Added
+- Failure-memory loop (default-on, opt out with `LOKI_FAILURE_MEMORY=0`). Loki
+  now learns from its own failures within a run so it stops repeating the same
+  mistake. When an iteration fails, the scrubbed crash record (or, when
+  telemetry is off, a synthesized record from non-sensitive fields only) is
+  mapped to an `ErrorEntry` on that iteration's episode. The next iteration's
+  prompt then carries a "PAST FAILURES TO AVOID:" block built from the most
+  recent failure lessons (sorted by true wall-clock timestamp, capped at 3), so
+  the agent sees what it just got wrong. Local, zero new setup, zero network.
+  Builds on the v7.18.2 crash capture; reuses the existing memory schemas,
+  storage, and retrieval. No new scrubbing: every injected value comes from the
+  already-whitelisted crash record or non-sensitive fallback fields, so
+  docs/PRIVACY.md is preserved.
+
+### NOT tested in this release (honest disclosure)
+- No live multi-iteration autonomous run validating that the injected lesson
+  measurably changes the next iteration's behavior; verification is via the
+  module-level loop (crash -> ErrorEntry -> recency read -> injected block) and
+  integration tests, not an end-to-end build.
+- Lesson usefulness is heuristic. `ErrorEntry.resolution` is not auto-derived,
+  so a lesson states what failed, not a proven fix.
+- The cross-run `retrieve_anti_patterns` secondary rarely matches on local
+  setups (documented); the within-run loop is closed by the recency read, not
+  that secondary.
+- Crash-file-to-episode matching uses the most recent crash file; not tested
+  under many rapid same-iteration crashes.
+- The Bun route build_prompt is an intentional stub; this is a bash-route
+  feature with prompt parity preserved (no Bun change).
+
 ## [7.18.3] - 2026-06-06
 
 ### Changed
