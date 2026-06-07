@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.19.3] - 2026-06-07
+
+### Added
+- Shareable proof-of-run: the proof HTML (`loki proof`) now renders a branded
+  in-page card (what was built, verified, cost, duration, with Loki/Autonomi
+  branding) and opt-in share buttons (X/Twitter, LinkedIn, Copy link). The
+  local proof file stays ZERO-EGRESS by default (the v7.18.2 posture): no
+  og:image, no external assets, no literal social URLs in the static HTML, and
+  no network call on load. Share intent URLs are assembled in JavaScript at
+  click time, so a button is inert until the user clicks it. The card and the
+  social hook render only from the already-redacted proof data, and an
+  operator-provided publish URL (`LOKI_PROOF_PUBLIC_URL`) is threaded through
+  the same redaction before it can appear anywhere. Opt out of the buttons with
+  `LOKI_PROOF_SHARE_BUTTONS=0`.
+
+### NOT tested in this release (honest disclosure)
+- A rich social-media preview (og:image) requires publishing to an
+  HTML-serving host that returns a public URL (the `LOKI_HOSTED_ENDPOINT`
+  seam). `loki proof share` to a GitHub Gist does NOT yield a rich preview: the
+  gist page serves GitHub's own preview tags and the raw file is served as
+  text/plain, which social scrapers do not parse. There is no official Loki
+  hosted backend yet; the seam is honest about this.
+- LinkedIn's share URL ignores prefilled text (it only scrapes the
+  destination's preview tags), so a LinkedIn preview depends entirely on the
+  hosted og:image being present. The X intent URL carries the prefilled hook.
+- Sharing is fully manual and opt-in; there is no automatic posting and no
+  hosted discovery gallery in this release.
+- Verification is the proof generator against per-case fixtures (41 assertions,
+  including the zero-egress self-containment guard and the
+  LOKI_PROOF_SHARE_BUTTONS opt-out being genuinely consumed), not a live
+  end-to-end published share.
+
 ## [7.19.2] - 2026-06-07
 
 ### Added
