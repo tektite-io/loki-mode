@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.23.1] - 2026-06-09
+
+### Fixed
+- CI reliability: tests/test-delegate-notify.sh no longer false-fails on a CI
+  runner whose git default branch is "master". The test git-inits a temp repo
+  and asserted the notification body contained "main", but `git init` uses the
+  host default branch (main on newer git, master on older runners), so the
+  assertion failed on the runner even though the product correctly reported the
+  real branch. The test now forces a deterministic branch (git branch -m main)
+  after the first commit. Product behavior is unchanged; this only de-flakes the
+  test. This is what kept the v7.23.0 Tests workflow red on the Shell tests job.
+
 ## [7.23.0] - 2026-06-09
 
 ### Added

@@ -75,6 +75,11 @@ make_repo_with_change() {
         echo "base" > a.txt
         git add a.txt
         git commit -qm base
+        # Force a deterministic branch name. `git init` uses the host default
+        # (main on newer git, master on older CI runners), so the assertion must
+        # not assume one. Rename to main after the first commit (works on every
+        # git version, unlike `git init -b`).
+        git branch -m main 2>/dev/null || true
         git rev-parse HEAD > "$repo/.start-sha"
         echo "more" >> a.txt
         echo "n" > b.txt
