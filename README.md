@@ -26,6 +26,7 @@
 
 - **Spec-driven, autonomous, with a built-in trust layer** -- Hand Loki a spec, walk away, come back to working code with tests. The full RARV-C closure loop (Reason - Act - Reflect - Verify - Close) runs until the work is actually done, not just attempted. The verified-completion evidence gate (`skills/quality-gates.md`) refuses any "done" claim on an empty git diff against the run-start commit, and blocks completion when tests run red, so "complete" means proven, not promised.
 - **Production quality built in** -- 11 quality gates (`skills/quality-gates.md`), blind 3-reviewer code review (`run.sh:run_code_review()`), anti-sycophancy checks
+- **Live App Preview** -- The dashboard embeds the locally-running app in an iframe so you can interact with it immediately during a build. Use `loki preview` (alias `loki open`) to print the URL and open it in your browser. Local-first: no hosted service, no vendor lock (v7.24.0).
 - **Cross-project memory** -- Episodic/semantic/procedural memory with vector search; knowledge learned on one project surfaces on the next (v5.15.0+, see `memory/engine.py`)
 - **Self-hosted and private** -- Your keys, your infrastructure, no data leaves your network
 - **Legacy system healing** -- `loki heal` archaeology/stabilize/isolate/modernize/validate phases (v6.67.0, see `skills/healing.md`)
@@ -251,7 +252,7 @@ Blind review, anti-sycophancy, severity blocking, mock/mutation detection, backw
 <td width="33%" valign="top">
 
 ### Dashboard
-Real-time monitoring, agent status, task queue, WebSocket streaming. Auto-starts at `localhost:57374`.
+Real-time monitoring, agent status, task queue, WebSocket streaming, and Live App Preview (embedded iframe of the running app with Refresh/Open/Restart toolbar). Auto-starts at `localhost:57374`.
 
 [Dashboard Guide](docs/dashboard-guide.md)
 
@@ -352,6 +353,7 @@ Claude gets full features (subagents, parallelization, MCP, Task tool). Other ac
 | `loki pause` / `resume` | Pause/resume after current session |
 | `loki status` | Show current status |
 | `loki dashboard` | Open web dashboard |
+| `loki preview` / `loki open` | Print running app URL and open in browser (Live App Preview, v7.24.0) |
 | `loki web` | Launch Purple Lab web UI |
 | `loki doctor` | Check environment and dependencies |
 | `loki plan [PRD]` | Pre-execution analysis: complexity, cost, iterations |
@@ -421,7 +423,7 @@ See [benchmarks/](benchmarks/) for methodology.
 
 ![Loki Mode Presentation](docs/loki-mode-presentation.gif)
 
-*9 slides: Problem, Solution, 41 Agents, RARV Cycle, Benchmarks, Multi-Provider, Full Lifecycle*
+*11 slides: Problem, Solution, 41 Agents, RARV Cycle, 9 Quality Gates (HumanEval 98.78%), Multi-Provider, Enterprise Hardening (Live App Preview), Full Lifecycle*
 
 **[Download PPTX](docs/loki-mode-presentation.pptx)**
 

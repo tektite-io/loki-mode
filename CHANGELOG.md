@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.24.0] - 2026-06-09
+
+### Added
+- Live App Preview panel in the dashboard. While a `loki start` run is in
+  progress the dashboard now embeds the locally-running app (served by the
+  existing app-runner) in an iframe so users can interact with it immediately,
+  without leaving the dashboard. The panel includes a status badge (running /
+  stopped / error), a toolbar with Refresh, Open-in-browser, and Restart
+  buttons, and a crash error banner with a redacted technical-details disclosure
+  widget.
+- `loki preview` command (alias `loki open`). Prints the running app URL to
+  stdout and opens it in the default browser. Works whether or not the dashboard
+  is open.
+- `GET /api/app-runner/errors` endpoint. Returns a redacted error summary for
+  the current session. Raw stack traces and absolute paths are stripped before
+  the response leaves the server, so only developer-relevant context is
+  surfaced.
+- Log redaction for `GET /api/app-runner/logs`. The logs endpoint now applies
+  the same redaction filter as the new errors endpoint, closing a pre-existing
+  raw-log information-leak.
+
+### Notes
+- The Live App Preview is entirely local-first: the iframe points at
+  `localhost`, not any hosted service. This closes the "spin up UI to try it"
+  gap that cloud builders such as Replit/Lovable/Bolt have, while preserving
+  Loki Mode's local-first and no-vendor-lock architecture.
+
 ## [7.23.1] - 2026-06-09
 
 ### Fixed
