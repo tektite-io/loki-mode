@@ -4786,26 +4786,21 @@ cmd_preview() {
     fi
 
     # Parse url/status/port. Prefer python3 (used throughout); fall back to grep.
-    local url status port
+    # Pass the path as argv (not inline interpolation) so a path with quotes
+    # cannot break the script, and parse all three fields in one invocation.
+    local url status port parsed
     if command -v python3 &> /dev/null; then
-        url=$(python3 -c "import json,sys
+        parsed=$(python3 -c "import json,sys
 try:
-    d=json.load(open('$state_file'))
+    d=json.load(open(sys.argv[1]))
     print(d.get('url',''))
-except Exception:
-    print('')" 2>/dev/null)
-        status=$(python3 -c "import json,sys
-try:
-    d=json.load(open('$state_file'))
     print(d.get('status',''))
-except Exception:
-    print('')" 2>/dev/null)
-        port=$(python3 -c "import json,sys
-try:
-    d=json.load(open('$state_file'))
     print(d.get('port',''))
 except Exception:
-    print('')" 2>/dev/null)
+    print('');print('');print('')" "$state_file" 2>/dev/null)
+        url=$(printf '%s\n' "$parsed" | sed -n '1p')
+        status=$(printf '%s\n' "$parsed" | sed -n '2p')
+        port=$(printf '%s\n' "$parsed" | sed -n '3p')
     else
         url=$(grep -oE '"url"[[:space:]]*:[[:space:]]*"[^"]*"' "$state_file" 2>/dev/null | head -1 | sed 's/.*"url"[[:space:]]*:[[:space:]]*"//;s/"$//')
         status=$(grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$state_file" 2>/dev/null | head -1 | sed 's/.*"status"[[:space:]]*:[[:space:]]*"//;s/"$//')

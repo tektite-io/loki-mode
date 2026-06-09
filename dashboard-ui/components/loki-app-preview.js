@@ -53,9 +53,6 @@ export class LokiAppPreview extends LokiElement {
     this._errors = null;
     this._error = null;
     this._lastDataHash = null;
-    // Tracks what the iframe is currently pointed at so we only reload on a
-    // genuine transition, not on every 3s poll.
-    this._iframeUrl = null;
     this._detailsOpen = false;
   }
 
@@ -136,7 +133,11 @@ export class LokiAppPreview extends LokiElement {
         crash: status?.crash_count,
         errLen: errors?.lines?.length || 0,
       });
-      if (dataHash === this._lastDataHash) return;
+      // A prior poll may have set a transient read error. Clear it on any
+      // successful read, even when the data itself is unchanged, so a recovered
+      // read never leaves a false error banner on screen (honesty constraint).
+      const hadError = this._error !== null;
+      if (dataHash === this._lastDataHash && !hadError) return;
       this._lastDataHash = dataHash;
       this._status = status;
       this._errors = errors;
@@ -179,7 +180,6 @@ export class LokiAppPreview extends LokiElement {
     if (frame && st && this._isValidUrl(st.url)) {
       const bust = (st.url.includes('?') ? '&' : '?') + '_t=' + Date.now();
       frame.src = st.url + bust;
-      this._iframeUrl = st.url;
     }
   }
 
@@ -281,7 +281,6 @@ export class LokiAppPreview extends LokiElement {
   _renderSurface(status, urlValid) {
     if (status === 'running' && urlValid) {
       const st = this._status;
-      this._iframeUrl = st.url;
       return `
         <div class="frame-wrap">
           <iframe
