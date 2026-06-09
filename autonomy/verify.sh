@@ -274,6 +274,18 @@ verify_gate_tests() {
                 has_python=true
             fi
         fi
+        # Council finding (v7.27.0): bare root-level test files with no
+        # pyproject/setup/tests-dir were invisible to detection, letting verify
+        # emit VERIFIED while pytest could have discovered and run them. Detect
+        # them so the gate runs (or goes inconclusive -> CONCERNS when no
+        # runner is installed), never silently skipped.
+        if [ "$has_python" = "false" ]; then
+            if find "$tree" -maxdepth 1 -type f \
+                \( -name 'test_*.py' -o -name '*_test.py' \) \
+                -print -quit 2>/dev/null | grep -q .; then
+                has_python=true
+            fi
+        fi
         if [ "$has_python" = "true" ]; then
             if command -v pytest >/dev/null 2>&1; then
                 runner="pytest"

@@ -1110,6 +1110,31 @@ jobs:
 - An empty diff yields CONCERNS (nothing to verify), never VERIFIED.
 - No LLM review in this slice (deterministic gates only).
 
+### `loki trust-metrics`
+
+Aggregate the trust-layer metrics of the CURRENT project from its `.loki/`
+artifacts and the durable `.loki/metrics/trust-events.jsonl` event log.
+
+```bash
+loki trust-metrics            # human-readable table + writes JSON
+```
+
+**Metrics reported** (definitions match the published benchmark program):
+
+| Metric | Meaning |
+|--------|---------|
+| Evidence-gate block rate | How often a completion claim was refused (empty diff or red tests) per instrumented run |
+| Gate failure distribution | Per-gate failure counts with median and p90 across runs |
+| Council rejection / split rate | Completion-council votes: rejections, and splits among rejections |
+| Cost per verified task | Spend divided by the verified-completion denominator |
+
+**Output:** `.loki/metrics/trust-metrics.json` plus a terminal table.
+
+**Honesty rule:** denominators count only instrumented runs. A project with no
+instrumentation reports `available: false` ("not instrumented"); it never
+fabricates a zero as if it were a measurement. Single project only
+(`--all-projects` is rejected).
+
 ---
 
 ## Monitoring Commands

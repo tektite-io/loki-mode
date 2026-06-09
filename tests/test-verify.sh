@@ -222,6 +222,36 @@ else
 fi
 
 # -------------------------------------------------------------------------
+# Scenario 4c: bare ROOT-LEVEL test file (no pyproject/setup/tests dir) must
+# be DETECTED so the tests gate runs, never silently skipped (council
+# finding: a verifier emitting VERIFIED while a discoverable test file goes
+# unrun is the false-confidence class this product guards against).
+# With pytest present the gate must run and pass -> VERIFIED with tests=pass.
+# -------------------------------------------------------------------------
+S4C="$TMP_ROOT/s4c-roottest"
+init_repo "$S4C"
+( cd "$S4C"
+  git checkout -q -b feature
+  cat > test_app.py <<'EOF'
+def test_root_level():
+    assert 1 + 1 == 2
+EOF
+  git add test_app.py
+  git commit -qm "bare root-level test file only"
+)
+if command -v pytest >/dev/null 2>&1; then
+    run_verify "$S4C" main
+    TESTSTATUS_4C="$(python3 -c "import json; d=json.load(open('$S4C/.loki/verify/evidence.json')); print([g['status'] for g in d['deterministic_gates'] if g['gate']=='tests'][0])" 2>/dev/null || echo "?")"
+    if [ "$RC" -eq 0 ] && [ "$VERDICT" = "VERIFIED" ] && [ "$TESTSTATUS_4C" = "pass" ]; then
+        _ok "bare root-level test file detected and run (tests=pass, VERIFIED)"
+    else
+        _no "root-level test detection -> expected VERIFIED/0 with tests=pass, got $VERDICT/$RC (tests=$TESTSTATUS_4C)"
+    fi
+else
+    _ok "SKIP: pytest absent; root-level detection covered by code path only"
+fi
+
+# -------------------------------------------------------------------------
 # Scenario 5: evidence document shape (schema + skipped LLM honesty)
 # -------------------------------------------------------------------------
 if [ -f "$S1/.loki/verify/evidence.json" ]; then
