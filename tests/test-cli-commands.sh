@@ -167,9 +167,15 @@ test_cmd "loki preview --help exits 0 and shows Usage" \
 
 # -------------------------------------------
 # Test: loki preview with no running app (honest message, exit 0)
+# Run against an ISOLATED empty LOKI_DIR so the assertion is deterministic and
+# does not depend on a stray .loki/app-runner/state.json in the test cwd (the
+# command reads ${LOKI_DIR:-.loki}/app-runner/state.json).
 # -------------------------------------------
-test_cmd "loki preview --no-open exits 0 with no app running" \
+_PREVIEW_TMP=$(mktemp -d 2>/dev/null || echo "/tmp/loki-preview-test-$$")
+mkdir -p "$_PREVIEW_TMP"
+LOKI_DIR="$_PREVIEW_TMP" test_cmd "loki preview --no-open exits 0 with no app running" \
     0 "No app running" preview --no-open
+rm -rf "$_PREVIEW_TMP"
 
 # -------------------------------------------
 # Test: loki open alias --help routes to preview

@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.26.0] - 2026-06-09
+
+### Added
+- Compose-first fullstack support. When a spec requires more than one service
+  (web + database + cache, etc.) the agent is now instructed via RUN_CONTRACT
+  to generate a 12-factor `docker-compose.yml` with a clearly-named primary web
+  service, healthchecks on every service, `depends_on` wiring, env-var config,
+  and a `.env.example`. Single-service apps continue to use a plain run command
+  with no forced Docker involvement.
+- Web-service URL routing in the Live App Preview. The app runner now identifies
+  the primary web service of a compose stack (by `loki.primary=true` label,
+  `web`/`app` service name, or common web ports) and surfaces that service's URL
+  in the Live App iframe. Previously the runner could accidentally surface a
+  database port as the app URL.
+- Service-aware health tracking. The Live App status now reflects the web
+  service's Docker healthcheck (`healthy`/`unhealthy`) rather than whether any
+  container in the stack is running. A dead or non-serving web service shows as
+  crashed even when the database remains up. The watchdog monitors compose stacks
+  by web-service health instead of a PID check (which was incorrect for
+  detached compose stacks).
+
+### Notes
+- All execution is local-first: the stack runs on the user's own machine via
+  Docker Compose with no hosted service and no vendor lock-in.
+- Single-service specs are unaffected. The compose path activates only when the
+  spec analysis concludes that multiple services are needed.
+
 ## [7.25.0] - 2026-06-09
 
 ### Added
