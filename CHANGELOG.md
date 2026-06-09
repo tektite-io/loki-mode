@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.25.0] - 2026-06-09
+
+### Added
+- Auto-open dashboard on `loki start`. For interactive foreground sessions Loki
+  now opens the dashboard in the default browser automatically after the run
+  starts. The behavior is cross-platform (macOS `open`, Linux
+  `xdg-open`/`wslview`, Windows `start`) and is automatically skipped when
+  running in CI (`CI=true`), with `--detach` / `--background`, over SSH without
+  a TTY, or with piped stdin. Set `LOKI_NO_AUTO_OPEN=1` to opt out entirely.
+- Live-app banner in the run completion summary. `.loki/COMPLETION.txt` now
+  includes a "Your app is live at <url>" line (the locally-running app URL) plus
+  the dashboard URL when the built app is still running at the time the run
+  closes. Users see exactly where to try what Loki just built without hunting
+  through logs.
+- Native Claude Code resilience flags on every autonomous iteration. The RARV
+  loop now passes `--effort` (adaptive reasoning matched to the current RARV
+  phase: `low` for Haiku-tier utility steps, `medium` for standard iterations,
+  `high` for planning and critical-path phases), `--max-budget-usd` (a per-call
+  cost backstop to prevent runaway spending on a single iteration), and
+  `--fallback-model` (automatic model failover when the primary model is
+  overloaded or unavailable) on each provider invocation. Each flag is gated on
+  CLI support detection and an individual opt-out env var
+  (`LOKI_AUTO_EFFORT=off`, `LOKI_AUTO_BUDGET=off`, `LOKI_AUTO_FALLBACK=off`).
+  Loki's deterministic trust and verification gates (RARV-C closure, 11 quality
+  gates, completion council, verified-completion evidence gate) are unchanged.
+
+### Notes
+- The auto-open behavior adds no network calls and no vendor dependency. It is
+  a local `open`/`xdg-open`/`start` invocation only.
+- The `--effort` mapping follows the existing RARV tier definitions: tier 1
+  (Opus/planning) maps to `high`, tier 2 (Sonnet/development) maps to `medium`,
+  tier 3 (Haiku/parallelization) maps to `low`. Tiers are unchanged.
+
 ## [7.24.0] - 2026-06-09
 
 ### Added

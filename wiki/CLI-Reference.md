@@ -73,6 +73,8 @@ Options:
 
 Start autonomous execution from a spec. Works with or without one -- if no spec is provided, Loki analyzes the existing codebase and generates one. A spec is typically a PRD markdown file, but can also be sourced from a GitHub issue (`loki issue`).
 
+**v7.25.0 behaviors:** For interactive foreground sessions, `loki start` automatically opens the dashboard in the default browser after the run starts (cross-platform: macOS `open`, Linux `xdg-open`/`wslview`, Windows `start`). Automatically skipped in CI (`CI=true`), with `--detach`/`--background`, over SSH without a TTY, or with piped stdin. Set `LOKI_NO_AUTO_OPEN=1` to opt out. The run completion summary (`.loki/COMPLETION.txt`) now includes "Your app is live at <url>" plus the dashboard URL when the built app is running. The autonomous loop passes `--effort`, `--max-budget-usd`, and `--fallback-model` to Claude Code on every iteration for resilience; each is individually opt-out via `LOKI_AUTO_EFFORT=off`, `LOKI_AUTO_BUDGET=off`, `LOKI_AUTO_FALLBACK=off`.
+
 ```bash
 loki start [SPEC_FILE] [OPTIONS]
 ```
@@ -213,6 +215,23 @@ loki stop --all    # stop EVERY loki runner on this machine (legacy behavior)
 Use `loki stop --all` for the old machine-wide behavior (also reaps orphaned
 runners from crashed sessions). `loki cleanup` also reaps orphans when no
 session is running in the current folder.
+
+---
+
+### `loki preview` / `loki open`
+
+Open the running app that Loki built and started locally in your browser.
+Prints the app URL to stdout and launches it in the default browser. Works
+whether or not the dashboard is open. Added in v7.24.0.
+
+```bash
+loki preview       # print app URL and open in browser
+loki open          # alias for loki preview
+```
+
+For interactive foreground runs, `loki start` (v7.25.0+) automatically opens
+the dashboard in the browser on startup. Use `loki preview` any time you want
+to re-open the running app URL explicitly.
 
 ---
 
