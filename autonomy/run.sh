@@ -781,6 +781,21 @@ MAX_PARALLEL_SESSIONS=${LOKI_MAX_PARALLEL_SESSIONS:-3}
 PARALLEL_TESTING=${LOKI_PARALLEL_TESTING:-true}
 PARALLEL_DOCS=${LOKI_PARALLEL_DOCS:-true}
 
+# Dynamic resource-aware session concurrency (Release 3, slice 3).
+# DEFAULT OFF: when LOKI_DYNAMIC_CONCURRENCY is unset, effective_session_cap()
+# returns exactly MAX_PARALLEL_SESSIONS, so behavior is identical to before.
+# Opt in with LOKI_DYNAMIC_CONCURRENCY=1 to scale the session cap down when
+# system CPU or memory is under pressure (read from .loki/state/resources.json).
+DYNAMIC_CONCURRENCY=${LOKI_DYNAMIC_CONCURRENCY:-0}
+# Optional higher ceiling on capable machines. Only takes effect with dynamic
+# concurrency enabled; still resource-gated. Defaults to MAX_PARALLEL_SESSIONS.
+MAX_PARALLEL_SESSIONS_CEILING=${LOKI_MAX_PARALLEL_SESSIONS_CEILING:-$MAX_PARALLEL_SESSIONS}
+# Usage thresholds (percent). At/above CPU or MEM threshold the cap is halved.
+CONCURRENCY_CPU_THRESHOLD=${LOKI_CONCURRENCY_CPU_THRESHOLD:-85}
+CONCURRENCY_MEM_THRESHOLD=${LOKI_CONCURRENCY_MEM_THRESHOLD:-85}
+# Critical threshold (percent). At/above this the cap is forced to 1.
+CONCURRENCY_CRITICAL_THRESHOLD=${LOKI_CONCURRENCY_CRITICAL_THRESHOLD:-95}
+
 # Gate Escalation Ladder (v6.10.0)
 GATE_CLEAR_LIMIT=${LOKI_GATE_CLEAR_LIMIT:-3}
 GATE_ESCALATE_LIMIT=${LOKI_GATE_ESCALATE_LIMIT:-5}
@@ -2759,6 +2774,72 @@ remove_worktree() {
     log_info "Removed worktree: $stream_name"
 }
 
+# Compute the effective parallel-session cap for the current scheduling pass.
+# Default-off contract: when LOKI_DYNAMIC_CONCURRENCY is not "1" this echoes
+# exactly MAX_PARALLEL_SESSIONS with zero file reads and zero subprocesses, so
+# the spawn decision is byte-identical to the pre-feature behavior.
+# When enabled, it starts from the configured ceiling and scales DOWN based on
+# .loki/state/resources.json. All reads are best-effort: a missing, empty, or
+# unparseable file (or non-numeric values) leaves the cap at the ceiling. The
+# result is always clamped to the range [1, ceiling] and never exceeds it.
+effective_session_cap() {
+    # Fast default-off path: identical to today, no I/O, no subprocesses.
+    if [ "${DYNAMIC_CONCURRENCY:-0}" != "1" ]; then
+        echo "$MAX_PARALLEL_SESSIONS"
+        return 0
+    fi
+
+    # Ceiling is the upper bound when dynamic scaling is on.
+    local ceiling="${MAX_PARALLEL_SESSIONS_CEILING:-$MAX_PARALLEL_SESSIONS}"
+    # Guard against a non-numeric or sub-1 ceiling override.
+    case "$ceiling" in
+        ''|*[!0-9]*) ceiling="$MAX_PARALLEL_SESSIONS" ;;
+    esac
+    [ "$ceiling" -lt 1 ] 2>/dev/null && ceiling=1
+
+    local cap="$ceiling"
+    local resources_file=".loki/state/resources.json"
+
+    # No resource data -> best-effort, leave at ceiling.
+    if [ ! -f "$resources_file" ]; then
+        echo "$cap"
+        return 0
+    fi
+
+    # Read usage and status best-effort. Defaults keep the cap at the ceiling
+    # if the file is empty, malformed, or missing keys.
+    local cpu_usage mem_usage status
+    cpu_usage=$(python3 -c "import json; print(json.load(open('$resources_file')).get('cpu', {}).get('usage_percent', 0))" 2>/dev/null || echo "0")
+    mem_usage=$(python3 -c "import json; print(json.load(open('$resources_file')).get('memory', {}).get('usage_percent', 0))" 2>/dev/null || echo "0")
+    status=$(python3 -c "import json; print(json.load(open('$resources_file')).get('overall_status', 'ok'))" 2>/dev/null || echo "ok")
+
+    # usage_percent can be a float (e.g. 85.3). Reduce to an integer part for
+    # comparison and fall back to 0 if anything is non-numeric.
+    cpu_usage="${cpu_usage%%.*}"
+    mem_usage="${mem_usage%%.*}"
+    case "$cpu_usage" in ''|*[!0-9]*) cpu_usage=0 ;; esac
+    case "$mem_usage" in ''|*[!0-9]*) mem_usage=0 ;; esac
+
+    local crit="${CONCURRENCY_CRITICAL_THRESHOLD:-95}"
+    local cpu_thr="${CONCURRENCY_CPU_THRESHOLD:-85}"
+    local mem_thr="${CONCURRENCY_MEM_THRESHOLD:-85}"
+
+    if [ "$cpu_usage" -ge "$crit" ] || [ "$mem_usage" -ge "$crit" ]; then
+        # Critical pressure: drop to a single session.
+        cap=1
+    elif [ "$cpu_usage" -ge "$cpu_thr" ] || [ "$mem_usage" -ge "$mem_thr" ] || [ "$status" != "ok" ]; then
+        # Elevated pressure or a non-ok overall status: halve (integer floor).
+        cap=$(( ceiling / 2 ))
+    fi
+
+    # Clamp to [1, ceiling]. Never runaway, never zero.
+    [ "$cap" -lt 1 ] && cap=1
+    [ "$cap" -gt "$ceiling" ] && cap="$ceiling"
+
+    echo "$cap"
+    return 0
+}
+
 # Spawn a Claude session in a worktree
 spawn_worktree_session() {
     local stream_name="$1"
@@ -2778,9 +2859,11 @@ spawn_worktree_session() {
         fi
     done
 
-    if [ "$active_count" -ge "$MAX_PARALLEL_SESSIONS" ]; then
+    local session_cap
+    session_cap=$(effective_session_cap)
+    if [ "$active_count" -ge "$session_cap" ]; then
         # BUG-PAR-014: Max-sessions rejection queues spawn for retry
-        log_warn "Max parallel sessions reached ($MAX_PARALLEL_SESSIONS). Queuing $stream_name for retry."
+        log_warn "Max parallel sessions reached ($session_cap). Queuing $stream_name for retry."
         mkdir -p "${TARGET_DIR:-.}/.loki/signals"
         echo "{\"stream\":\"$stream_name\",\"task\":\"$(echo "$task_prompt" | head -c 200)\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
             > "${TARGET_DIR:-.}/.loki/signals/SPAWN_QUEUED_${stream_name}"
@@ -3212,7 +3295,9 @@ run_parallel_orchestrator() {
                 ((active_count++))
             fi
         done
-        if [ "$active_count" -lt "$MAX_PARALLEL_SESSIONS" ]; then
+        local _session_cap
+        _session_cap=$(effective_session_cap)
+        if [ "$active_count" -lt "$_session_cap" ]; then
             for queued_signal in "${TARGET_DIR:-.}"/.loki/signals/SPAWN_QUEUED_*; do
                 [ -f "$queued_signal" ] || continue
                 local queued_stream

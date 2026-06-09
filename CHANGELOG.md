@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.23.0] - 2026-06-09
+
+### Added
+- Hybrid codebase search: `loki code search "<query>"`. Combines ripgrep keyword
+  matching with ChromaDB semantic search via reciprocal-rank fusion (deduped by
+  file:line), with token-budget-aware output. Flags: --grep-only, --semantic-only,
+  --budget N, --top N, --json. When ChromaDB is unavailable it degrades to a
+  grep-only result instead of failing, so search always returns something.
+- Incremental code-index freshness. `tools/index-codebase.py --changed`
+  re-indexes only files that changed (mtime or content hash) and deletes orphan
+  chunks left by renamed or removed functions, fixing stale hits after refactors.
+  A manifest at `.loki/state/code-index-manifest.json` tracks per-file state. The
+  MCP code-search tools now report `stale` / `stale_files`; opt-in
+  `LOKI_CODE_INDEX_AUTOREINDEX=1` reindexes on demand (default is warn-if-stale).
+- Dynamic resource-aware session concurrency. Opt-in `LOKI_DYNAMIC_CONCURRENCY=1`
+  makes the parallel-session cap adapt to machine load: it reads
+  `.loki/state/resources.json` and scales the cap down under high CPU or memory,
+  always clamped to [1, ceiling], never above the configured maximum. Knobs:
+  `LOKI_MAX_PARALLEL_SESSIONS_CEILING`, `LOKI_CONCURRENCY_CPU_THRESHOLD` (85),
+  `LOKI_CONCURRENCY_MEM_THRESHOLD` (85), `LOKI_CONCURRENCY_CRITICAL_THRESHOLD`
+  (95). Default off: behavior is identical to before unless explicitly enabled. A
+  supervisor/judge pattern (CONTINUE / COMPLETE / ESCALATE / PIVOT) is documented
+  in skills/parallel-workflows.md with an honest scaling ceiling (dozens of
+  adaptive concurrent sessions on a local machine, not thousands).
+
+### Fixed
+- CI reliability: the CLI command test (tests/test-cli-commands.sh) no longer
+  false-fails on a loaded runner. The pattern check piped output into `grep -q`,
+  which exits on first match and kills the upstream `echo` with SIGPIPE ("write
+  error: Broken pipe"); on a slow CI cell that broken-pipe exit was misread as a
+  no-match. It now uses a race-free in-shell case-insensitive match. This is what
+  turned the v7.22.0 Tests workflow red on one matrix cell (the product artifacts
+  were correct; only the test harness raced).
+
 ## [7.22.0] - 2026-06-09
 
 ### Added
