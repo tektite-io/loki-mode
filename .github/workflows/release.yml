@@ -454,6 +454,8 @@ jobs:
     needs: [release, publish-npm, publish-docker]
     if: needs.release.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_republish == 'true')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # gh release upload of the brew source asset
     steps:
       # v7.32.0: brew installs now come from a GitHub Release ASSET instead of
       # the auto-generated tag tarball. Release-asset downloads are counted by
