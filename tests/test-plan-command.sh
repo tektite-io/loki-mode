@@ -345,16 +345,17 @@ else
 fi
 
 # -------------------------------------------
-# Test 23: loki demo --help is unchanged (no new flags leaked into help)
+# Test 23: loki demo --help keeps its key lines and does not leak --yes.
+# (Asserts the three named properties, not full byte-identity.)
 # -------------------------------------------
 ((TOTAL++))
 demo_help=$("$LOKI" demo --help 2>&1)
 if echo "$demo_help" | grep -q "Build a real project from a bundled template" \
     && echo "$demo_help" | grep -q -- "--dry-run     Show what would happen without running" \
     && ! echo "$demo_help" | grep -q -- "--yes"; then
-    log_pass "loki demo --help unchanged (no --yes leaked into help)"
+    log_pass "loki demo --help keeps key lines, no --yes leaked"
 else
-    log_fail "demo --help unchanged" "help text drifted"
+    log_fail "demo --help key lines" "help text drifted or --yes leaked"
 fi
 
 # -------------------------------------------

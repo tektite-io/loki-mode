@@ -65,7 +65,7 @@ _po_non_interactive() {
     return 1
 }
 
-# _po_run_login: offer (or auto-accept) the claude login handoff after a
+# _po_run_login: offer (or auto-accept) the claude auth login handoff after a
 # successful install. Inherited stdio; Loki never handles credentials.
 _po_run_login() {
     # claude must actually be on PATH for login to make sense.
@@ -85,15 +85,22 @@ _po_run_login() {
     fi
     case "$do_login" in
         ""|y|Y|yes|YES)
-            if claude login; then
-                printf "%sProvider ready. Run 'loki doctor' to confirm, or 'loki quickstart' to build.%s\n" "$_PO_BOLD" "$_PO_NC"
+            if claude auth login; then
+                # Do not trust the exit code alone: verify the session is
+                # actually authenticated before claiming readiness (council
+                # HIGH: the old path could falsely report success).
+                if claude auth status 2>/dev/null | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
+                    printf "%sProvider ready. Run 'loki doctor' to confirm, or 'loki quickstart' to build.%s\n" "$_PO_BOLD" "$_PO_NC"
+                    return 0
+                fi
+                printf "Login finished but authentication could not be confirmed. Run 'claude auth status' to check, then 'loki doctor'.\n"
                 return 0
             fi
-            printf "Login not completed. Run 'claude login' when ready, then 'loki doctor'.\n"
+            printf "Login not completed. Run 'claude auth login' when ready, then 'loki doctor'.\n"
             return 0
             ;;
         *)
-            printf "Login not completed. Run 'claude login' when ready, then 'loki doctor'.\n"
+            printf "Login not completed. Run 'claude auth login' when ready, then 'loki doctor'.\n"
             return 0
             ;;
     esac
@@ -138,12 +145,12 @@ offer_provider_install() {
     if [ "${LOKI_NO_INSTALL_OFFER:-}" = "1" ]; then
         if [ "$mode" = "gate" ]; then
             printf 'No AI provider CLI found. Install one when ready:\n' >&2
-            printf '  %s   (then: claude login)\n' "$_PO_INSTALL_CMD" >&2
+            printf '  %s   (then: claude auth login)\n' "$_PO_INSTALL_CMD" >&2
             return 2
         fi
         printf '\n'
         printf 'Install a provider when ready:\n'
-        printf '  %s   (then: claude login)\n' "$_PO_INSTALL_CMD"
+        printf '  %s   (then: claude auth login)\n' "$_PO_INSTALL_CMD"
         printf '  Other supported providers: codex, cline, aider.\n'
         return 0
     fi
@@ -175,7 +182,7 @@ offer_provider_install() {
         printf '\n'
         printf 'Install Node.js + npm first (https://nodejs.org), then run:\n'
         printf '  %s\n' "$_PO_INSTALL_CMD"
-        printf '  claude login\n'
+        printf '  claude auth login\n'
         printf '\n'
         printf "Already have a provider via another method? Make sure 'claude' (or codex,\n"
         printf "cline, aider) is on your PATH, then run 'loki doctor'.\n"
@@ -189,7 +196,7 @@ offer_provider_install() {
     printf '\n'
     printf 'Claude Code is the recommended provider (full feature support).\n'
     printf '  Install:  %s\n' "$_PO_INSTALL_CMD"
-    printf '  Then:     claude login\n'
+    printf '  Then:     claude auth login\n'
     printf '\n'
 
     local answer=""
@@ -211,7 +218,7 @@ offer_provider_install() {
             ;;
         *)
             printf 'Skipped. Install a provider when ready:\n'
-            printf '  %s   (then: claude login)\n' "$_PO_INSTALL_CMD"
+            printf '  %s   (then: claude auth login)\n' "$_PO_INSTALL_CMD"
             printf 'Other supported providers: codex, cline, aider.\n'
             [ "$mode" = "gate" ] && return 2
             return 0

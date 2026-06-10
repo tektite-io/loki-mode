@@ -387,7 +387,7 @@ cmd_quickstart() {
     fi
 
     printf '\n'
-    printf '%sLoki Mode quickstart -- a guided first build in about a minute.%s\n' "$_QS_BOLD" "$_QS_NC"
+    printf '%sLoki Mode quickstart -- four quick questions, then your build starts.%s\n' "$_QS_BOLD" "$_QS_NC"
     printf '\n'
 
     # ----- Step 1 of 4: Setup (reuse the slice-B provider offer) -------------
