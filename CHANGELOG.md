@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.29.0] - 2026-06-10
+
+### Added (the quickstart trio, from UX-QUICKSTART-DESIGN)
+- `loki quickstart`: a guided 4-step first build (setup check, one-line idea,
+  template pick, plan review). Every step defaults so Enter-Enter-Enter-Enter
+  builds the sample Todo app. Template matching is a deterministic offline
+  keyword scorer over the bundled templates (top 3 shown, no LLM, no
+  network). The plan step quotes the real estimator's figures before any
+  spend; declining costs nothing. Lands the PRD at ./prd.md with no-clobber
+  guards (existing files are never silently overwritten; the fallback walks
+  numbered suffixes). Non-TTY/CI invocations exit 2 with an automation hint,
+  never hang.
+- Inline provider install offer: when no AI provider CLI is found, doctor
+  (and the pre-flight gate on start/demo/quick/quickstart) offers to install
+  Claude Code. Strictly consent-gated: the only command ever executed is
+  npm install -g @anthropic-ai/claude-code, printed before running, only on
+  an interactive TTY; non-TTY/CI/--json paths never prompt. Auth handoff
+  uses claude auth login, and "Provider ready" is claimed only after
+  claude auth status confirms loggedIn=true; anything unconfirmed gets an
+  honest check-it-yourself message. Opt out with LOKI_NO_INSTALL_OFFER=1.
+  Note: --yes / LOKI_ASSUME_YES now also consents to this install on an
+  interactive terminal (non-TTY and CI still never install).
+- `loki demo` cost confirm: the estimate (cost, time, iterations, labeled as
+  an estimate) always prints before spending; interactive runs confirm
+  [Y/n]; --yes skips the prompt but never the estimate; non-TTY/CI without
+  --yes refuse with exit 2. Declining prints "Cancelled. Nothing was spent."
+- LOKI_COMPLEXITY is honored by `loki plan` (the same env var the runner
+  honors), with an honest "forced via LOKI_COMPLEXITY" note in formatted
+  output; invalid values are ignored. This makes the demo quote the figures
+  for the tier the demo actually runs.
+
+### Fixed
+- `loki stop --all` exercised by the test suite no longer kills unrelated
+  live loki runs on the same machine: the stop-scoping suite now scopes the
+  machine-wide kill to its own uniquely marked test runners via a test-only
+  pattern knob (user-facing --all semantics are unchanged), and local-ci
+  permanently proves harmlessness by spawning a foreign-mimic sentinel
+  before the stop suites and asserting it survives by PID.
+- Stale "claude login" instructions corrected to "claude auth login" across
+  the wiki (the old command starts an interactive AI session on current
+  Claude Code versions instead of authenticating).
+
+### Tests
+- New: tests/cli/test-quickstart.sh (11 cases incl. interview-abuse and
+  no-clobber), tests/cli/test-provider-offer.sh (15 cases incl. argv proof
+  that only the documented npm command runs). Extended:
+  tests/test-plan-command.sh 16 to 25, tests/test-cli-commands.sh 23 to 25
+  on both routes. All wired into scripts/local-ci.sh.
+
 ## [7.28.2] - 2026-06-10
 
 ### Changed (first-run UX, from the 2026-06 user-shoes friction audit)

@@ -199,6 +199,70 @@ run_check "tests/test-cli-commands.sh (LOKI_LEGACY_BASH=1)" "LOKI_LEGACY_BASH=1 
 # Mirrors the test.yml shell-tests job; fast, no network, no real sentrux dep.
 run_check "tests/test-sentrux-gate.sh (unit, fake binary)" "bash tests/test-sentrux-gate.sh 2>&1 | tail -3"
 
+# ---------------------------------------------------------------------------
+# STOP-SUITE FOREIGN-KILL REGRESSION GUARD (fix/local-ci-sentinel)
+# ---------------------------------------------------------------------------
+# History: the stop suites below exercise `loki stop --all`, whose blanket
+# `pkill -f "loki-run-"` matches ANY process with "loki-run-" in its argv,
+# machine-wide. Before the scoping fix, running test-stop-scoping.sh would
+# SIGKILL an unrelated live loki-run-* on the same box (e.g. a long SWE-bench
+# instance). The fix made the suite scope `--all` to its own unique marker via
+# LOKI_STOP_ALL_PATTERN. This guard proves, on EVERY local-ci run, that the stop
+# suites do not kill a foreign loki run: we spawn a sentinel that faithfully
+# mimics one (a /tmp/loki-run-SENTINEL-*.sh group leader from a foreign cwd),
+# run the suites, then assert the sentinel is still alive BY PID (kill -0, never
+# pgrep). If it died, the run fails loudly. The sentinel is reaped by PID at the
+# end of this section.
+SENTINEL_PARENT_PID=""
+SENTINEL_CHILD_PID=""
+SENTINEL_SCRIPT=""
+SENTINEL_CWD=""
+_spawn_stop_sentinel() {
+  SENTINEL_CWD=$(mktemp -d "${TMPDIR:-/tmp}/loki-sentinel-cwd-XXXXXX") || return 1
+  local _rand="$$-${RANDOM}-${RANDOM}"
+  SENTINEL_SCRIPT="${TMPDIR:-/tmp}/loki-run-SENTINEL-${_rand}.sh"
+  cat > "$SENTINEL_SCRIPT" <<SENT
+#!/usr/bin/env bash
+# local-ci stop-suite foreign-kill sentinel. Marker: LOKI-CI-SENTINEL-${_rand}
+echo \$\$ > "${SENTINEL_CWD}/parent.pid"
+sleep 900 &
+echo \$! > "${SENTINEL_CWD}/child.pid"
+wait
+SENT
+  chmod +x "$SENTINEL_SCRIPT"
+  # Launch as its own session/process-group leader from a foreign cwd, mimicking
+  # run.sh's setsid launcher (autonomy/run.sh:14096-14114). Prefer setsid, then
+  # python3, then plain background.
+  if command -v setsid >/dev/null 2>&1; then
+    ( cd "$SENTINEL_CWD" && nohup setsid bash "$SENTINEL_SCRIPT" >/dev/null 2>&1 & )
+  elif command -v python3 >/dev/null 2>&1; then
+    ( cd "$SENTINEL_CWD" && nohup python3 -c 'import os,sys; os.setsid(); os.execvp("bash",["bash",sys.argv[1]])' "$SENTINEL_SCRIPT" >/dev/null 2>&1 & )
+  else
+    ( cd "$SENTINEL_CWD" && nohup bash "$SENTINEL_SCRIPT" >/dev/null 2>&1 & )
+  fi
+  local _t=0
+  while [ "$_t" -lt 30 ]; do
+    SENTINEL_PARENT_PID=$(cat "$SENTINEL_CWD/parent.pid" 2>/dev/null || true)
+    SENTINEL_CHILD_PID=$(cat "$SENTINEL_CWD/child.pid" 2>/dev/null || true)
+    [ -n "$SENTINEL_PARENT_PID" ] && [ -n "$SENTINEL_CHILD_PID" ] && break
+    sleep 0.2; _t=$((_t + 1))
+  done
+}
+_reap_stop_sentinel() {
+  # Reap strictly by recorded PID, never by pattern, so we never touch a real
+  # foreign loki-run-*.
+  [ -n "${SENTINEL_CHILD_PID:-}" ] && kill -9 "$SENTINEL_CHILD_PID" 2>/dev/null || true
+  [ -n "${SENTINEL_PARENT_PID:-}" ] && kill -9 "$SENTINEL_PARENT_PID" 2>/dev/null || true
+  [ -n "${SENTINEL_SCRIPT:-}" ] && rm -f "$SENTINEL_SCRIPT" 2>/dev/null || true
+  [ -n "${SENTINEL_CWD:-}" ] && rm -rf "$SENTINEL_CWD" 2>/dev/null || true
+}
+_spawn_stop_sentinel
+if [ -n "$SENTINEL_PARENT_PID" ] && kill -0 "$SENTINEL_PARENT_PID" 2>/dev/null; then
+  echo "${DIM}stop-suite sentinel spawned: parent=$SENTINEL_PARENT_PID child=$SENTINEL_CHILD_PID script=$SENTINEL_SCRIPT${NC}"
+else
+  echo "${YELLOW}WARN: stop-suite sentinel failed to spawn; the foreign-kill guard cannot run${NC}"
+fi
+
 # v7.7.30: folder-scoped `loki stop`, `loki stop --all`, per-project dashboard
 # stop endpoint, and the switcher Stop button. Headline T2 reproduces the
 # cross-folder kill bug and asserts it is fixed (stop A leaves B alive).
@@ -223,6 +287,17 @@ run_check "tests/test-dashboard-stop-authoritative.sh (cwd-scoped authoritative 
 # orphan-prone agent child atomically. Sentinel sweep is the backstop.
 run_check "tests/test-stop-process-group.sh (group-kill agent teardown)" "bash tests/test-stop-process-group.sh 2>&1 | tail -3"
 
+# FOREIGN-KILL REGRESSION ASSERTION (fix/local-ci-sentinel): after every stop
+# suite has run, the sentinel that mimics a foreign loki run MUST still be alive.
+# Checked BY PID (kill -0), never by pgrep -- pgrep-as-liveness false-negatives
+# on a live run, which is the anti-pattern that masked this bug originally. If
+# the sentinel is dead, a stop suite reaped a foreign loki-run-* and the build
+# fails loudly.
+run_check "stop suites do NOT kill a foreign loki run (sentinel alive by PID)" \
+  'if [ -z "'"$SENTINEL_PARENT_PID"'" ]; then echo "sentinel never spawned -- cannot verify"; exit 1; fi; if kill -0 '"$SENTINEL_PARENT_PID"' 2>/dev/null && kill -0 '"$SENTINEL_CHILD_PID"' 2>/dev/null; then echo "sentinel parent='"$SENTINEL_PARENT_PID"' child='"$SENTINEL_CHILD_PID"' SURVIVED the stop suites"; else echo "FOREIGN-KILL REGRESSION: a stop suite killed the sentinel (parent='"$SENTINEL_PARENT_PID"' alive=$(kill -0 '"$SENTINEL_PARENT_PID"' 2>/dev/null && echo yes || echo no), child='"$SENTINEL_CHILD_PID"' alive=$(kill -0 '"$SENTINEL_CHILD_PID"' 2>/dev/null && echo yes || echo no))"; exit 1; fi'
+# Reap the sentinel by PID now that the assertion is done (scoped, never pgrep).
+_reap_stop_sentinel
+
 # v7.8.0: additive Claude Code flag adoptions (--setting-sources,
 # --include-partial-messages) gated + with stream-json parser de-dup.
 run_check "tests/test-claude-adoptions.sh (setting-sources + partial-messages)" "bash tests/test-claude-adoptions.sh 2>&1 | tail -3"
@@ -234,6 +309,22 @@ run_check "tests/test-prd-reuse.sh (codebase signature + PRD reuse decision)" "b
 # a fixture proofs dir. Faked gh/open on PATH -> no network, no browser launch.
 # Asserts share does NOT publish without confirm and DOES with --yes.
 run_check "tests/cli/test-proof-command.sh (proof list/show/open/share)" "bash tests/cli/test-proof-command.sh 2>&1 | tail -3"
+
+# v7.29.0: inline provider install offer (autonomy/provider-offer.sh). Stub-based,
+# ZERO real installs: a controlled PATH without provider CLIs + a stub npm that
+# records argv. Asserts the offer renders, non-TTY/CI never prompt and exit
+# honestly, the exact install argv, npm-missing degraded copy, and the
+# start/demo gate.
+run_check "tests/cli/test-provider-offer.sh (provider install offer + gate)" "bash tests/cli/test-provider-offer.sh 2>&1 | tail -3"
+
+# v7.29.0: quickstart guided interview (autonomy/quickstart.sh). Stub-based,
+# ZERO spend / ZERO build: source-level harness overrides _qs_non_interactive
+# and stubs show_prd_plan / provider_offer_gate / cmd_start / cmd_dashboard_open.
+# Asserts --help exit 0, non-TTY/CI exit 2 (timeout-guarded, no hang), the full
+# Enter x4 flow writes ./prd.md and invokes cmd_start --yes --no-plan, the
+# deterministic template scorer (run1==run2, design top-3, empty default), and
+# the existing-prd.md fallback to prd-quickstart.md.
+run_check "tests/cli/test-quickstart.sh (guided interview composition)" "bash tests/cli/test-quickstart.sh 2>&1 | tail -3"
 
 # v7.28.0: held-out spec evals. Deterministic ~25% checklist reservation,
 # exclusion from the build prompt feed, and the completion council held-out gate.
@@ -373,7 +464,7 @@ fi
 # ---------------------------------------------------------------------------
 # 10. Pre-publish 3a: npm pack tarball includes expected files
 # ---------------------------------------------------------------------------
-run_check "npm pack tarball contents" 'npm pack --dry-run 2>&1 | grep -E "loki-ts/dist/loki.js|bin/loki|dashboard/static/index.html|web-app/dist/index.html" | wc -l | grep -qE "[4-9]|[1-9][0-9]"'
+run_check "npm pack tarball contents" 'npm pack --dry-run 2>&1 | grep -E "loki-ts/dist/loki.js|bin/loki|dashboard/static/index.html|web-app/dist/index.html|autonomy/provider-offer.sh|autonomy/quickstart.sh" | wc -l | grep -qE "[6-9]|[1-9][0-9]"'
 
 # ---------------------------------------------------------------------------
 # 10b. Phase Merge-3: web-app dist must be built with base: '/lab/'
