@@ -133,10 +133,15 @@ make_python_sdk_missing
     fi
 }
 
-# --- Test 5: server.py _mcp_sdk_present both-layouts detection unit ----------
-# Extract the standalone detection helper from mcp/server.py and run it against
-# two mktemp fixture dirs (legacy file layout + 1.x package-dir layout) and a
-# bare dir. Uses the real python3 (these helpers have no SDK dependency).
+# --- Test 5: _mcp_sdk_present both-layouts detection unit --------------------
+# Extract the standalone detection helper and run it against two mktemp fixture
+# dirs (legacy file layout + 1.x package-dir layout) and a bare dir. Uses the
+# real python3 (these helpers have no SDK dependency).
+#
+# Task 566: the helper was extracted from mcp/server.py into the shared
+# mcp/_sdk_loader.py (now used by BOTH server.py and lsp_proxy.py). The source
+# path below points at the shared module; the `(?=\ndef )` lookahead still
+# matches because _mcp_sdk_present is immediately followed by _load_real_fastmcp.
 if [ -n "$REAL_PY" ]; then
     FILE_DIR="$TMP/fixture-file"
     PKG_DIR="$TMP/fixture-pkg"
@@ -148,11 +153,11 @@ if [ -n "$REAL_PY" ]; then
     out=$("$REAL_PY" - "$REPO_ROOT" "$FILE_DIR" "$PKG_DIR" "$BARE_DIR" <<'PY' 2>&1
 import os, sys, re, logging
 repo, file_dir, pkg_dir, bare_dir = sys.argv[1:5]
-src = open(os.path.join(repo, "mcp", "server.py"), encoding="utf-8").read()
+src = open(os.path.join(repo, "mcp", "_sdk_loader.py"), encoding="utf-8").read()
 m = re.search(r"\ndef _mcp_sdk_present\(.*?\n(?=\ndef )", src, re.S)
-assert m, "could not extract _mcp_sdk_present from server.py"
+assert m, "could not extract _mcp_sdk_present from mcp/_sdk_loader.py"
 ns = {"os": os}
-exec(compile(m.group(0), "server.py", "exec"), ns)
+exec(compile(m.group(0), "_sdk_loader.py", "exec"), ns)
 present = ns["_mcp_sdk_present"]
 file_ok = present([file_dir])
 pkg_ok = present([pkg_dir])
@@ -163,7 +168,7 @@ PY
 )
     code=$?
     if [ "$code" -eq 0 ]; then
-        log_pass "server.py _mcp_sdk_present detects both layouts ($out)"
+        log_pass "_sdk_loader.py _mcp_sdk_present detects both layouts ($out)"
     else
         log_fail "both-layouts detection unit" "$out"
     fi
