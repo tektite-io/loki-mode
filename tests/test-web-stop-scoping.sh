@@ -113,8 +113,13 @@ RUNNER
     TBIN=""
     command -v timeout >/dev/null 2>&1 && TBIN="timeout 20"
     command -v gtimeout >/dev/null 2>&1 && [ -z "$TBIN" ] && TBIN="gtimeout 20"
+    # Council R2 (v7.30.0): isolate the dashboard port too. cmd_web_stop's
+    # companion-dashboard kill targets LOKI_DASHBOARD_PORT (default 57374)
+    # machine-wide; without this override, running the suite on a machine
+    # with a live dashboard would kill it - the exact foreign-kill class
+    # this test exists to prevent.
     ( cd "$SBX_HOME" && HOME="$SBX_HOME" LOKI_DIR="$SBX_HOME/.loki" \
-        SKILL_DIR="$REPO_ROOT" \
+        SKILL_DIR="$REPO_ROOT" LOKI_DASHBOARD_PORT=59991 \
         $TBIN bash "$LOKI" web stop >/dev/null 2>&1 )
     sleep 0.6
     kill -0 "$FPID" 2>/dev/null && result="FOREIGN_ALIVE" || result="FOREIGN_DEAD"
