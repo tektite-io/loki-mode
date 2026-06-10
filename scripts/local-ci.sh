@@ -243,6 +243,12 @@ run_check "tests/test-heldout-evals.sh (held-out selection + council gate)" "bas
 # SPEC_DRIFT finding surfaced by `loki verify`.
 run_check "tests/test-spec.sh (living spec lock/status/sync + drift finding)" "bash tests/test-spec.sh 2>&1 | tail -3"
 
+# v7.28.0: cost-capture root cause. Authoritative result-line cost capture
+# (result-cost-<iter>.json), efficiency writer precedence, budget breaker trip,
+# and the slug-sanitization fix (underscore/dot/space paths). Regression guard
+# for the SWE-bench Pro pilot $0-cost / never-tripped-cap bug.
+run_check "tests/test-cost-capture.sh (result-line cost + budget breaker + slug)" "bash tests/test-cost-capture.sh 2>&1 | tail -3"
+
 # ---------------------------------------------------------------------------
 # 9. bun-parity local equivalent (mirrors bun-parity.yml matrix)
 # ---------------------------------------------------------------------------

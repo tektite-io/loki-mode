@@ -4714,6 +4714,57 @@ print_ttfv_next_steps() {
     return 0
 }
 
+# _read_iteration_cost <iteration>
+# Emit "input output cost cache_read cache_creation" for the given iteration,
+# preferring the authoritative result-cost file written by the embedded stream
+# parser (Claude'\''s own total_cost_usd + usage, slug/symlink-independent) over
+# the context-tracker-derived estimate in tracking.json. Falls back to
+# tracking.json when no result-cost file exists, and to all zeros otherwise.
+# Best-effort: any parse failure yields "0 0 0 0 0" and never aborts.
+_read_iteration_cost() {
+    local iteration="$1"
+    local result_cost_file=".loki/metrics/result-cost-${iteration}.json"
+    if [ -f "$result_cost_file" ]; then
+        python3 -c "
+import json
+try:
+    d = json.load(open('$result_cost_file'))
+    print(
+        d.get('input_tokens', 0) or 0,
+        d.get('output_tokens', 0) or 0,
+        d.get('total_cost_usd', 0) or 0,
+        d.get('cache_read_tokens', 0) or 0,
+        d.get('cache_creation_tokens', 0) or 0,
+    )
+except Exception:
+    print(0, 0, 0, 0, 0)
+" 2>/dev/null || echo "0 0 0 0 0"
+    elif [ -f ".loki/context/tracking.json" ]; then
+        python3 -c "
+import json
+try:
+    t = json.load(open('.loki/context/tracking.json'))
+    iters = t.get('per_iteration', [])
+    match = [i for i in iters if i.get('iteration') == $iteration]
+    if match:
+        m = match[-1]
+        print(
+            m.get('input_tokens', 0),
+            m.get('output_tokens', 0),
+            m.get('cost_usd', 0),
+            m.get('cache_read_tokens', 0),
+            m.get('cache_creation_tokens', 0),
+        )
+    else:
+        print(0, 0, 0, 0, 0)
+except Exception:
+    print(0, 0, 0, 0, 0)
+" 2>/dev/null || echo "0 0 0 0 0"
+    else
+        echo "0 0 0 0 0"
+    fi
+}
+
 track_iteration_complete() {
     local iteration="$1"
     local exit_code="${2:-0}"
@@ -4796,32 +4847,14 @@ track_iteration_complete() {
     local phase="${LAST_KNOWN_PHASE:-}"
     [ -z "$phase" ] && phase=$(python3 -c "import json; print(json.load(open('.loki/state/orchestrator.json')).get('currentPhase', 'unknown'))" 2>/dev/null || echo "unknown")
 
-    # Read token data from context tracker output (v5.42.0)
+    # Read token data, preferring Claude'\''s authoritative result-cost file over
+    # the context-tracker estimate (v7.28.0 cost-capture fix). See
+    # _read_iteration_cost for precedence rationale.
     # v6.82.0: also capture cache_read_tokens / cache_creation_tokens for
     # prompt-cache hit-rate analysis (S1.1 prompt restructure).
     local iter_input=0 iter_output=0 iter_cost=0
     local iter_cache_read=0 iter_cache_creation=0
-    if [ -f ".loki/context/tracking.json" ]; then
-        read iter_input iter_output iter_cost iter_cache_read iter_cache_creation < <(python3 -c "
-import json
-try:
-    t = json.load(open('.loki/context/tracking.json'))
-    iters = t.get('per_iteration', [])
-    match = [i for i in iters if i.get('iteration') == $iteration]
-    if match:
-        m = match[-1]
-        print(
-            m.get('input_tokens', 0),
-            m.get('output_tokens', 0),
-            m.get('cost_usd', 0),
-            m.get('cache_read_tokens', 0),
-            m.get('cache_creation_tokens', 0),
-        )
-    else:
-        print(0, 0, 0, 0, 0)
-except: print(0, 0, 0, 0, 0)
-" 2>/dev/null || echo "0 0 0 0 0")
-    fi
+    read -r iter_input iter_output iter_cost iter_cache_read iter_cache_creation < <(_read_iteration_cost "$iteration")
 
     cat > ".loki/metrics/efficiency/iteration-${iteration}.json" << EFF_EOF
 {
@@ -12376,8 +12409,15 @@ except Exception as exc:
             claude)
                 # Claude: Full features with stream-json output and agent tracking
                 # Uses dynamic tier for model selection based on RARV phase
-                # Pass tier to Python via environment for dashboard display
-                { LOKI_CURRENT_MODEL="$tier_param" \
+                # Pass tier + iteration to the embedded stream parser via the
+                # environment. A bare `VAR=val cmd | parser` prefix applies ONLY
+                # to `cmd` (claude) and does NOT cross the pipe to the parser
+                # subprocess, so these must be exported into the shell env first.
+                # LOKI_ITERATION lets the parser stamp the authoritative
+                # result-cost file under the correct iteration index.
+                export LOKI_CURRENT_MODEL="$tier_param"
+                export LOKI_ITERATION="$ITERATION_COUNT"
+                { \
                 claude "${_loki_claude_argv[@]}" -p "$prompt" \
             --output-format stream-json --verbose 2>&1 | \
             tee -a "$log_file" "$agent_log" "$iter_output" | \
@@ -12690,6 +12730,34 @@ def process_stream():
                     active_agents[orchestrator_id]["tasks_completed"].append(f"{tool_count} tools used")
 
                 save_agents()
+
+                # Authoritative cost capture (path/slug/symlink-independent).
+                # Claude'"'"'s result message carries its own total_cost_usd plus a
+                # full usage object. The context-tracker session-file path is
+                # brittle (slug derivation must guess Claude'"'"'s naming), so this
+                # stamps the authoritative number to a per-iteration file that
+                # the efficiency writer prefers. Best-effort: a malformed or
+                # missing field must never break the iteration loop.
+                try:
+                    _iter = os.environ.get("LOKI_ITERATION", "0")
+                    _u = data.get("usage", {}) or {}
+                    _rec = {
+                        "total_cost_usd": data.get("total_cost_usd"),
+                        "input_tokens": _u.get("input_tokens", 0),
+                        "output_tokens": _u.get("output_tokens", 0),
+                        "cache_read_tokens": _u.get("cache_read_input_tokens", 0),
+                        "cache_creation_tokens": _u.get("cache_creation_input_tokens", 0),
+                    }
+                    if _rec["total_cost_usd"] is not None:
+                        os.makedirs(".loki/metrics", exist_ok=True)
+                        _p = ".loki/metrics/result-cost-" + str(_iter) + ".json"
+                        _tmp = _p + ".tmp"
+                        with open(_tmp, "w") as _f:
+                            json.dump(_rec, _f)
+                        os.replace(_tmp, _p)
+                except Exception:
+                    pass
+
                 print(f"\n{GREEN}[Session complete]{NC}", flush=True)
                 is_error = data.get("is_error", False)
                 sys.exit(1 if is_error else 0)
