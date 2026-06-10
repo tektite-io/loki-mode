@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.32.1] - 2026-06-10
+
+### Fixed
+- Release pipeline: the brew source asset is now built and attached at
+  release CREATION. Releases in this repo are immutable, so the v7.32.0
+  update-homebrew job failed with HTTP 422 trying to upload the asset after
+  publish, leaving brew on the previous version. update-homebrew now
+  downloads the published asset and hashes the exact bytes brew users will
+  download (stronger integrity than hashing a locally rebuilt archive).
+  npm, Docker, and the SDK channels published v7.32.0 normally; brew skips
+  straight to v7.32.1.
+
 ## [7.32.0] - 2026-06-10
 
 ### Added
