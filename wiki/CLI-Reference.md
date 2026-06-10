@@ -159,8 +159,43 @@ loki quick "refactor the database connection pool to use async/await"
 
 Build a sample todo app end to end in a temporary directory to see Loki Mode in action. This is a real autonomous run (it drives the provider and builds actual code), not a simulation. It works in a temp dir, so it does not touch your current project.
 
+Since v7.29.0 the demo prints the real cost/time/iteration estimate before
+spending anything and asks for confirmation on interactive terminals
+(`[Y/n]`, Enter confirms). `--yes` skips the prompt but still shows the
+estimate; non-interactive runs without `--yes` refuse with exit 2 rather
+than spending unattended. Declining prints "Cancelled. Nothing was spent."
+
 ```bash
 loki demo
+loki demo --yes       # skip the confirm, still shows the estimate
+loki demo --dry-run   # estimate only, never spends
+```
+
+---
+
+### `loki quickstart` (v7.29.0)
+
+A guided first build: four quick questions, then the build starts. Pressing
+Enter at every step builds the sample Todo app.
+
+1. Setup check: detects an AI provider CLI; if none is installed, offers to
+   install Claude Code (consent-gated, interactive terminals only; the only
+   command it ever runs is `npm install -g @anthropic-ai/claude-code`,
+   printed before execution; auth via `claude auth login`).
+2. What to build: one line, or a path to an existing PRD file.
+3. Template pick: the closest 3 of the bundled templates, matched by a
+   deterministic offline keyword scorer (no LLM, no network).
+4. Plan review: the real estimator's tier/cost/time/iterations, labeled as
+   an estimate, then a final `[Y/n]` confirm before any spend.
+
+The PRD lands at `./prd.md`; existing files are never silently overwritten
+(declining the overwrite walks to `prd-quickstart.md`, `prd-quickstart-2.md`,
+and so on). Non-interactive/CI invocations exit 2 with an automation hint
+and produce zero side effects.
+
+```bash
+loki quickstart
+loki quickstart --yes   # auto-confirm the final build prompt only
 ```
 
 ---

@@ -297,7 +297,7 @@ Error: Provider 'codex' not installed
 ```bash
 # Install the missing CLI
 npm install -g @openai/codex-cli
-codex auth
+codex login
 ```
 
 ---

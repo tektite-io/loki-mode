@@ -105,7 +105,7 @@ Degraded mode with sequential execution only.
 npm install -g @openai/codex-cli
 
 # Authenticate
-codex auth
+codex login
 ```
 
 ### Model
@@ -393,7 +393,7 @@ npm install -g @openai/codex-cli
 ```bash
 # Re-authenticate
 claude auth login
-codex auth
+codex login
 ```
 
 ### Wrong Provider Used

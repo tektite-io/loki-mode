@@ -74,7 +74,7 @@ Codex runs in degraded mode (sequential execution only).
 npm install -g @openai/codex-cli
 
 # Authenticate
-codex auth
+codex login
 ```
 
 ### Cline CLI
