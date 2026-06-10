@@ -75,10 +75,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the council evaluate path, failing loudly if any wiring is silently
   removed.
 
+### Fixed
+- CRITICAL: completion claims are no longer dropped by the gate chain. The
+  completion signal is consumed on first read, and the completion-promise
+  chain checked it up to five times per iteration (reverify guard, code-review
+  block, evidence gate, held-out gate, success), so with passing gates the
+  success arm found nothing and runs iterated to max-iterations despite a
+  valid claim (a real build dropped 9+ valid claims and burned 12 extra paid
+  iterations). The claim is now evaluated exactly once per iteration into a
+  single variable that all arms test; gate-rejected claims still require a
+  fresh re-claim next iteration. A static wiring test prevents the multi-call
+  pattern from returning.
+- Cost capture and the USD budget breaker work on every project path. The
+  context tracker derived Claude's session-dir slug with a slash-only replace
+  while Claude Code sanitizes every non-alphanumeric character, so any project
+  path containing underscores or dots silently recorded cost_usd=0 and left
+  the LOKI_BUDGET_LIMIT breaker inert (a real $14.55 run recorded $0). The
+  stream parser now captures Claude's own total_cost_usd per iteration into
+  .loki/metrics/result-cost-<iter>.json and the efficiency writer prefers
+  those authoritative values; the slug rule now mirrors Claude's sanitization
+  with the old rule kept as a stale-session fallback.
+- Held-out reservations survive checklist regeneration honestly. A regenerated
+  PRD/checklist orphans the reserved ids; previously the gate recorded PASS
+  with zero matches and the build prompt stopped excluding anything (silent
+  loss of the whole guarantee in both directions). Stale reservations now
+  deterministically re-select (logged + heldout_stale trust event), partial
+  mismatches keep survivors with the drop logged, a zero-match gate records
+  STALE (never PASS), duplicate checklist ids skip reservation entirely, and
+  the checklist summary never collapses to empty for a non-empty checklist.
+- Both non-council completion routes re-verify the checklist once before
+  evaluating the council hard gates, so the evidence and held-out gates no
+  longer read stale verification statuses on the promise path.
+- A locked spec whose file was deleted now surfaces a Medium SPEC_DRIFT
+  finding instead of passing silently, and never falls back to comparing
+  against a different spec candidate.
+- `loki spec lock` on a repo with no commits records an honest `no-commits`
+  sentinel instead of the literal string "HEAD"; `loki grill` validates the
+  provider before logging that the interrogation is starting; a stale
+  held-out block file is removed on the NONE and STALE verdicts.
+
 ### Tests
-- tests/test-heldout-evals.sh: 23/23. tests/test-spec.sh: 30/30.
+- tests/test-heldout-evals.sh: 32/32. tests/test-spec.sh: 34/34.
   tests/test-verify.sh: 11/11. tests/test-evidence-gate.sh: 48/48.
-  tests/test-cli-commands.sh: 22/22. (Re-run in the v7.28.0 worktree.)
+  tests/test-completion-claim.sh: 10/10. tests/test-cost-capture.sh: 6/6.
+  tests/test-cli-commands.sh: 22/22 on both routes (Bun and
+  LOKI_LEGACY_BASH=1). All suites wired into scripts/local-ci.sh.
 
 ## [7.27.0] - 2026-06-09
 
