@@ -357,6 +357,46 @@ PYHS
   )
 '
 
+# task 566: real MCP stdio handshake for the LSP PROXY. The proxy carried the
+# same `mcp` namespace collision as server.py and silently degraded to a no-op
+# shim under MCP SDK 1.x (package-dir FastMCP), so its LSP tools never loaded
+# for consumers. This is the faithful old-vs-new guard (a file-exists probe is
+# a false positive). Spawns `python -m mcp.lsp_proxy` over stdio, completes
+# initialize -> tools/list, asserts >0 tools. Skipped (PASS) when the SDK is
+# not importable on the host so CI without it stays green.
+run_check "MCP LSP-proxy stdio handshake (initialize -> tools/list; skips if SDK absent)" '
+  (
+    repo="$PWD"
+    if ! python3 -m mcp.server --check-sdk >/dev/null 2>&1; then
+      echo "MCP SDK not importable on host; lsp-proxy handshake skipped (OK)."
+      exit 0
+    fi
+    hsdir="$(mktemp -d -t loki-mcp-lsp-hs-XXXX)"
+    trap "rm -rf \"$hsdir\"" EXIT
+    out="$(cd "$hsdir" && python3 - "$repo" <<PYHS 2>&1
+import asyncio, os, sys
+repo = sys.argv[1]
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+async def run():
+    params = StdioServerParameters(command=sys.executable,
+        args=["-m","mcp.lsp_proxy","--transport","stdio"], cwd=repo, env=dict(os.environ))
+    async with stdio_client(params) as (r, w):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            tl = await s.list_tools()
+            return len(tl.tools)
+n = asyncio.run(run())
+print("lsp-proxy handshake OK: %d tools" % n)
+sys.exit(0 if n > 0 else 1)
+PYHS
+    )"
+    code=$?
+    echo "$out" | tail -2
+    exit "$code"
+  )
+'
+
 # v7.29.0: inline provider install offer (autonomy/provider-offer.sh). Stub-based,
 # ZERO real installs: a controlled PATH without provider CLIs + a stub npm that
 # records argv. Asserts the offer renders, non-TTY/CI never prompt and exit
