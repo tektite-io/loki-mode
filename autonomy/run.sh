@@ -4576,7 +4576,9 @@ compute_codebase_signature() {
                     sz=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
                     printf '%s\t%s\n' "$f" "$sz"
                 done | LC_ALL=C sort)
-          count=$(printf '%s\n' "$listing" | grep -c . || echo 0)
+          # grep -c prints 0 itself on no match (exit 1); '|| true' avoids the
+          # old '|| echo 0' double-zero that embedded a newline on empty trees
+          count=$(printf '%s\n' "$listing" | grep -c . || true)
           total_sz=$(printf '%s\n' "$listing" | awk -F'\t' '{s+=$2} END {printf "%d", s}')
           budget="${LOKI_PRD_SIG_CONTENT_BUDGET:-52428800}"
           if [ "${total_sz:-0}" -le "$budget" ] 2>/dev/null; then
@@ -4665,6 +4667,21 @@ except Exception:
     if [ "$stored" = "$current" ]; then
         echo "reuse"
     else
+        # v7.32.3 format transition (#569): a stored pre-content-hash signature
+        # ("files:<listing>:<count>", 3 fields) compared against the new 4-field
+        # format would falsely claim "codebase changed" on the first post-upgrade
+        # run. When the new signature extends the stored one (same listing
+        # fields), the tree is unchanged at the old format's trust level: reuse,
+        # honestly. The next persist upgrades the stored format. A same-size edit
+        # made BEFORE the upgrade stays invisible for this one run, exactly as it
+        # was on the old version (no regression, no false disclosure).
+        case "$stored" in
+            files:*)
+                if [ "${current#"${stored}":}" != "$current" ]; then
+                    echo "reuse"; return 0
+                fi
+                ;;
+        esac
         echo "update"
     fi
 }
@@ -4713,7 +4730,15 @@ try:
 except Exception:
     prev = {}
 prev_at = prev.get('generated_at') if isinstance(prev, dict) else None
-if prev_at and prev.get('signature') == sig:
+prev_sig = prev.get('signature') if isinstance(prev, dict) else None
+# Unchanged, OR the v7.32.3 files-signature format upgrade (#569): the new
+# 4-field signature extends an old 3-field one whose listing fields match.
+# Preserve the date in both cases; the PRD content did not change.
+_legacy_upgrade = (
+    isinstance(prev_sig, str) and prev_sig.startswith('files:')
+    and sig.startswith(prev_sig + ':')
+)
+if prev_at and (prev_sig == sig or _legacy_upgrade):
     generated_at = prev_at
 else:
     generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z')
