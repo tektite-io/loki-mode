@@ -175,5 +175,5 @@ loki_review_guard_enabled() {
 }
 loki_review_guard_denylist() {
     # Comma-separated single token. Bash(...) globs match the tool-input string.
-    printf '%s' "Edit,Write,NotebookEdit,Bash(git commit*),Bash(git reset*),Bash(git push*),Bash(git checkout*),Bash(git clean*),Bash(git rm*),Bash(git stash*)"
+    printf '%s' "Edit,Write,NotebookEdit,Bash(git commit:*),Bash(git reset:*),Bash(git push:*),Bash(git checkout:*),Bash(git clean:*),Bash(git rm:*),Bash(git stash:*)"
 }

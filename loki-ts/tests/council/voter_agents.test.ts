@@ -210,8 +210,8 @@ describe("dispatchClaudeAgents EMBED 3 --disallowedTools tree-mutation guard", (
       expect(denyList).toContain("Edit");
       expect(denyList).toContain("Write");
       expect(denyList).toContain("NotebookEdit");
-      expect(denyList).toContain("Bash(git reset*)");
-      expect(denyList).toContain("Bash(git push*)");
+      expect(denyList).toContain("Bash(git reset:*)");
+      expect(denyList).toContain("Bash(git push:*)");
       // Read-only git must NOT be in the deny list (reviewer still inspects).
       expect(denyList).not.toContain("Bash(git diff");
       expect(denyList).not.toContain("Bash(git log");

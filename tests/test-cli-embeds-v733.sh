@@ -111,8 +111,8 @@ argv_has() { grep -qxF -e "$1" "$ARGV_LOG"; }
   case "$dl" in *Edit*) echo "A5a_OK";; *) echo "A5a_BAD";; esac
   case "$dl" in *Write*) echo "A5b_OK";; *) echo "A5b_BAD";; esac
   case "$dl" in *NotebookEdit*) echo "A5c_OK";; *) echo "A5c_BAD";; esac
-  case "$dl" in *"Bash(git reset*)"*) echo "A5d_OK";; *) echo "A5d_BAD";; esac
-  case "$dl" in *"Bash(git push*)"*) echo "A5e_OK";; *) echo "A5e_BAD";; esac
+  case "$dl" in *"Bash(git reset:*)"*) echo "A5d_OK";; *) echo "A5d_BAD";; esac
+  case "$dl" in *"Bash(git push:*)"*) echo "A5e_OK";; *) echo "A5e_BAD";; esac
   # Read-only git inspection must remain allowed.
   case "$dl" in *"git diff"*|*"git log"*|*"git show"*|*"git status"*) echo "A6_BAD";; *) echo "A6_OK";; esac
 ) > "$TMP/secA.out" 2>/dev/null
@@ -127,8 +127,8 @@ check_tok A4_OK "EMBED3 predicate OFF when LOKI_REVIEW_TOOL_GUARD=0"
 check_tok A5a_OK "EMBED3 deny list contains Edit"
 check_tok A5b_OK "EMBED3 deny list contains Write"
 check_tok A5c_OK "EMBED3 deny list contains NotebookEdit"
-check_tok A5d_OK "EMBED3 deny list contains Bash(git reset*)"
-check_tok A5e_OK "EMBED3 deny list contains Bash(git push*)"
+check_tok A5d_OK "EMBED3 deny list contains Bash(git reset:*)"
+check_tok A5e_OK "EMBED3 deny list contains Bash(git push:*)"
 check_tok A6_OK "EMBED3 deny list does NOT block read-only git (diff/log/show/status)"
 
 # Graceful-degrade: when --bare / --disallowedTools are NOT in help, predicates fail.
