@@ -4543,7 +4543,14 @@ _loki_hash_stdin() {
 # Compute a cheap, clone-stable signature of the codebase so we can tell whether
 # it changed since the generated PRD was last written. Git repos: HEAD sha +
 # dirty flag (.loki/.git churn filtered out). Non-git: a hash of sorted
-# path+size pairs (size, not mtime, so it is clone-stable). Echoes the signature.
+# path+size pairs PLUS file content (v7.33, #569: path+size alone was blind to
+# a same-size content edit, so a stale PRD could be silently reused with a
+# false "codebase unchanged" disclosure). Content hashing is clone-stable
+# (mtime is not, which is why mtime was never used). Trees larger than
+# LOKI_PRD_SIG_CONTENT_BUDGET bytes (default 50MB) skip the content pass and
+# emit a "files-shallow:" signature so startup stays fast; the safe failure
+# mode there is unchanged-from-before (size-blind), never a false "changed".
+# Echoes the signature.
 compute_codebase_signature() {
     local dir="${1:-.}"
     ( cd "$dir" 2>/dev/null || exit 0
@@ -4558,7 +4565,7 @@ compute_codebase_signature() {
           fi
           echo "git:${head}:${dirty}"
       else
-          local listing count
+          local listing count total_sz budget
           listing=$(find . \
               -type d \( -name .loki -o -name .git -o -name node_modules -o -name dist \
                          -o -name build -o -name .next -o -name target -o -name vendor \
@@ -4570,7 +4577,21 @@ compute_codebase_signature() {
                     printf '%s\t%s\n' "$f" "$sz"
                 done | LC_ALL=C sort)
           count=$(printf '%s\n' "$listing" | grep -c . || echo 0)
-          echo "files:$(printf '%s' "$listing" | _loki_hash_stdin):${count}"
+          total_sz=$(printf '%s\n' "$listing" | awk -F'\t' '{s+=$2} END {printf "%d", s}')
+          budget="${LOKI_PRD_SIG_CONTENT_BUDGET:-52428800}"
+          if [ "${total_sz:-0}" -le "$budget" ] 2>/dev/null; then
+              # Content pass: stream every (path, content) through one hash in
+              # the same sorted order as the listing. Detects same-size edits.
+              local content_hash
+              content_hash=$(printf '%s\n' "$listing" | cut -f1 \
+                  | while IFS= read -r f; do
+                        printf '%s\n' "$f"
+                        cat "$f" 2>/dev/null
+                    done | _loki_hash_stdin)
+              echo "files:$(printf '%s' "$listing" | _loki_hash_stdin):${count}:${content_hash}"
+          else
+              echo "files-shallow:$(printf '%s' "$listing" | _loki_hash_stdin):${count}"
+          fi
       fi
     )
 }

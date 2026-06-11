@@ -157,6 +157,25 @@ case "$NG1" in files:*) ok "non-git fallback uses files: mode" ;; *) bad "non-gi
 echo "b" > "$NG/b.py"
 NG3=$(compute_codebase_signature "$NG")
 [ "$NG1" != "$NG3" ] && ok "non-git fallback detects a new file" || bad "non-git missed a new file"
+
+# v7.33 (#569): a SAME-SIZE content edit must change the signature (path+size
+# alone was blind to it and a stale PRD could be silently reused).
+NG4=$(compute_codebase_signature "$NG")
+printf 'c\n' > "$NG/b.py"   # same byte count as "b\n", different content
+NG5=$(compute_codebase_signature "$NG")
+[ "$NG4" != "$NG5" ] && ok "non-git detects a same-size content edit" || bad "non-git BLIND to same-size content edit"
+
+# clone-stability: a copied tree (fresh mtimes) must produce the SAME signature
+NGC=$(mktemp -d "${TMPDIR:-/tmp}/loki-prdreuse-ngc-XXXXXX")
+cp -R "$NG/." "$NGC/"
+NG6=$(compute_codebase_signature "$NGC")
+[ "$NG5" = "$NG6" ] && ok "non-git signature is clone-stable (content-based, not mtime)" || bad "non-git signature not clone-stable"
+rm -rf "$NGC"
+
+# budget fallback: trees over LOKI_PRD_SIG_CONTENT_BUDGET bytes use the cheap
+# files-shallow: listing (documented honest limitation: size-blind there)
+NG7=$(LOKI_PRD_SIG_CONTENT_BUDGET=1 compute_codebase_signature "$NG")
+case "$NG7" in files-shallow:*) ok "non-git over-budget falls back to files-shallow:" ;; *) bad "budget fallback wrong: $NG7" ;; esac
 rm -rf "$NG"
 
 rm -rf "$WORK"
