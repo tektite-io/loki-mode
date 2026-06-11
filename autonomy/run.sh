@@ -4543,7 +4543,14 @@ _loki_hash_stdin() {
 # Compute a cheap, clone-stable signature of the codebase so we can tell whether
 # it changed since the generated PRD was last written. Git repos: HEAD sha +
 # dirty flag (.loki/.git churn filtered out). Non-git: a hash of sorted
-# path+size pairs (size, not mtime, so it is clone-stable). Echoes the signature.
+# path+size pairs PLUS file content (v7.32.3, #569: path+size alone was blind to
+# a same-size content edit, so a stale PRD could be silently reused with a
+# false "codebase unchanged" disclosure). Content hashing is clone-stable
+# (mtime is not, which is why mtime was never used). Trees larger than
+# LOKI_PRD_SIG_CONTENT_BUDGET bytes (default 50MB) skip the content pass and
+# emit a "files-shallow:" signature so startup stays fast; the safe failure
+# mode there is unchanged-from-before (size-blind), never a false "changed".
+# Echoes the signature.
 compute_codebase_signature() {
     local dir="${1:-.}"
     ( cd "$dir" 2>/dev/null || exit 0
@@ -4558,7 +4565,7 @@ compute_codebase_signature() {
           fi
           echo "git:${head}:${dirty}"
       else
-          local listing count
+          local listing count total_sz budget
           listing=$(find . \
               -type d \( -name .loki -o -name .git -o -name node_modules -o -name dist \
                          -o -name build -o -name .next -o -name target -o -name vendor \
@@ -4569,8 +4576,26 @@ compute_codebase_signature() {
                     sz=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
                     printf '%s\t%s\n' "$f" "$sz"
                 done | LC_ALL=C sort)
-          count=$(printf '%s\n' "$listing" | grep -c . || echo 0)
-          echo "files:$(printf '%s' "$listing" | _loki_hash_stdin):${count}"
+          # grep -c prints 0 itself on no match (exit 1); '|| true' avoids the
+          # old '|| echo 0' double-zero that embedded a newline on empty trees
+          count=$(printf '%s\n' "$listing" | grep -c . || true)
+          total_sz=$(printf '%s\n' "$listing" | awk -F'\t' '{s+=$2} END {printf "%d", s}')
+          budget="${LOKI_PRD_SIG_CONTENT_BUDGET:-52428800}"
+          if [ "${total_sz:-0}" -le "$budget" ] 2>/dev/null; then
+              # Content pass: stream all file contents through one hash in the
+              # same sorted order as the listing. Detects same-size edits.
+              # xargs -0 batches the reads into a handful of cat invocations,
+              # so cost scales with BYTES (which the budget above bounds), not
+              # file count: a fork-per-file loop here measured ~38s of added
+              # startup on a 30k-small-file tree. Renames and content swaps
+              # are still caught by the listing hash (paths+sizes) below.
+              local content_hash
+              content_hash=$(printf '%s\n' "$listing" | cut -f1 | tr '\n' '\0' \
+                  | xargs -0 cat 2>/dev/null | _loki_hash_stdin)
+              echo "files:$(printf '%s' "$listing" | _loki_hash_stdin):${count}:${content_hash}"
+          else
+              echo "files-shallow:$(printf '%s' "$listing" | _loki_hash_stdin):${count}"
+          fi
       fi
     )
 }
@@ -4644,6 +4669,25 @@ except Exception:
     if [ "$stored" = "$current" ]; then
         echo "reuse"
     else
+        # v7.32.3 format transition (#569): a stored pre-content-hash signature
+        # ("files:<listing>:<count>", 3 fields) compared against the new 4-field
+        # format would falsely claim "codebase changed" on the first post-upgrade
+        # run. When the new signature extends the stored one (same listing
+        # fields), the tree is unchanged at the old format's trust level: reuse,
+        # honestly. The next persist upgrades the stored format. A same-size edit
+        # made BEFORE the upgrade stays invisible for this one run, exactly as it
+        # was on the old version (no regression, no false disclosure).
+        case "$stored" in
+            files:*:*)
+                # Require the legitimate old 3-field format (files:HASH:COUNT,
+                # exactly 2 colons), not a truncated/corrupted 2-field value
+                # (council hardening: corruption must fall to update, as before).
+                if [ "$(printf '%s' "$stored" | tr -dc ':' | wc -c | tr -d ' ')" = "2" ] \
+                   && [ "${current#"${stored}":}" != "$current" ]; then
+                    echo "reuse"; return 0
+                fi
+                ;;
+        esac
         echo "update"
     fi
 }
@@ -4692,7 +4736,16 @@ try:
 except Exception:
     prev = {}
 prev_at = prev.get('generated_at') if isinstance(prev, dict) else None
-if prev_at and prev.get('signature') == sig:
+prev_sig = prev.get('signature') if isinstance(prev, dict) else None
+# Unchanged, OR the v7.32.3 files-signature format upgrade (#569): the new
+# 4-field signature extends an old 3-field one whose listing fields match.
+# Preserve the date in both cases; the PRD content did not change.
+_legacy_upgrade = (
+    isinstance(prev_sig, str) and prev_sig.startswith('files:')
+    and prev_sig.count(':') == 2
+    and sig.startswith(prev_sig + ':')
+)
+if prev_at and (prev_sig == sig or _legacy_upgrade):
     generated_at = prev_at
 else:
     generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z')

@@ -157,6 +157,49 @@ case "$NG1" in files:*) ok "non-git fallback uses files: mode" ;; *) bad "non-gi
 echo "b" > "$NG/b.py"
 NG3=$(compute_codebase_signature "$NG")
 [ "$NG1" != "$NG3" ] && ok "non-git fallback detects a new file" || bad "non-git missed a new file"
+
+# v7.32.3 (#569): a SAME-SIZE content edit must change the signature (path+size
+# alone was blind to it and a stale PRD could be silently reused).
+NG4=$(compute_codebase_signature "$NG")
+printf 'c\n' > "$NG/b.py"   # same byte count as "b\n", different content
+NG5=$(compute_codebase_signature "$NG")
+[ "$NG4" != "$NG5" ] && ok "non-git detects a same-size content edit" || bad "non-git BLIND to same-size content edit"
+
+# clone-stability: a copied tree (fresh mtimes) must produce the SAME signature
+NGC=$(mktemp -d "${TMPDIR:-/tmp}/loki-prdreuse-ngc-XXXXXX")
+cp -R "$NG/." "$NGC/"
+NG6=$(compute_codebase_signature "$NGC")
+[ "$NG5" = "$NG6" ] && ok "non-git signature is clone-stable (content-based, not mtime)" || bad "non-git signature not clone-stable"
+rm -rf "$NGC"
+
+# budget fallback: trees over LOKI_PRD_SIG_CONTENT_BUDGET bytes use the cheap
+# files-shallow: listing (documented honest limitation: size-blind there)
+NG7=$(LOKI_PRD_SIG_CONTENT_BUDGET=1 compute_codebase_signature "$NG")
+case "$NG7" in files-shallow:*) ok "non-git over-budget falls back to files-shallow:" ;; *) bad "budget fallback wrong: $NG7" ;; esac
+
+# v7.32.3 format transition: a stored OLD-format signature (3-field files:,
+# no content hash) whose listing fields match the new signature must yield
+# reuse, NOT a false "codebase changed" update on the first post-upgrade run.
+mkdir -p "$NG/.loki/state"
+printf '# prd\n' > "$NG/.loki/generated-prd.md"
+NG8=$(compute_codebase_signature "$NG")
+NG8_LEGACY=$(printf '%s' "$NG8" | cut -d: -f1-3)
+[ "$NG8_LEGACY" != "$NG8" ] || bad "expected 4-field new-format signature, got: $NG8"
+python3 -c "
+import json, sys
+json.dump({'signature': sys.argv[1], 'generated_at': '2026-01-01T00:00:00Z',
+           'prd_path': '.loki/generated-prd.md', 'prd_sha': '', 'mode': 'files',
+           'loki_version': 'old'}, open(sys.argv[2], 'w'))
+" "$NG8_LEGACY" "$NG/.loki/state/prd-signature.json"
+[ "$(TARGET_DIR="$NG" decide_generated_prd_action)" = "reuse" ] \
+  && ok "old-format signature upgrade decides reuse (no false 'codebase changed')" \
+  || bad "format transition produced a spurious update"
+# and the persist that follows must PRESERVE generated_at (no false re-stamp)
+( cd "$NG" && TARGET_DIR="." prd_path=".loki/generated-prd.md" GENERATED_PRD_ACTION=reuse persist_prd_signature_if_present 0 ) 2>/dev/null
+NG_AT=$(python3 -c "import json; print(json.load(open('$NG/.loki/state/prd-signature.json'))['generated_at'])")
+[ "$NG_AT" = "2026-01-01T00:00:00Z" ] \
+  && ok "format-upgrade persist preserves generated_at (honest date)" \
+  || bad "format-upgrade persist re-stamped generated_at: $NG_AT"
 rm -rf "$NG"
 
 rm -rf "$WORK"
