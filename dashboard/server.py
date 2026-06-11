@@ -389,7 +389,7 @@ class StatusResponse(BaseModel):
     current_task: str = ""
     # v7.34.0 Phase 1: the deterministic per-run Claude session UUID derived from
     # the trust-run-id (read from .loki/state/claude-session.json). Surfaced so a
-    # user can inspect/resume the run with `claude --resume <uuid>`. Empty when
+    # user can correlate the run with its Claude session JSONL (in ~/.claude/projects). Empty when
     # the run predates this field or no claude session was stamped.
     claude_session_id: str = ""
     # Concurrent sessions (v6.4.0)

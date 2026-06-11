@@ -2,7 +2,7 @@
 tests/dashboard/test_claude_session_status.py
 v7.34.0 Phase 1: the /api/status response surfaces claude_session_id read from
 .loki/state/claude-session.json (the correlation-only stamp run.sh writes at
-run-start). A user reads this to `claude --resume <uuid>`.
+run-start). A user reads this to correlate a run with its Claude session JSONL.
 
 Uses FastAPI's TestClient with raise_server_exceptions=False and the
 _ForceLokiDir context manager (same pattern as test_phase1_endpoints.py), so no

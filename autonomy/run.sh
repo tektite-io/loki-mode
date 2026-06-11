@@ -12331,7 +12331,7 @@ except Exception:
         # Best-effort: the helper is in scope via providers/claude.sh sourcing
         # claude-flags.sh; if absent (e.g. non-claude provider, no python3) we
         # skip silently and never fail the run. The dashboard reads this file to
-        # surface a `claude --resume <uuid>` hint for run inspection.
+        # surface it for correlating the run with its Claude session JSONL.
         if type _loki_claude_session_uuid >/dev/null 2>&1; then
             local _loki_session_uuid
             _loki_session_uuid="$(_loki_claude_session_uuid "$LOKI_TRUST_RUN_ID")"

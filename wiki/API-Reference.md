@@ -77,9 +77,12 @@ Get detailed session status. Reads from `.loki/` flat files (dashboard-state.jso
   "complexity": "standard",
   "mode": "autonomous",
   "provider": "claude",
-  "current_task": "implement-auth"
+  "current_task": "implement-auth",
+  "claude_session_id": "1c92381f-8899-58e5-b77f-d8f822f158fb"
 }
 ```
+
+`claude_session_id` (v7.34.0) is the deterministic per-run UUID stamped at run-start (correlation-only) for matching a run to its Claude session JSONL under `~/.claude/projects/`. Empty string when the run predates the field or uses a non-Claude provider.
 
 **`loki status --json` Phase 1 block (v7.5.5+):**
 
