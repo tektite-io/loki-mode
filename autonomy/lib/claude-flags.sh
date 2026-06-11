@@ -130,3 +130,99 @@ loki_claude_flag_supported() {
         *) return 1 ;;
     esac
 }
+
+# ---------- v7.33.0 cheap-subcall + reviewer-guard flag emitters ----------
+# These centralize three Claude Code 2.1.170 embeds so every cheap NON-MAIN
+# subcall site emits the same gated flags. Each emitter prints its flags to
+# stdout (space-free per element via one-per-line is not needed; callers read
+# them into an array with command substitution + word-splitting on the single
+# token they emit, OR append the function output as additional argv elements).
+# All are default-ON, opt-out via env, and gated on loki_claude_flag_supported
+# so an older CLI degrades gracefully (emits nothing).
+
+# EMBED 2 -- --bare (cheap NON-MAIN subcalls only). Minimal mode. Per
+# `claude --help` it SKIPS hooks, LSP, plugin sync, attribution, auto-memory,
+# background prefetches, keychain reads, and CLAUDE.md AUTO-discovery. It does
+# NOT nullify explicit --mcp-config/--settings/--agents (the help lists those as
+# the way to "explicitly provide context" UNDER --bare); what it drops is the
+# IMPLICIT/auto-discovered context. Therefore --bare is ONLY safe on subcalls
+# whose prompt is fully self-contained (the entire instruction set + context is
+# passed via -p), and NEVER on the main RARV loop or on any call that relies on
+# auto-discovered CLAUDE.md / hooks / auto-memory.
+#
+# AUTH GATE (critical): --bare sets CLAUDE_CODE_SIMPLE=1 and per `claude --help`
+# reads Anthropic auth STRICTLY from ANTHROPIC_API_KEY or an apiKeyHelper via
+# --settings -- "OAuth and keychain are never read". A subscription/OAuth user
+# (no ANTHROPIC_API_KEY) gets "Not logged in" on every --bare subcall, which
+# exits 0 with the error on stdout, so a council vote parses as the default
+# REJECT and the loop silently corrupts. So --bare is enabled ONLY when an
+# API-key auth path exists (ANTHROPIC_API_KEY set, or an apiKeyHelper configured
+# in settings); otherwise it emits nothing and the subcall runs full-auth, the
+# same as before this embed. Subscription users are thus unaffected by default.
+# Default-ON (when auth-safe); opt out entirely with LOKI_BARE_SUBCALLS=0.
+# Predicate so call sites can append "--bare" to their argv array uniformly:
+#   loki_subcall_bare_enabled && argv+=("--bare")
+loki_subcall_bare_enabled() {
+    [ "${LOKI_BARE_SUBCALLS:-1}" = "0" ] && return 1
+    # API-key auth required (see AUTH GATE above). ANTHROPIC_API_KEY is the
+    # common case; apiKeyHelper covers the settings-configured helper. Anything
+    # else (OAuth/keychain subscription) must NOT use --bare. Trim the key so a
+    # whitespace-only value does not count as set (it would fail --bare auth).
+    local _key
+    _key="$(printf '%s' "${ANTHROPIC_API_KEY:-}" | tr -d '[:space:]')"
+    if [ -z "$_key" ] && ! _loki_apikey_helper_configured; then
+        return 1
+    fi
+    loki_claude_flag_supported "--bare"
+}
+
+# True when an apiKeyHelper is configured in any Claude settings source, which
+# (unlike OAuth/keychain) IS honored under --bare. Best-effort, read-only.
+_loki_apikey_helper_configured() {
+    local f
+    for f in "$HOME/.claude/settings.json" "$HOME/.config/claude/settings.json" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" \
+             "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json"; do
+        [ -f "$f" ] || continue
+        # Require "apiKeyHelper" : "<non-empty value>" (a real key:value pair),
+        # not the bare token in a comment/prose. Tolerates whitespace around the
+        # colon. Not a full JSON parse, but rejects the obvious false-positives.
+        grep -Eq '"apiKeyHelper"[[:space:]]*:[[:space:]]*"[^"]+"' "$f" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+# EMBED 3 -- --disallowedTools (reviewer / adversarial subcalls). Motivation: a
+# parallel agent once ran `git reset --hard` and wiped uncommitted work, so a
+# reviewer/voter subcall should not casually mutate the tree. Per `claude --help`
+# the value is a comma-or-space-separated list of tool names (e.g. "Bash(git *)
+# Edit"); Bash(...) matching is command-PREFIX based (the `cmd:*` form).
+#
+# SCOPE / LIMITS (honest -- this is a denylist, NOT a sandbox):
+#   - Denies the direct file-mutation tools (Edit, Write, NotebookEdit).
+#   - Denies the common git MUTATION forms: the bare subcommand (`git reset:*`)
+#     AND the global-flag-prefixed evasions (`git -C:*`, `git --git-dir:*`,
+#     `git -c:*`) that slip a flag before the subcommand so the bare prefix
+#     does not match. Read-only git (diff/log/show/status) stays allowed.
+#   - It does NOT and cannot block every mutation path: a determined agent can
+#     still write via `Bash(echo > f)`, `sed -i`, `cp/mv/tee`, `python -c`, etc.
+#     This is a guardrail that raises the cost of the casual/common destructive
+#     command, not a guarantee the tree is immutable. The real safety net is
+#     that the integrator commits before any agent wave (see CLAUDE.md).
+# The flag is variadic (<tools...>), so we emit ONE comma-separated token to
+# avoid swallowing the following -p prompt as additional tool names.
+# Default-ON; opt out with LOKI_REVIEW_TOOL_GUARD=0.
+# Predicate + denylist so call sites append uniformly:
+#   if loki_review_guard_enabled; then
+#       argv+=("--disallowedTools" "$(loki_review_guard_denylist)")
+#   fi
+loki_review_guard_enabled() {
+    [ "${LOKI_REVIEW_TOOL_GUARD:-1}" = "0" ] && return 1
+    loki_claude_flag_supported "--disallowedTools"
+}
+loki_review_guard_denylist() {
+    # Comma-separated single token. Bash(cmd:*) is command-prefix matching.
+    # The `git -C:*` / `git --git-dir:*` / `git -c:*` entries close the
+    # global-flag-before-subcommand evasion of the bare git-mutation rules.
+    printf '%s' "Edit,Write,NotebookEdit,Bash(git commit:*),Bash(git reset:*),Bash(git push:*),Bash(git checkout:*),Bash(git clean:*),Bash(git rm:*),Bash(git stash:*),Bash(git -C:*),Bash(git --git-dir:*),Bash(git -c:*)"
+}
