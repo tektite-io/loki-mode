@@ -68,7 +68,7 @@ GPT pattern. Example: "Autonomi Cloud, powered by Loki."
 |---|---|---|
 | Loki Cloud | **Autonomi Cloud** (powered by Loki) | commercial hosted |
 | Loki Enterprise (as a *product/offering* name) | **Autonomi Enterprise** (powered by Loki) | the paid offering |
-| Loki VaaS / Loki Verification Cloud | **Autonomi** (VaaS), powered by Loki | ~/loki-vaas product brand |
+| Loki VaaS / Loki Verification Cloud | **Autonomi Verify** (VaaS), powered by Loki | ~/loki-vaas product brand (renamed 2026-06-12) |
 | "Loki, the company" | **Autonomi** | the company is Autonomi |
 | Loki SaaS / Loki Pro / Loki Business | **Autonomi Cloud** / **Autonomi Enterprise** | no paid tier wears "Loki" |
 | Loki Mode (the CLI/SDK/agent) | **Loki Mode** (unchanged) | the agent keeps its name |
