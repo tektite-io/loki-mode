@@ -4,6 +4,8 @@
 
 ### The spec-driven autonomous builder with verified completion.
 
+_The free, source-available autonomous coding agent by [Autonomi](https://www.autonomi.dev/). Same Loki CLI, SDK, and MCP for everyone; the commercial editions for teams and enterprises are sold under the **Autonomi** brand (Autonomi Cloud, Autonomi Enterprise)._
+
 **Hand it a spec. It does not accept "done" on an empty diff or failing tests.**
 
 [![npm version](https://img.shields.io/npm/v/loki-mode?style=for-the-badge&logo=npm&logoColor=white&color=553DE9)](https://www.npmjs.com/package/loki-mode)
@@ -289,7 +291,7 @@ TLS, OIDC/SSO, RBAC, OTEL tracing, policy engine, audit trails. Activated via en
 
 ## Purple Lab
 
-The hosted development platform. A Replit-like web UI for visual PRD-to-code workflow with AI chat for iterative development.
+The hosted development platform. A Replit-like web UI for visual PRD-to-code workflow, with the Loki agent for iterative development. The same software is free and source-available as the local Loki Mode dashboard; offered managed to teams and enterprises under the **Autonomi** brand (Autonomi Cloud).
 
 ```bash
 loki web                           # launches at http://localhost:57375
