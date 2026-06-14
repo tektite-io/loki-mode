@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.41.5] - 2026-06-14
+
+Defensive hardening from the bug-hunt fleet's lower-severity findings. Each fix
+has a regression test proven non-vacuous.
+
+### Fixed
+- Memory index no longer double-counts on episode re-save. _update_index_with_episode
+  de-duplicated episode_ids but incremented episode_count/total_cost_usd/total_tokens
+  unconditionally, so a resumed/checkpointed run (same trace id) inflated the
+  dashboard Memory panel and `loki memory index`. The aggregates now increment
+  only when the episode id is genuinely new to the topic.
+- Memory pattern reads tolerate a corrupt non-dict entry. The pattern loops in
+  engine.py (cleanup, get_pattern, find_patterns, index rebuild) now skip a
+  non-dict element instead of raising AttributeError and aborting the whole read,
+  preserving the per-file _load_json resilience.
+- save_pattern no longer loses a save when patterns.json is valid JSON but lacks
+  the "patterns" key (partial/external write). It now ensures the list exists
+  before the upsert (was a bare subscript that raised KeyError silently).
+- Completion council heuristic fallback now requires affirmative positive
+  evidence to vote COMPLETE (default flipped from COMPLETE to CONTINUE), so an
+  empty .loki/ with no test evidence no longer clears the threshold on
+  "absence of failure". Legitimate finished projects (passing or no-test) still
+  vote COMPLETE; the change is defense-in-depth behind the existing evidence
+  gates. Reuses the same test-results.json signal as council_evidence_gate.
+- log_debug writes to stderr, so LOKI_DEBUG=true no longer pollutes the
+  detect_rate_limit command-substitution capture (which silently skipped the
+  rate-limit reset wait and retried too early into a live limit).
+
 ## [7.41.4] - 2026-06-14
 
 Bun-route parity hardening. The autonomous live route is bash today, so these

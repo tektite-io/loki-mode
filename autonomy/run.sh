@@ -1003,7 +1003,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_warning() { log_warn "$@"; }  # Alias for backwards compatibility
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
-log_debug() { [[ "${LOKI_DEBUG:-}" == "true" ]] && echo -e "${CYAN}[DEBUG]${NC} $*" || true; }
+log_debug() { [[ "${LOKI_DEBUG:-}" == "true" ]] && echo -e "${CYAN}[DEBUG]${NC} $*" >&2 || true; }
 
 #===============================================================================
 # Process Registry (PID Supervisor)

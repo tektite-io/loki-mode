@@ -2045,7 +2045,23 @@ council_evaluate_member() {
     local role="$1"
     local criteria="${2:-general completion check}"
     local loki_dir="${TARGET_DIR:-.}/.loki"
-    local vote="COMPLETE"
+    # Trust-gate inversion (v7.41.5): the default is CONTINUE, not COMPLETE.
+    # The old default ("absence of a detected failure == COMPLETE") let a
+    # greenfield run with an empty .loki/ (no test logs, no queue, few TODOs)
+    # cause requirements_verifier + devils_advocate to vote COMPLETE while only
+    # test_auditor went CONTINUE -> 2-of-3 cleared the size-3 threshold and the
+    # heuristic council approved a project with ZERO positive evidence. We now
+    # require AFFIRMATIVE positive evidence before any member votes COMPLETE,
+    # mirroring the LLM prompt's "do not approve incomplete work" stance.
+    #
+    # Mechanics:
+    #   - vote starts at CONTINUE.
+    #   - The existing failure detectors set blocked=true (a hard "not done"
+    #     signal) and accumulate reasons.
+    #   - At the end, vote flips to COMPLETE only if blocked==false AND the
+    #     member's positive signal holds. No positive signal => CONTINUE.
+    local vote="CONTINUE"
+    local blocked="false"
     local reasons=""
 
     # Check 1: Do tests pass? Look for test results in .loki/
@@ -2067,7 +2083,7 @@ council_evaluate_member() {
         fi
     done
     if [ "$test_failures" -gt 0 ]; then
-        vote="CONTINUE"
+        blocked="true"
         reasons="${reasons}test failures found ($test_failures); "
     fi
 
@@ -2076,12 +2092,16 @@ council_evaluate_member() {
     local current_diff_hash
     current_diff_hash=$(git diff --stat HEAD 2>/dev/null | (md5sum 2>/dev/null || md5 -r 2>/dev/null) | cut -d' ' -f1 || echo "unknown")
     if [ "$COUNCIL_CONSECUTIVE_NO_CHANGE" -gt 0 ] && [ "$ITERATION_COUNT" -gt "$COUNCIL_MIN_ITERATIONS" ]; then
-        # Code has stopped changing -- stagnation, not necessarily done
-        # (BUG-QG-011: previously inverted -- forced CONTINUE when code was changing,
-        # which penalized active progress. Now: stagnation with no passing checks = CONTINUE)
-        if [ "$vote" = "COMPLETE" ]; then
-            : # Other checks passed despite stagnation -- allow COMPLETE
-        else
+        # Code has stopped changing -- stagnation, not necessarily done.
+        # (BUG-QG-011 history: previously inverted -- forced CONTINUE when code
+        # was changing, which penalized active progress.)
+        # Under the v7.41.5 affirmative-evidence default this is INFORMATIONAL
+        # only: stagnation by itself is neither a failure (do not set blocked)
+        # nor positive evidence (does not flip vote to COMPLETE). Whether the
+        # member completes is decided entirely by blocked + the positive-signal
+        # check below. Surface the stagnation note only when a real failure was
+        # also detected, so the reason string stays honest.
+        if [ "$blocked" = "true" ]; then
             reasons="${reasons}code stagnated with failing checks; "
         fi
     fi
@@ -2100,49 +2120,126 @@ council_evaluate_member() {
         done
     fi
     if [ "$error_count" -gt 0 ]; then
-        vote="CONTINUE"
+        blocked="true"
         reasons="${reasons}uncaught errors in logs ($error_count); "
     fi
 
-    # Role-specific checks
+    # --- Affirmative positive evidence (v7.41.5) ----------------------------
+    # Base positive signal, shared by all members: a structured test-results.json
+    # exists and is NOT red. This is the SAME file + parse the evidence hard gate
+    # uses (council_evidence_gate, see this file ~line 1543-1568), so the member
+    # vote and the gate agree on what "tests are not red" means instead of a
+    # fragile log grep. The completion route guarantees this file is written
+    # before the council votes via ensure_completion_test_evidence()
+    # (autonomy/run.sh): a project with a real runner records its true PASS/FAIL,
+    # and a project with no runner records {"runner":"none","pass":true}. A
+    # greenfield run with an empty .loki/ has NO such file -> no positive base ->
+    # the member stays CONTINUE.
+    #
+    # Parse verdict mirrors council_evidence_gate: runner=="none" => PASS,
+    # pass is False => FAIL, else PASS. Unparseable/missing => not present.
+    local tr_file="$loki_dir/quality/test-results.json"
+    local test_evidence="absent"   # absent | pass | fail
+    local test_runner_seen="none"
+    if [ -f "$tr_file" ]; then
+        local _tr_status
+        _tr_status=$(_TR_FILE="$tr_file" python3 -c "
+import json, os, sys
+try:
+    with open(os.environ['_TR_FILE']) as f:
+        d = json.load(f)
+except (json.JSONDecodeError, IOError, KeyError, ValueError):
+    print('absent:none')
+    sys.exit(0)
+runner = d.get('runner', 'none')
+passed = d.get('pass', True)
+if runner == 'none':
+    print('pass:none')
+elif passed is False:
+    print('fail:%s' % runner)
+else:
+    print('pass:%s' % runner)
+" 2>/dev/null || echo "absent:none")
+        test_evidence="${_tr_status%%:*}"
+        test_runner_seen="${_tr_status#*:}"
+    fi
+    if [ "$test_evidence" = "fail" ]; then
+        # A red structured result is a hard failure for every member, on top of
+        # any log-derived failures already counted above.
+        blocked="true"
+        reasons="${reasons}structured test results red (runner '$test_runner_seen'); "
+    fi
+
+    # Per-member positive signal, evaluated on top of the shared base.
+    local positive="false"
     case "$role" in
         requirements_verifier)
-            # Check if pending tasks remain
+            # Positive: tests not red AND no pending tasks. A present queue file
+            # with pending>0 is a hard "not done"; an ABSENT queue file is not
+            # itself disqualifying (a legit run need not have one), it just means
+            # this member relies on the base test evidence.
+            local pending=0
             if [ -f "$loki_dir/queue/pending.json" ]; then
-                local pending
                 pending=$(_QUEUE_FILE="$loki_dir/queue/pending.json" python3 -c "import json, os; print(len(json.load(open(os.environ['_QUEUE_FILE']))))" 2>/dev/null || echo "0")
                 if [ "$pending" -gt 0 ]; then
-                    vote="CONTINUE"
+                    blocked="true"
                     reasons="${reasons}$pending tasks still pending; "
                 fi
             fi
+            if [ "$test_evidence" = "pass" ] && [ "$pending" -eq 0 ]; then
+                positive="true"
+            fi
             ;;
         test_auditor)
-            # Check if any test log exists at all
-            local has_tests=false
-            for f in "$loki_dir"/logs/test-*.log "$loki_dir"/logs/*test*.log; do
-                [ -f "$f" ] && has_tests=true && break
-            done
-            if [ "$has_tests" = "false" ]; then
-                vote="CONTINUE"
-                reasons="${reasons}no test results found; "
+            # Positive requires a REAL passing test signal, not merely the
+            # absence of a failing one: a structured result with runner != none
+            # AND pass == true. {"runner":"none"} (no suite ran) is NOT positive
+            # test evidence for this member, and a missing file is not either, so
+            # a no-tests / greenfield project leaves test_auditor at CONTINUE.
+            if [ "$test_evidence" = "absent" ]; then
+                reasons="${reasons}no structured test results found; "
+            elif [ "$test_runner_seen" = "none" ]; then
+                reasons="${reasons}no real test suite ran (runner none); "
+            elif [ "$test_evidence" = "pass" ]; then
+                positive="true"
             fi
             ;;
         devils_advocate)
-            # Check for TODO/FIXME markers
+            # Positive: tests not red AND a low TODO/FIXME density. A high marker
+            # count is a hard "not done"; a missing/absent test base means no
+            # positive evidence even when TODOs are low.
             local todo_count
             todo_count=$(grep -rl "TODO\|FIXME\|HACK\|XXX" . --include="*.ts" --include="*.js" --include="*.py" --include="*.sh" 2>/dev/null | wc -l | tr -d ' ')
             if [ "$todo_count" -gt 5 ]; then
-                vote="CONTINUE"
+                blocked="true"
                 reasons="${reasons}$todo_count files with TODO/FIXME markers; "
+            fi
+            if [ "$test_evidence" = "pass" ] && [ "$todo_count" -le 5 ]; then
+                positive="true"
+            fi
+            ;;
+        *)
+            # Unknown role: fall back to the shared base signal only.
+            if [ "$test_evidence" = "pass" ]; then
+                positive="true"
             fi
             ;;
     esac
 
+    # Final decision: COMPLETE only when nothing blocks AND positive evidence
+    # is present. Otherwise CONTINUE (the affirmative-evidence default).
+    if [ "$blocked" = "false" ] && [ "$positive" = "true" ]; then
+        vote="COMPLETE"
+    fi
+
     # Clean up trailing separator
     reasons="${reasons%; }"
     if [ -z "$reasons" ]; then
-        reasons="all checks passed for $role ($criteria)"
+        if [ "$vote" = "COMPLETE" ]; then
+            reasons="positive evidence present, no failures for $role ($criteria)"
+        else
+            reasons="no positive completion evidence for $role ($criteria)"
+        fi
     fi
 
     echo "$vote $reasons"
