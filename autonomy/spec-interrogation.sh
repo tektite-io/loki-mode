@@ -280,6 +280,7 @@ spec_interrogation_classify_report() {
 # Made" section. Best-effort; runs even when no provider is available so degrade
 # still surfaces something. Usage: spec_ledger_fold_prd_observations [path]
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2120  # optional [path] arg by design (see Usage above); callers pass none
 spec_ledger_fold_prd_observations() {
     local obs="${1:-${TARGET_DIR:-.}/.loki/prd-observations.md}"
     [ -f "$obs" ] || return 0

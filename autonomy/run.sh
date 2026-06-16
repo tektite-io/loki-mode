@@ -2751,6 +2751,113 @@ with os.fdopen(fd, 'w') as f:
 os.replace(tmp, out)
 " 2>/dev/null || true
 
+    # ---- P3-5: run manifest / bill-of-materials: .loki/loki-run.json ----------
+    # Best-effort, auditable + reproducible record of this run. Emitted from
+    # build_completion_summary because that fires on EVERY terminal path
+    # (complete / max_iterations / stopped / intervention / failed), including the
+    # intervention/stopped calls that bypass emit_completion_summary. The whole
+    # block is wrapped so a failure can NEVER abort the run.
+    {
+        # Portable sha256 (macOS shasum, Linux sha256sum). Echoes empty on miss.
+        _loki_sha256() {
+            local _f="$1"
+            [ -f "$_f" ] || { printf ''; return 0; }
+            if command -v shasum >/dev/null 2>&1; then
+                shasum -a 256 "$_f" 2>/dev/null | awk '{print $1}'
+            elif command -v sha256sum >/dev/null 2>&1; then
+                sha256sum "$_f" 2>/dev/null | awk '{print $1}'
+            else
+                printf ''
+            fi
+        }
+
+        local _loki_ver
+        _loki_ver="$(cat "$PROJECT_DIR/VERSION" 2>/dev/null || echo "unknown")"
+        local _spec_path="${PRD_PATH:-}"
+        [ -z "$_spec_path" ] && _spec_path="none"
+        local _spec_hash=""
+        [ "$_spec_path" != "none" ] && _spec_hash="$(_loki_sha256 "$_spec_path")"
+
+        # Evidence files we reference + hash (existing artifacts, not new ones).
+        local _ev_tests="$loki_dir/quality/test-results.json"
+        local _ev_cov="$loki_dir/quality/coverage.json"
+        local _ev_completion="$loki_dir/state/completion.json"
+
+        _LOKI_RM_OUT="$loki_dir/loki-run.json" \
+        _LOKI_RM_VERSION="$_loki_ver" \
+        _LOKI_RM_SPEC_PATH="$_spec_path" \
+        _LOKI_RM_SPEC_HASH="$_spec_hash" \
+        _LOKI_RM_PROVIDER="${PROVIDER_NAME:-${LOKI_PROVIDER:-claude}}" \
+        _LOKI_RM_TIER="${CURRENT_TIER:-unknown}" \
+        _LOKI_RM_OUTCOME="$outcome" \
+        _LOKI_RM_BRANCH="$branch" \
+        _LOKI_RM_START_SHA="$start_sha" \
+        _LOKI_RM_HEAD_SHA="$head_sha" \
+        _LOKI_RM_ITERS="${ITERATION_COUNT:-0}" \
+        _LOKI_RM_TS="$ts" \
+        _LOKI_RM_EV_TESTS="$_ev_tests" \
+        _LOKI_RM_EV_TESTS_HASH="$(_loki_sha256 "$_ev_tests")" \
+        _LOKI_RM_EV_COV="$_ev_cov" \
+        _LOKI_RM_EV_COV_HASH="$(_loki_sha256 "$_ev_cov")" \
+        _LOKI_RM_EV_COMPLETION="$_ev_completion" \
+        _LOKI_RM_NODE="$(node --version 2>/dev/null || echo '')" \
+        _LOKI_RM_PYTHON="$(python3 --version 2>&1 | awk '{print $2}' || echo '')" \
+        _LOKI_RM_GIT="$(git --version 2>/dev/null | awk '{print $3}' || echo '')" \
+        _LOKI_RM_BUN="$(bun --version 2>/dev/null || echo '')" \
+        python3 -c "
+import json, os, tempfile
+out=os.environ['_LOKI_RM_OUT']
+def s(k): return os.environ.get(k,'')
+def i(k):
+    try: return int(os.environ.get(k,'0'))
+    except (TypeError, ValueError): return 0
+def ev(path_k, hash_k=None):
+    p=s(path_k)
+    rec={'path': p, 'exists': bool(p) and os.path.isfile(p)}
+    if hash_k:
+        h=s(hash_k)
+        if h: rec['sha256']=h
+    return rec
+manifest={
+    'schema': 'loki-run-manifest/v1',
+    'loki_version': s('_LOKI_RM_VERSION'),
+    'timestamp': s('_LOKI_RM_TS'),
+    'outcome': s('_LOKI_RM_OUTCOME'),
+    'iterations': i('_LOKI_RM_ITERS'),
+    'provider': s('_LOKI_RM_PROVIDER'),
+    # Tier cycles per RARV iteration (R/A/R/V); this is the LAST tier set, not
+    # the only tier used. Recorded honestly as last_tier, not a single 'model'.
+    'last_tier': s('_LOKI_RM_TIER'),
+    'spec': {
+        'path': s('_LOKI_RM_SPEC_PATH'),
+        'sha256': s('_LOKI_RM_SPEC_HASH') or None,
+    },
+    'git': {
+        'branch': s('_LOKI_RM_BRANCH'),
+        'start_sha': s('_LOKI_RM_START_SHA') or None,
+        'head_sha': s('_LOKI_RM_HEAD_SHA') or None,
+    },
+    'tool_versions': {
+        'node': s('_LOKI_RM_NODE') or None,
+        'python': s('_LOKI_RM_PYTHON') or None,
+        'git': s('_LOKI_RM_GIT') or None,
+        'bun': s('_LOKI_RM_BUN') or None,
+    },
+    'evidence': {
+        'test_results': ev('_LOKI_RM_EV_TESTS','_LOKI_RM_EV_TESTS_HASH'),
+        'coverage': ev('_LOKI_RM_EV_COV','_LOKI_RM_EV_COV_HASH'),
+        'completion': ev('_LOKI_RM_EV_COMPLETION'),
+    },
+}
+d=os.path.dirname(out)
+fd, tmp=tempfile.mkstemp(dir=d, suffix='.json')
+with os.fdopen(fd,'w') as f:
+    json.dump(manifest, f, indent=2)
+os.replace(tmp, out)
+" 2>/dev/null || true
+        unset -f _loki_sha256 2>/dev/null || true
+    } || true
+
     # ---- Short strings for the desktop notification --------------------------
     # Desktop body stays terse; full detail lives in COMPLETION.txt.
     _LOKI_SUMMARY_TITLE="$notify_title"
@@ -7061,6 +7168,150 @@ _loki_run_pytest_with_timeout() {
     (cd "$target_dir" && "${_to_cmd[@]}" pytest "$@" 2>&1)
 }
 
+# ============================================================================
+# P0-1 Fix A: real test-coverage MEASUREMENT (v7.47.0)
+#
+# enforce_test_coverage() runs the project's suite for PASS/FAIL only -- it must
+# NOT add --coverage to that run, because a missing coverage provider
+# (@vitest/coverage-v8, the `coverage` pkg, pytest-cov, cargo-llvm-cov) makes the
+# instrumented command exit nonzero for a TOOLING reason, which would flip
+# test_passed=false and BLOCK a project whose tests actually pass. That would
+# destroy the honest pass/fail pass-through. So measurement is a SEPARATE,
+# best-effort second pass that can NEVER change test_passed.
+#
+# Contract:
+#   - Sets COVERAGE_MEASURED (true|false), COVERAGE_PCT (number or empty),
+#     COVERAGE_TOOL (string), COVERAGE_REASON (why not measured).
+#   - Tool absent / unsupported language -> measured=false, no number, NEVER block.
+#   - Tests run a SECOND time here when instrumented; LOKI_COVERAGE_GATE=0 skips
+#     this whole measurement pass (saves the double-run).
+#
+# Usage: measure_test_coverage <target_dir> <test_runner>
+# ============================================================================
+measure_test_coverage() {
+    local target_dir="$1"
+    local runner="$2"
+    COVERAGE_MEASURED=false
+    COVERAGE_PCT=""
+    COVERAGE_TOOL="none"
+    COVERAGE_REASON=""
+
+    local gate_timeout="${LOKI_GATE_TIMEOUT:-300}"
+    local cov_dir="$target_dir/.loki/quality"
+    mkdir -p "$cov_dir" 2>/dev/null || true
+    # Native tool reports land on a tool-specific path so they never collide
+    # with our normalized coverage.json.
+    local pyc_json="$cov_dir/coverage-pytest.json"
+
+    case "$runner" in
+        vitest|monorepo-vitest)
+            COVERAGE_TOOL="vitest"
+            (cd "$target_dir" && timeout "$gate_timeout" npx vitest run --coverage \
+                  --coverage.reporter=json-summary \
+                  --coverage.reportsDirectory=.loki/quality/vitest-cov >/dev/null 2>&1) || true
+            local f="$target_dir/.loki/quality/vitest-cov/coverage-summary.json"
+            if [ -f "$f" ]; then
+                COVERAGE_PCT=$(_LOKI_COV_F="$f" python3 -c "
+import json, os, sys
+try:
+    d=json.load(open(os.environ['_LOKI_COV_F']))
+    print(d['total']['lines']['pct'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null) && COVERAGE_MEASURED=true || COVERAGE_REASON="vitest coverage-summary.json unparsable"
+            else
+                COVERAGE_REASON="vitest coverage provider absent (install @vitest/coverage-v8)"
+            fi
+            ;;
+        jest)
+            COVERAGE_TOOL="jest"
+            (cd "$target_dir" && timeout "$gate_timeout" npx jest --coverage \
+                  --coverageReporters=json-summary \
+                  --coverageDirectory=.loki/quality/jest-cov --passWithNoTests >/dev/null 2>&1) || true
+            local f="$target_dir/.loki/quality/jest-cov/coverage-summary.json"
+            if [ -f "$f" ]; then
+                COVERAGE_PCT=$(_LOKI_COV_F="$f" python3 -c "
+import json, os, sys
+try:
+    d=json.load(open(os.environ['_LOKI_COV_F']))
+    print(d['total']['lines']['pct'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null) && COVERAGE_MEASURED=true || COVERAGE_REASON="jest coverage-summary.json unparsable"
+            else
+                COVERAGE_REASON="jest coverage report absent"
+            fi
+            ;;
+        pytest)
+            COVERAGE_TOOL="pytest-cov"
+            # pytest-cov is optional; only measure when the plugin is importable.
+            if python3 -c "import pytest_cov" >/dev/null 2>&1; then
+                rm -f "$pyc_json" 2>/dev/null || true
+                _loki_run_pytest_with_timeout "$target_dir" \
+                    --cov --cov-report="json:$pyc_json" -q >/dev/null 2>&1 || true
+                if [ -f "$pyc_json" ]; then
+                    COVERAGE_PCT=$(_LOKI_COV_F="$pyc_json" python3 -c "
+import json, os, sys
+try:
+    d=json.load(open(os.environ['_LOKI_COV_F']))
+    print(d['totals']['percent_covered'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null) && COVERAGE_MEASURED=true || COVERAGE_REASON="pytest coverage.json unparsable"
+                else
+                    COVERAGE_REASON="pytest produced no coverage.json"
+                fi
+            else
+                COVERAGE_REASON="pytest-cov not installed"
+            fi
+            ;;
+        go-test)
+            COVERAGE_TOOL="go-cover"
+            local prof="$cov_dir/go-coverage.out"
+            rm -f "$prof" 2>/dev/null || true
+            (cd "$target_dir" && timeout "$gate_timeout" go test -coverprofile="$prof" ./... >/dev/null 2>&1) || true
+            if [ -f "$prof" ]; then
+                local total_line
+                total_line=$(cd "$target_dir" && go tool cover -func="$prof" 2>/dev/null | tail -1)
+                # "total:    (statements)    87.5%"
+                COVERAGE_PCT=$(printf '%s\n' "$total_line" | grep -oE '[0-9]+(\.[0-9]+)?%' | tail -1 | tr -d '%')
+                if [ -n "$COVERAGE_PCT" ]; then
+                    COVERAGE_MEASURED=true
+                else
+                    COVERAGE_REASON="go tool cover produced no total"
+                fi
+            else
+                COVERAGE_REASON="go test produced no coverage profile"
+            fi
+            ;;
+        cargo-test)
+            COVERAGE_TOOL="cargo-llvm-cov"
+            if cargo llvm-cov --version >/dev/null 2>&1; then
+                local out
+                out=$(cd "$target_dir" && timeout "$gate_timeout" cargo llvm-cov --json 2>/dev/null) || true
+                if [ -n "$out" ]; then
+                    COVERAGE_PCT=$(_LOKI_COV_JSON="$out" python3 -c "
+import json, os, sys
+try:
+    d=json.loads(os.environ['_LOKI_COV_JSON'])
+    print(d['data'][0]['totals']['lines']['percent'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null) && COVERAGE_MEASURED=true || COVERAGE_REASON="cargo llvm-cov json unparsable"
+                else
+                    COVERAGE_REASON="cargo llvm-cov produced no output"
+                fi
+            else
+                COVERAGE_REASON="cargo-llvm-cov not installed"
+            fi
+            ;;
+        *)
+            COVERAGE_REASON="coverage not supported for runner '$runner'"
+            ;;
+    esac
+    return 0
+}
+
 enforce_test_coverage() {
     local loki_dir="${TARGET_DIR:-.}/.loki"
     local quality_dir="$loki_dir/quality"
@@ -7291,10 +7542,109 @@ TREOF
     # Finding #598: stamp the per-iteration freshness marker (see above).
     printf '%s\n' "${ITERATION_COUNT:-0}" > "$quality_dir/.test-results.iter" 2>/dev/null || true
 
+    # ---- P0-1 Fix A: best-effort coverage MEASUREMENT (v7.47.0) --------------
+    # Runs AFTER test_passed is decided. NEVER mutates test_passed (a coverage
+    # tooling failure must not flip a green suite to red). Writes a normalized
+    # .loki/quality/coverage.json with honest measured/pct/reason. Blocks the
+    # gate (coverage_block=true) ONLY when measurable AND below threshold AND
+    # LOKI_ENFORCE_COVERAGE=1. A coverage block is distinct from a tests-red
+    # block: it does NOT set TESTS_FAILED and does NOT remove unit-tests.pass.
+    #
+    # Knob semantics (measurement is OPT-IN: it re-runs the suite instrumented,
+    # so for an autonomous loop iterating many times it is off unless requested):
+    #   default (unset)        -> skip measurement entirely (no double-run).
+    #   LOKI_COVERAGE_GATE=1    -> measure + record + warn, never block.
+    #   LOKI_ENFORCE_COVERAGE=1 -> implies measurement; measurable + below
+    #                              LOKI_MIN_COVERAGE -> BLOCK.
+    #   tool absent / unsupported -> record measured:false, never block.
+    local coverage_block=false
+    if [ "${LOKI_COVERAGE_GATE:-0}" != "0" ] || [ "${LOKI_ENFORCE_COVERAGE:-0}" = "1" ]; then
+        COVERAGE_MEASURED=false; COVERAGE_PCT=""; COVERAGE_TOOL="none"; COVERAGE_REASON=""
+        measure_test_coverage "${TARGET_DIR:-.}" "$test_runner" || true
+
+        local cov_enforced="${LOKI_ENFORCE_COVERAGE:-0}"
+        local cov_below=false
+        if [ "$COVERAGE_MEASURED" = "true" ] && [ -n "$COVERAGE_PCT" ]; then
+            # Float-safe compare via python3 (pct may be e.g. 87.5).
+            if _LOKI_COV_PCT="$COVERAGE_PCT" _LOKI_COV_MIN="$min_coverage" python3 -c "
+import os, sys
+try:
+    pct=float(os.environ['_LOKI_COV_PCT']); mn=float(os.environ['_LOKI_COV_MIN'])
+except Exception:
+    sys.exit(2)
+sys.exit(0 if pct < mn else 1)
+" 2>/dev/null; then
+                cov_below=true
+            fi
+        fi
+        if [ "$COVERAGE_MEASURED" = "true" ] && [ "$cov_below" = "true" ] && [ "$cov_enforced" = "1" ]; then
+            coverage_block=true
+        fi
+
+        # Normalized coverage.json (single source of truth for coverage facts).
+        _LOKI_COV_MEASURED="$COVERAGE_MEASURED" \
+        _LOKI_COV_PCT="$COVERAGE_PCT" \
+        _LOKI_COV_TOOL="$COVERAGE_TOOL" \
+        _LOKI_COV_REASON="$COVERAGE_REASON" \
+        _LOKI_COV_MIN="$min_coverage" \
+        _LOKI_COV_ENFORCED="$cov_enforced" \
+        _LOKI_COV_BLOCKED="$coverage_block" \
+        _LOKI_COV_RUNNER="$test_runner" \
+        _LOKI_COV_OUT="$quality_dir/coverage.json" \
+        python3 -c "
+import json, os, tempfile
+out=os.environ['_LOKI_COV_OUT']
+measured = os.environ.get('_LOKI_COV_MEASURED','false') == 'true'
+pct_raw = os.environ.get('_LOKI_COV_PCT','')
+try:
+    pct = float(pct_raw) if (measured and pct_raw != '') else None
+except ValueError:
+    pct = None
+def b(v): return os.environ.get(v,'false') == 'true'
+def i(v):
+    try: return int(float(os.environ.get(v,'0')))
+    except (TypeError, ValueError): return 0
+rec = {
+    'measured': measured,
+    'pct': pct,
+    'tool': os.environ.get('_LOKI_COV_TOOL','none'),
+    'runner': os.environ.get('_LOKI_COV_RUNNER','none'),
+    'threshold': i('_LOKI_COV_MIN'),
+    'enforced': os.environ.get('_LOKI_COV_ENFORCED','0') == '1',
+    'blocked': b('_LOKI_COV_BLOCKED'),
+    'reason': os.environ.get('_LOKI_COV_REASON','') if not measured else '',
+    'timestamp': __import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+}
+d=os.path.dirname(out)
+fd, tmp=tempfile.mkstemp(dir=d, suffix='.json')
+with os.fdopen(fd,'w') as f:
+    json.dump(rec, f, indent=2)
+os.replace(tmp, out)
+" 2>/dev/null || true
+
+        if [ "$COVERAGE_MEASURED" = "true" ]; then
+            if [ "$coverage_block" = "true" ]; then
+                log_warn "Coverage gate: ${COVERAGE_TOOL} measured ${COVERAGE_PCT}% < ${min_coverage}% (LOKI_ENFORCE_COVERAGE=1) -- BLOCK"
+            elif [ "$cov_below" = "true" ]; then
+                log_warn "Coverage: ${COVERAGE_TOOL} measured ${COVERAGE_PCT}% < ${min_coverage}% (warn only; set LOKI_ENFORCE_COVERAGE=1 to block)"
+            else
+                log_info "Coverage: ${COVERAGE_TOOL} measured ${COVERAGE_PCT}% (threshold ${min_coverage}%)"
+            fi
+        else
+            log_info "Coverage: not measured (${COVERAGE_REASON:-unknown}); pass-through, not blocking"
+        fi
+    fi
+
     if [ "$test_passed" = "true" ]; then
         touch "$quality_dir/unit-tests.pass"
         rm -f "$loki_dir/signals/TESTS_FAILED" 2>/dev/null || true
         log_info "Test suite gate: $test_runner passed"
+        # Coverage block is distinct from tests-red: tests passed, but enforced
+        # coverage is below threshold. Return nonzero to gate WITHOUT writing the
+        # TESTS_FAILED signal or removing unit-tests.pass.
+        if [ "$coverage_block" = "true" ]; then
+            return 1
+        fi
         return 0
     else
         rm -f "$quality_dir/unit-tests.pass"
@@ -11611,6 +11961,25 @@ build_prompt() {
             test_summary=$(python3 -c "import json; d=json.load(open('${TARGET_DIR:-.}/.loki/quality/test-results.json')); print(d.get('summary',''))" 2>/dev/null || echo "")
             [ -n "$test_summary" ] && gate_failure_context="${gate_failure_context}Tests: ${test_summary}. "
         fi
+        # P0-1 Fix A: when a coverage block fired (LOKI_ENFORCE_COVERAGE=1 +
+        # measurable + below threshold), give the agent the ACCURATE reason. The
+        # generic test_coverage token plus a passing test summary would otherwise
+        # read as a contradictory "fix the tests" when the tests actually passed
+        # and it is coverage that is low. Surface coverage.json so the next
+        # iteration writes MORE TESTS rather than chasing a phantom red suite.
+        if [ -f "${TARGET_DIR:-.}/.loki/quality/coverage.json" ]; then
+            local cov_summary
+            cov_summary=$(_LOKI_GFC="${TARGET_DIR:-.}/.loki/quality/coverage.json" python3 -c "
+import json, os
+try:
+    d=json.load(open(os.environ['_LOKI_GFC']))
+except Exception:
+    raise SystemExit
+if d.get('blocked'):
+    print('Coverage %s%% is below the %s%% threshold (tests PASS; add tests to raise line coverage, do not change passing assertions).' % (d.get('pct'), d.get('threshold')))
+" 2>/dev/null || echo "")
+            [ -n "$cov_summary" ] && gate_failure_context="${gate_failure_context}${cov_summary} "
+        fi
         gate_failure_context="${gate_failure_context}FIX THESE ISSUES BEFORE PROCEEDING WITH NEW WORK."
     fi
 
@@ -14282,7 +14651,15 @@ if __name__ == "__main__":
                     local tc_count
                     tc_count=$(track_gate_failure "test_coverage")
                     gate_failures="${gate_failures}test_coverage,"
-                    log_warn "Test suite gate FAILED ($tc_count consecutive) - must pass next iteration"
+                    # P0-1 Fix A: distinguish a coverage-only block (tests passed,
+                    # enforced coverage below threshold) from a genuine tests-red
+                    # block in the log so the operator is not misled.
+                    if [ -f "${TARGET_DIR:-.}/.loki/quality/coverage.json" ] && \
+                       python3 -c "import json,sys; sys.exit(0 if json.load(open('${TARGET_DIR:-.}/.loki/quality/coverage.json')).get('blocked') else 1)" 2>/dev/null; then
+                        log_warn "Test coverage gate BLOCKED ($tc_count consecutive) - tests pass but coverage below threshold (LOKI_ENFORCE_COVERAGE=1)"
+                    else
+                        log_warn "Test suite gate FAILED ($tc_count consecutive) - must pass next iteration"
+                    fi
                 fi
             fi
             # BUG-ST-002: Check pause signal between quality gates (after test coverage)

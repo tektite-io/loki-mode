@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.48.0] - 2026-06-16
+
+### Fix: shellcheck SC2120 on spec-interrogation.sh (v7.47.0 workflow red)
+
+- The v7.47.0 spec-interrogation module tripped SC2120 (optional-arg warning) on
+  the GH shellcheck runner (a stricter shellcheck version than the local one).
+  Added a targeted `# shellcheck disable=SC2120` with rationale (the `[path]`
+  argument is optional by design). Tests workflow is green again.
+
+### Enterprise: telemetry is now opt-in (P3-2)
+
+- Telemetry and diagnostics no longer egress by default. Nothing is collected or
+  sent unless explicitly enabled (`LOKI_TELEMETRY=on` or `loki telemetry on`).
+  A default install, including air-gapped / GDPR / FedRAMP environments, sends us
+  nothing. All prior opt-out flags still work and always win. Documented the exact
+  (PII-free) data inventory in docs/PRIVACY.md.
+
+### Verification depth: semantic test-authenticity detector (P1-3)
+
+- New `tests/detect-semantic-test-problems.sh` catches fake tests that the
+  existing mock/mutation detectors miss: assertions that echo a literal through a
+  variable, assertions on a mock's own return value, and net-deleted assertions
+  across commits. Conservative by design (never flags a genuine computed
+  assertion like `expect(add(2,2)).toBe(4)`). Available now; wiring it as a
+  blocking gate is a tracked follow-up.
+
+### Verification depth: real coverage measurement + run manifest (P0-1 Fix A, P3-5)
+
+- The test gate can now actually MEASURE coverage per language (vitest, jest,
+  pytest-cov, go, cargo-llvm-cov) and records it honestly in
+  `.loki/quality/coverage.json`. Measurement is opt-in (it re-runs the suite
+  instrumented, so it is off by default to keep autonomous iterations fast): set
+  `LOKI_COVERAGE_GATE=1` to measure-and-record (warn if below `LOKI_MIN_COVERAGE`,
+  default 80), or `LOKI_ENFORCE_COVERAGE=1` to also block a below-threshold-and-
+  measurable result. When no coverage tool is present the gate passes through and
+  records "not measured" (never fabricates a number).
+- Every run now emits `.loki/loki-run.json`, a bill-of-materials (spec path+hash,
+  model tier used, provider, loki + tool versions, evidence hashes, git SHAs,
+  outcome) so a run is auditable and reproducible. Best-effort, never aborts a run.
+
+Each stream built in an isolated worktree, council-reviewed, local-ci green.
+
 ## [7.47.0] - 2026-06-16
 
 ### Security: OIDC RBAC bypass fixed (P3-1)

@@ -2,7 +2,7 @@
 
 The flagship product of [Autonomi](https://www.autonomi.dev/). Loki Mode is a spec-driven autonomous builder with a built-in trust layer that takes any spec to a deployed product and verifies completion with evidence (quality gates plus a completion council), not just a "done" claim. Complete installation instructions for all platforms and use cases.
 
-**Version:** v7.47.0
+**Version:** v7.48.0
 
 ---
 
@@ -114,11 +114,18 @@ faster routed commands and forward-compat with v8.0.0.
 - Installs the `loki` CLI binary to your PATH (`bin/loki` shim)
 - Subsequent `loki setup-skill` creates symlinks at `~/.claude/skills/loki-mode`, `~/.codex/skills/loki-mode`
 
-**Opt out of anonymous install telemetry:**
+**Anonymous telemetry is OPT-IN and OFF by default.** A default `npm install`
+sends nothing, so air-gapped and enterprise installs are safe out of the box. To
+opt in to anonymous diagnostics, run `loki telemetry on` or set
+`LOKI_TELEMETRY=on`. To make opting in impossible across a fleet, bake an
+opt-out into your base image (opt-out always wins):
 ```bash
+# Hard-disable everywhere (belt and suspenders; opt-out always wins):
 LOKI_TELEMETRY_DISABLED=true npm install -g loki-mode
 # Or set DO_NOT_TRACK=1
 ```
+See [PRIVACY.md](./PRIVACY.md) for the exact data sent and the full opt-in /
+opt-out model.
 
 **Update:** `npm update -g loki-mode`
 
@@ -389,7 +396,7 @@ provider works inside the container. Provide auth with your Anthropic API key:
 # Run Loki Mode in Docker (Claude provider, API-key auth)
 docker run --rm -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   -v $(pwd):/workspace -w /workspace \
-  asklokesh/loki-mode:7.47.0 start ./my-spec.md
+  asklokesh/loki-mode:7.48.0 start ./my-spec.md
 ```
 
 ##### docker compose + .env (no host install)

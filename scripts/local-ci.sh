@@ -604,6 +604,8 @@ run_check "tests/test-p0-verification-sweep.sh (P0 sweep acceptance: gates wired
 run_check "tests/test-p0-gate-behavior.sh (P0 mock/mutation gates actually block)" "bash tests/test-p0-gate-behavior.sh 2>&1 | tail -3"
 run_check "tests/test-spec-interrogation.sh (P2 spec interrogation + assumption ledger gate)" "bash tests/test-spec-interrogation.sh 2>&1 | tail -3"
 run_check "tests/dashboard/test_oidc_rbac_mapping.py (OIDC RBAC: no-claim defaults to viewer, not admin)" "python3 tests/dashboard/test_oidc_rbac_mapping.py 2>&1 | tail -3"
+run_check "tests/test-semantic-test-detector.sh (P1-3 semantic test-authenticity detector)" "bash tests/test-semantic-test-detector.sh 2>&1 | tail -3"
+run_check "tests/test-coverage-measurement.sh (P0-1 FixA real coverage + P3-5 run manifest)" "bash tests/test-coverage-measurement.sh 2>&1 | tail -3"
 
 # v7.28.0: cost-capture root cause. Authoritative result-line cost capture
 # (result-cost-<iter>.json), efficiency writer precedence, budget breaker trip,
