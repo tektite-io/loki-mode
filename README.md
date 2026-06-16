@@ -499,3 +499,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 **[Autonomi](https://www.autonomi.dev/)** | **[Documentation](wiki/Home.md)** | **[Changelog](CHANGELOG.md)** | **[Comparisons](references/competitive-analysis.md)**
 
 </div>
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=asklokesh/loki-mode&type=timeline&logscale&legend=bottom-right)](https://www.star-history.com/?repos=asklokesh%2Floki-mode&type=timeline&logscale=&legend=bottom-right)
