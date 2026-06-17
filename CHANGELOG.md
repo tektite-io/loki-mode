@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.63.0] - 2026-06-17
+
+### PRD-reuse on rerun + Docker UX (features) plus wave-4 crash/data fixes
+
+Two coherent batches, each developed in parallel with non-vacuous regression tests
+and each cleared by an independent 3-of-3 reviewer council. Full local gate green:
+pytest 1181 passed, bun typecheck clean, bun 1064 pass (1 known non-hermetic flake
+that passes in isolation), all bash syntax OK.
+
+#### Features
+
+- **PRD-reuse: `loki start` continues from the last PRD on rerun.** First run with a
+  PRD/spec file persists it to `.loki/generated-prd.md` (source=user); first run with no
+  file generates one from codebase analysis (source=generated, unchanged). A later run
+  with NO file continues from the persisted PRD instead of re-analyzing. A later run WITH
+  a file makes that the new PRD (brownfield: the app exists, a new spec applies). This is
+  an intelligent default auto-decided from the file argument plus persisted state, not a
+  new flag. Identical semantics on both the bash route (`autonomy/run.sh`) and the Bun
+  route (`loki-ts/src/runner/prd_reuse.ts`). A user-provided PRD is always reused as-is
+  and never triggers the generated-PRD update path; `--fresh-prd` / `LOKI_PRD_REGEN`
+  re-runs analysis.
+- **`loki docker start` opens the dashboard on a host port.** It now starts (or reuses)
+  the host dashboard and auto-opens the browser, gated like local `loki start`
+  (TTY, not background, `LOKI_NO_AUTO_OPEN` honored). The dashboard shows both local and
+  docker runs (the host dashboard already aggregates both; the container stays
+  dashboard-off to avoid a port collision).
+- **`loki docker start` prunes old images after pulling latest.** After pulling
+  `asklokesh/loki-mode:latest`, it removes only dangling/old `asklokesh/loki-mode` images
+  that are not in use by a running container (never the just-pulled latest, never an
+  in-use image, never a non-loki-mode image, never a blanket `docker image prune -a`).
+  Default-on; opt out with `LOKI_DOCKER_PRUNE=0`. Honest output of what was reclaimed.
+- **`loki stop` reaps the docker container.** Fixes the case where `loki docker start`
+  ran a container but `loki stop` reported "No active session running" while the
+  container kept running. The docker run is tracked in `.loki/docker/run.json`;
+  `loki stop` (folder-scoped) stops and removes this project's loki-mode container,
+  with a deterministic-name fallback if the state file is missing. `loki stop --all`
+  reaps every loki-mode container on the machine.
+
+#### Wave-4 crash and data-integrity fixes (read-only hunt on previously un-hunted live surfaces)
+
+- **sandbox.sh:** two `((x++))` post-increments aborted `loki sandbox stop` and
+  `loki sandbox cleanup` under `set -e` on the first iteration (leaving containers and
+  worktrees behind); replaced with `x=$((x+1))`. The desktop env-file and readonly state
+  copy that wrote secrets/state to predictable, never-deleted temp paths now use
+  `mktemp` + restricted perms + lifecycle cleanup.
+- **spec-interrogation.sh:** the unanchored `pg` driver token substring-matched words like
+  "upgrade" in package.json, falsely blocking a clean spec until max iterations; driver
+  detection now matches dependency names with boundaries. Reworded "no issues" negatives
+  are skipped and non-`N.`/`- ` finding formats are parsed (with an unparsed-line count).
+- **prd-checklist.sh:** a non-numeric or empty `LOKI_CHECKLIST_INTERVAL` crashed the
+  sourced RARV loop (`set -u` unbound-variable in arithmetic); the guard now normalizes
+  any invalid value to the default.
+- **Bun council (`council.ts` / `voter_agents.ts`):** the reviewer subcall had no timeout,
+  so a hung reviewer wedged the loop forever despite a "we never hang" comment; added a
+  killable timeout (`LOKI_COUNCIL_TIMEOUT_MS`, default 10 min) with documented
+  fall-through, and stderr is no longer left undrained. A corrupt `failed.json` is now
+  treated as CANNOT_VALIDATE, not APPROVE.
+- **Bun prompt builder (`build_prompt.ts`):** a non-string queue task id threw and
+  discarded the entire prompt for an iteration (now coerced); the runner adapter passed
+  PRD content where a path was contracted (now passes the path); the gate-failures read
+  is capped at the first 8000 bytes on both routes (parity with bash `head -c 8000`).
+- **migration_engine.py:** per-instance locks gave no cross-request safety (lost manifest
+  updates under concurrent advance/start-phase); now an `fcntl` file lock per migration
+  serializes the read-modify-write. Advancing an already-advanced phase returns 409 not
+  500. Migration ids get a random suffix to avoid same-second collisions.
+
 ## [7.62.0] - 2026-06-17
 
 ### Parallel-worktree cleanup batch (9 isolated fixes, file-disjoint)

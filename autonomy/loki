@@ -2304,6 +2304,48 @@ cmd_stop() {
         return 0
     fi
 
+    # FIX-DOCKER-STOP (reap side): a `loki docker start` in this folder runs the
+    # build inside a container named loki-<sha12 of workspace>; the host .loki has
+    # no live pid for it, so the legacy "No active session" path would fire while
+    # the container is Up. Reconcile + reap it here, before the session check.
+    # Folder-scoped: the container name derives from THIS folder's run.json (or a
+    # recompute over $(pwd)), so a run in another folder is never touched (AC18).
+    local _docker_reaped=0
+    if command -v docker >/dev/null 2>&1; then
+        local _docker_runstate="$LOKI_DIR/docker/run.json"
+        local _docker_container=""
+        if [ -f "$_docker_runstate" ] && command -v python3 >/dev/null 2>&1; then
+            _docker_container=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('container',''))" "$_docker_runstate" 2>/dev/null || true)
+        fi
+        # Fallback: recompute the deterministic name via Agent B's helper. cmd_stop
+        # does NOT source docker-run.sh itself (only cmd_docker does), so source it
+        # here, gated on the module existing, to make the helper available.
+        if [ -z "$_docker_container" ]; then
+            local _docker_mod="$_LOKI_SCRIPT_DIR/docker-run.sh"
+            if [ -f "$_docker_mod" ]; then
+                # shellcheck source=/dev/null
+                source "$_docker_mod" 2>/dev/null || true
+                if declare -F loki_docker_container_name >/dev/null 2>&1; then
+                    _docker_container="$(loki_docker_container_name 2>/dev/null || true)"
+                fi
+            fi
+        fi
+        if [ -n "$_docker_container" ]; then
+            # Only reap if a container with exactly this name is actually running.
+            local _running_id
+            _running_id=$(docker ps -q -f "name=^${_docker_container}$" 2>/dev/null || true)
+            if [ -n "$_running_id" ]; then
+                docker stop "$_docker_container" >/dev/null 2>&1 || true
+                # --rm may auto-remove on stop; rm is best-effort (already-gone is fine).
+                docker rm "$_docker_container" >/dev/null 2>&1 || true
+                _docker_reaped=1
+                echo -e "${RED}Stopped docker run: ${_docker_container}${NC}"
+            fi
+        fi
+        # Clear our run-state record regardless (the container is gone or absent).
+        rm -f "$_docker_runstate" 2>/dev/null || true
+    fi
+
     # No session ID given -- stop all running sessions
     if is_session_running; then
         # Stop per-session PIDs first
@@ -2535,7 +2577,7 @@ PYDASH
         else
             echo -e "${RED}STOP signal sent. Execution will halt immediately.${NC}"
         fi
-    else
+    elif [ "$_docker_reaped" != "1" ]; then
         echo -e "${YELLOW}No active session running.${NC}"
         if [ -f "$LOKI_DIR/STOP" ]; then
             echo "STOP signal already present."
@@ -2560,6 +2602,20 @@ PYDASH
         sleep 0.5
         pkill -9 -f "$_stop_all_pat" 2>/dev/null || true
         echo -e "${RED}--all: signalled all loki-run-* processes on this machine.${NC}"
+
+        # FIX-DOCKER-STOP --all: also reap EVERY loki-mode container on this
+        # machine (parity with the machine-wide PID kill above). Best-effort.
+        if command -v docker >/dev/null 2>&1; then
+            local _all_ids
+            _all_ids=$(docker ps -q --filter ancestor=asklokesh/loki-mode 2>/dev/null || true)
+            if [ -n "$_all_ids" ]; then
+                # shellcheck disable=SC2086
+                docker stop $_all_ids >/dev/null 2>&1 || true
+                # shellcheck disable=SC2086
+                docker rm $_all_ids >/dev/null 2>&1 || true
+                echo -e "${RED}--all: stopped all loki-mode docker containers on this machine.${NC}"
+            fi
+        fi
     fi
 }
 
@@ -8084,9 +8140,11 @@ cmd_doctor() {
             local _install
             _install=$(doctor_provider_install_cmd "$_cmd")
             # Route the per-provider install hint to STDERR (fd 2), mirroring the
-            # doctor_probe_note stderr-only pattern above. This keeps the
-            # parity-captured STDOUT byte-identical to the Bun route (which emits
-            # no per-provider Install line) while the user still sees the hint.
+            # doctor_probe_note stderr-only pattern above. The Bun route emits the
+            # same hint on STDOUT immediately after the provider WARN line; under
+            # the parity harness's 2>&1 capture both land adjacent to the WARN, so
+            # the two routes stay byte-identical when an optional provider is absent
+            # (v7.63.0: closed the cline-absent parity gap by adding the Bun hint).
             [ -n "$_install" ] && echo -e "         ${YELLOW}Install: ${_install}${NC}" >&2
         fi
     }
@@ -28857,6 +28915,68 @@ cmd_docker() {
         return 0
     fi
 
+    # Detect the forwarded loki subcommand (first non-dash token in fwd). This
+    # handles `--api start ...` where the wrapper-kept --api precedes `start`.
+    local _fwd_sub=""
+    local _ft
+    for _ft in "${fwd[@]}"; do
+        case "$_ft" in
+            -*) continue ;;
+            *) _fwd_sub="$_ft"; break ;;
+        esac
+    done
+
+    # Is this docker run launched in background mode? Mirrors the loki `start`
+    # background flags (--bg/--background/--detach/-d) that get forwarded into
+    # the container. Used to gate dashboard auto-open exactly like run.sh:~10088.
+    local _docker_bg=0
+    for _ft in "${fwd[@]}"; do
+        case "$_ft" in
+            --bg|--background|--detach|-d) _docker_bg=1; break ;;
+        esac
+    done
+
+    # FEAT-DOCKER-DASH / FEAT-DOCKER-PRUNE / FIX-DOCKER-STOP (start path only):
+    # the container itself stays dashboard-OFF (no published container port).
+    # Instead we drive the HOST dashboard (which already aggregates local +
+    # docker runs) so `loki docker start` feels exactly like local `loki start`.
+    if [ "$_fwd_sub" = "start" ]; then
+        # F3 FEAT-DOCKER-PRUNE: pull latest + prune old loki-mode images before
+        # the run. Gated by LOKI_DOCKER_PRUNE (default 1); =0 opts out (and the
+        # helper also skips the explicit pull). Best-effort, never blocks a run.
+        if [ "${LOKI_DOCKER_PRUNE:-1}" != "0" ] && declare -F loki_docker_pull_and_prune >/dev/null 2>&1; then
+            loki_docker_pull_and_prune || true
+        fi
+
+        # F2 FEAT-DOCKER-DASH: start/reuse the host dashboard (idempotent: an
+        # already-running dashboard short-circuits in cmd_dashboard_start before
+        # the port-in-use check, so the picked port is ignored on reuse). Run in
+        # a subshell so its internal `exit` paths (already-running -> exit 0,
+        # errors -> exit 1) never abort the blocking docker run.
+        local _dash_port="57374"
+        if declare -F loki_docker_pick_host_port >/dev/null 2>&1; then
+            _dash_port="$(loki_docker_pick_host_port 2>/dev/null || echo 57374)"
+        fi
+        ( cmd_dashboard_start --port "$_dash_port" ) || true
+
+        # Auto-open the dashboard in the browser, gated EXACTLY like
+        # run.sh:~10088: a TTY on stdout, not background, and not opted out via
+        # LOKI_NO_AUTO_OPEN=1. cmd_dashboard_open reads the persisted port file,
+        # so the URL is correct even when an existing dashboard was reused.
+        if [ -t 1 ] && [ "$_docker_bg" != "1" ] && [ "${LOKI_NO_AUTO_OPEN:-0}" != "1" ]; then
+            ( cmd_dashboard_open ) || true
+        fi
+
+        # F4 FIX-DOCKER-STOP (write side): record this run's container/state so
+        # `loki stop` in this folder can reap the container. Cleared after the
+        # blocking run returns (mirrors the register_host running/stopped bracket).
+        # The helper requires the container name + image; compute the deterministic
+        # name once (byte-identical to the build-time --name) and pass the resolved image.
+        if declare -F loki_docker_write_runstate >/dev/null 2>&1 && declare -F loki_docker_container_name >/dev/null 2>&1; then
+            loki_docker_write_runstate "$(loki_docker_container_name)" "${LOKI_DOCKER_IMAGE:-asklokesh/loki-mode:latest}" || true
+        fi
+    fi
+
     # Multi-repo unified dashboard (Option B): register THIS project on the host
     # with the real cwd and NO pid, so the existing host dashboard
     # (`loki dashboard`) lists it alongside host `loki start` projects and reads
@@ -28866,6 +28986,11 @@ cmd_docker() {
     "${docker_argv[@]}"
     local rc=$?
     _loki_docker_register_host stopped
+    # F4 FIX-DOCKER-STOP (clear side): runs unconditionally after the blocking
+    # call (not gated on rc), same as register_host stopped.
+    if [ "$_fwd_sub" = "start" ]; then
+        declare -F loki_docker_clear_runstate >/dev/null 2>&1 && loki_docker_clear_runstate || true
+    fi
     [ "$cleanup_creds" = "1" ] && rm -f "$creds" 2>/dev/null || true
     return $rc
 }

@@ -4901,6 +4901,24 @@ decide_generated_prd_action() {
     if [ ! -f "$sig_file" ]; then
         echo "update"; return 0
     fi
+    # source:"user" short-circuit (LOCK 2): an explicit user-provided PRD was
+    # persisted into the canonical slot. Always use it as-is, never enter the
+    # signature-diff update path -- even if the file hash drifted (hand-edit) or
+    # the codebase changed since. --fresh-prd/LOKI_PRD_REGEN (checked above)
+    # still wins and forces a regenerate. A missing/empty source falls through
+    # to the generated-PRD logic below (defensive: correctness never depends on
+    # a backfilled field).
+    local prd_source
+    prd_source=$(LOKI_SIG_FILE="$sig_file" python3 -c "
+import json, os
+try:
+    print(json.load(open(os.environ['LOKI_SIG_FILE'])).get('source',''))
+except Exception:
+    print('')
+" 2>/dev/null)
+    if [ "$prd_source" = "user" ]; then
+        echo "user_owned"; return 0
+    fi
     local stored stored_prd_sha current cur_prd_sha
     stored=$(LOKI_SIG_FILE="$sig_file" python3 -c "
 import json, os
@@ -5050,9 +5068,74 @@ rec = {
   'prd_sha': os.environ.get('LOKI_PRD_SHA',''),
   'mode': os.environ['LOKI_SIG_MODE'],
   'loki_version': os.environ['LOKI_SIG_VER'],
+  'source': 'generated',
   }
 print(json.dumps(rec))
 " > "$tmp" 2>/dev/null && mv -f "$tmp" "$loki_dir/state/prd-signature.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
+# Persist an explicit user-provided PRD into the canonical generated-PRD slot so
+# later no-file runs continue from it (brownfield reuse), and stamp source:"user"
+# so it is always treated as user-owned (reuse/use-as-is), never incrementally
+# updated. Echoes the canonical relative path (".loki/generated-prd.md") on a
+# successful persist so the caller can repoint prd_path; echoes nothing (empty)
+# and changes no state on any failure (the caller then keeps the original path).
+#
+# $1 = the original user PRD file path (the arg passed to run_autonomous).
+# Reads/writes under "${TARGET_DIR:-.}/.loki" to stay aligned with
+# decide_generated_prd_action and _loki_prd_file_hash (which anchor there too).
+persist_user_prd() {
+    local src="$1"
+    [ -n "$src" ] || { echo ""; return 0; }
+    [ -f "$src" ] || { echo ""; return 0; }
+    # Skip when the source already IS the canonical generated PRD (a no-op copy,
+    # and the no-file reuse path owns that case). Mirrors the persist guard.
+    case "$src" in
+        *.loki/generated-prd.md|*.loki/generated-prd.json) echo ""; return 0 ;;
+    esac
+
+    local loki_dir="${TARGET_DIR:-.}/.loki"
+    mkdir -p "$loki_dir" "$loki_dir/state" 2>/dev/null || { echo ""; return 0; }
+
+    # Atomic copy: write to a temp file in the destination dir, then mv into
+    # place so a concurrent reader never sees a half-written PRD.
+    local dest="$loki_dir/generated-prd.md"
+    local tmp_prd="$loki_dir/.generated-prd.md.tmp.$$"
+    cp -f "$src" "$tmp_prd" 2>/dev/null || { rm -f "$tmp_prd" 2>/dev/null; echo ""; return 0; }
+    mv -f "$tmp_prd" "$dest" 2>/dev/null || { rm -f "$tmp_prd" 2>/dev/null; echo ""; return 0; }
+
+    # Content hash of the PRD we just wrote (over the copied file) + the current
+    # codebase signature, recorded directly (NOT via persist_prd_signature_if_present,
+    # whose guards skip non-canonical/user paths and whose user_owned early-return
+    # would skip it anyway). source:"user" makes decide_generated_prd_action short
+    # circuit to user_owned on every later no-file run (LOCK 2).
+    local prd_sha sig mode
+    prd_sha=$(_loki_prd_file_hash "${TARGET_DIR:-.}")
+    sig=$(compute_codebase_signature "${TARGET_DIR:-.}")
+    mode="files"; case "$sig" in git:*) mode="git" ;; esac
+
+    local sig_tmp="$loki_dir/state/.prd-signature.json.tmp.$$"
+    LOKI_SIG="$sig" LOKI_SIG_MODE="$mode" \
+    LOKI_SIG_VER="$(get_version 2>/dev/null || echo unknown)" \
+    LOKI_PRD_SHA="$prd_sha" LOKI_ORIGIN_PATH="$src" \
+    python3 -c "
+import json, os, datetime
+rec = {
+  'signature': os.environ.get('LOKI_SIG',''),
+  'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),
+  'prd_path': '.loki/generated-prd.md',
+  'prd_sha': os.environ.get('LOKI_PRD_SHA',''),
+  'mode': os.environ.get('LOKI_SIG_MODE','files'),
+  'loki_version': os.environ.get('LOKI_SIG_VER','unknown'),
+  'source': 'user',
+  'origin_path': os.environ.get('LOKI_ORIGIN_PATH',''),
+  }
+print(json.dumps(rec))
+" > "$sig_tmp" 2>/dev/null \
+        && mv -f "$sig_tmp" "$loki_dir/state/prd-signature.json" 2>/dev/null \
+        || rm -f "$sig_tmp" 2>/dev/null
+
+    echo ".loki/generated-prd.md"
 }
 
 # generate_proof_of_run: thin fire-and-forget wrapper around the standalone
@@ -12409,7 +12492,10 @@ build_prompt() {
     local gate_failure_context=""
     if [ -f "${TARGET_DIR:-.}/.loki/quality/gate-failures.txt" ]; then
         local failures
-        failures=$(cat "${TARGET_DIR:-.}/.loki/quality/gate-failures.txt")
+        # Cap at the FIRST 8000 bytes to bound prompt context growth from a large
+        # prior-iteration gate-failures dump. Parity with the Bun route's
+        # readBytesSafe(gfPath, 8000), which does buf.subarray(0, 8000) (head, not tail).
+        failures=$(head -c 8000 "${TARGET_DIR:-.}/.loki/quality/gate-failures.txt")
         gate_failure_context="QUALITY GATE FAILURES FROM PREVIOUS ITERATION: [$failures]. "
         if [ -f "${TARGET_DIR:-.}/.loki/quality/static-analysis.json" ]; then
             local sa_summary
@@ -13831,6 +13917,31 @@ run_autonomous() {
     if [ "${LOKI_SENTRUX_GATE:-0}" = "1" ]; then
         # shellcheck disable=SC1090,SC1091
         source "${SCRIPT_DIR}/lib/sentrux-gate.sh" 2>/dev/null || true
+    fi
+
+    # Explicit user PRD persistence (brownfield reuse, LOCK 1/LOCK 2): when the
+    # user passed a real file that is NOT already the canonical generated PRD,
+    # copy its content into .loki/generated-prd.md and stamp source:"user" so a
+    # later no-file run continues from it without re-running codebase analysis,
+    # and never rewrites it. Runs BEFORE the auto-detect block below (which only
+    # handles the empty prd_path case). On any failure persist_user_prd echoes
+    # "" and changes no state, so the original prd_path is preserved.
+    if [ -n "$prd_path" ]; then
+        case "$prd_path" in
+            *.loki/generated-prd.md|*.loki/generated-prd.json) ;;
+            *)
+                if [ -f "$prd_path" ]; then
+                    local _persisted_prd
+                    _persisted_prd=$(persist_user_prd "$prd_path")
+                    if [ -n "$_persisted_prd" ]; then
+                        log_info "Persisted your PRD ($prd_path) to $_persisted_prd; later runs without a file will reuse it as-is"
+                        prd_path="$_persisted_prd"
+                        GENERATED_PRD_ACTION="user_owned"
+                        export GENERATED_PRD_ACTION
+                    fi
+                fi
+                ;;
+        esac
     fi
 
     # Auto-detect PRD if not provided

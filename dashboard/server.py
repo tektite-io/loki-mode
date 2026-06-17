@@ -8776,6 +8776,12 @@ def advance_migration(migration_id: str, request_body: dict):
     try:
         result = pipeline.advance_phase(from_phase)
         return asdict(result) if hasattr(result, '__dataclass_fields__') else result
+    except (ValueError, RuntimeError) as exc:
+        # advance_phase raises RuntimeError on a failed phase gate or when the
+        # phase is not in_progress (e.g. already advanced). These are client
+        # contract errors, not server faults: map to 409 like the sibling
+        # start_migration_phase endpoint does.
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         logger.error("Migration advance error: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to advance migration")
