@@ -3785,7 +3785,7 @@ cmd_provider_info() {
             echo "Name:        Codex CLI"
             echo "Vendor:      OpenAI"
             echo "CLI:         codex"
-            echo "Flag:        --full-auto"
+            echo "Flag:        --sandbox workspace-write"
             echo ""
             echo "Features:"
             echo "  - Autonomous mode"
@@ -11641,7 +11641,7 @@ except Exception: pass
                         done; } && phase_exit=0 || phase_exit=$?
                     ;;
                 codex)
-                    (cd "$codebase_path" && codex exec --full-auto "$phase_prompt" 2>&1) || phase_exit=$?
+                    (cd "$codebase_path" && codex exec --sandbox workspace-write "$phase_prompt" 2>&1) || phase_exit=$?
                     ;;
                 cline)
                     (cd "$codebase_path" && cline -y "$phase_prompt" 2>&1) || phase_exit=$?
@@ -11814,7 +11814,7 @@ except Exception: pass
                     done; } && doc_exit=0 || doc_exit=$?
                 ;;
             codex)
-                (cd "$codebase_path" && codex exec --full-auto "$doc_prompt" 2>&1) || doc_exit=$?
+                (cd "$codebase_path" && codex exec --sandbox workspace-write "$doc_prompt" 2>&1) || doc_exit=$?
                 ;;
             cline)
                 (cd "$codebase_path" && cline -y "$doc_prompt" 2>&1) || doc_exit=$?
@@ -12445,7 +12445,7 @@ except Exception: pass
                 done && heal_exit=0 || heal_exit=$?
             ;;
         codex)
-            (cd "$codebase_path" && codex exec --full-auto "$heal_prompt" 2>&1) || heal_exit=$?
+            (cd "$codebase_path" && codex exec --sandbox workspace-write "$heal_prompt" 2>&1) || heal_exit=$?
             ;;
         cline)
             (cd "$codebase_path" && cline -y "$heal_prompt" 2>&1) || heal_exit=$?
@@ -22069,7 +22069,7 @@ USER TASK: ${prompt}"
                     claude -p "$full_prompt" 2>&1 || agent_exit=$?
                     ;;
                 codex)
-                    codex exec --full-auto "$full_prompt" 2>&1 || agent_exit=$?
+                    codex exec --sandbox workspace-write "$full_prompt" 2>&1 || agent_exit=$?
                     ;;
                 cline)
                     cline -y "$full_prompt" 2>&1 || agent_exit=$?
@@ -22200,7 +22200,7 @@ $diff"
 
             case "$provider" in
                 claude)  claude -p "$review_prompt" 2>&1 ;;
-                codex)   codex exec --full-auto "$review_prompt" 2>&1 ;;
+                codex)   codex exec --sandbox workspace-write "$review_prompt" 2>&1 ;;
                 cline)   cline -y "$review_prompt" 2>&1 ;;
                 *)       echo -e "${RED}Unknown provider: $provider${NC}"; return 1 ;;
             esac
@@ -23870,7 +23870,7 @@ _docs_invoke_provider() {
             result=$($t_prefix env CAVEMAN_DEFAULT_MODE=off claude -p "$prompt" 2>/dev/null) || exit_code=$?
             ;;
         codex)
-            result=$($t_prefix codex exec --full-auto "$prompt" 2>/dev/null) || exit_code=$?
+            result=$($t_prefix codex exec --sandbox workspace-write "$prompt" 2>/dev/null) || exit_code=$?
             ;;
         cline)
             result=$($t_prefix cline -y "$prompt" 2>/dev/null) || exit_code=$?

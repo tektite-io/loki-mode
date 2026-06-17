@@ -2038,7 +2038,7 @@ ISSUES: CRITICAL:description (optional, one per line per issue)"
             ;;
         codex)
             if command -v codex &>/dev/null; then
-                verdict=$(codex exec --full-auto "$prompt" 2>/dev/null)
+                verdict=$(codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
             fi
             ;;
         gemini)
@@ -2139,7 +2139,7 @@ REASON: your reasoning"
             ;;
         codex)
             if command -v codex &>/dev/null; then
-                verdict=$(codex exec --full-auto "$prompt" 2>/dev/null)
+                verdict=$(codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
             fi
             ;;
         gemini)

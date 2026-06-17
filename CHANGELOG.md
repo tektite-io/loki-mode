@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.52.0] - 2026-06-16
+
+### Codex CLI compatibility: --full-auto deprecation swept repo-wide + budget quoting hardening
+
+- **Codex `--full-auto` -> `--sandbox workspace-write` (repo-wide)**: Codex CLI
+  v0.125+ deprecated `--full-auto` (removed from `codex exec --help`, emits a
+  deprecation warning; will hard-error in a future release). Every live
+  `codex exec --full-auto` invocation across the codebase is now
+  `codex exec --sandbox workspace-write` (the documented replacement;
+  `codex exec` is non-interactive by default so the loop stays autonomous).
+  `--skip-git-repo-check` is preserved where it already applied. Swept across
+  both routes and all helpers: `autonomy/run.sh`, `autonomy/loki`,
+  `providers/codex.sh`, `loki-ts/src/runner/providers.ts`,
+  `autonomy/completion-council.sh`, `autonomy/grill.sh`, `magic/core/debate.py`,
+  `magic/core/generator.py`, `autonomy/lib/wiki_llm.py`, plus all user-facing
+  docs. The tier path and Bun route (which previously used the broader
+  `danger-full-access`) now converge on `workspace-write`, matching what
+  `--full-auto` always expanded to. Verified empirically against codex 0.132.0
+  (new flag: no deprecation warning, runs at approval: never; old flag: warns).
+- **Budget-file quoting footgun fixed** (`autonomy/lib/claude-flags.sh`): the
+  remaining-budget computation interpolated a file path into a `python3 -c`
+  program, so a path containing a quote raised a SyntaxError. The path and
+  numeric values now pass via `os.environ` (single-quoted program), matching the
+  established `run.sh` convention. Behavior-preserving; closes the injection
+  footgun.
+
+Gates: local-ci 78/78, full pytest + bun test + bash/Bun parity green,
+3-reviewer council unanimous APPROVE (2 Opus adversarial + 1 Sonnet) after a
+first round that correctly rejected on a test-assertion regression (now fixed).
+
 ## [7.51.0] - 2026-06-16
 
 ### Tech-debt closure: four inert/half-wired features made real (both routes)

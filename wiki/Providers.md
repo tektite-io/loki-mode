@@ -117,12 +117,13 @@ codex login
 ### Invocation
 
 ```bash
-# What Loki's harness runs (works on v0.98+ through v0.132+; the
-# --skip-git-repo-check is required on fresh non-git directories)
-codex exec --full-auto --skip-git-repo-check
+# What Loki's harness runs (codex 0.125+; the --skip-git-repo-check is
+# required on fresh non-git directories). exec is non-interactive by default
+# (approval: never), so --sandbox workspace-write alone keeps it autonomous.
+codex exec --sandbox workspace-write --skip-git-repo-check
 
-# Note: --full-auto is deprecated in codex v0.125+; the explicit equivalent is
-codex exec --ask-for-approval never --sandbox workspace-write --skip-git-repo-check
+# Note: --full-auto was deprecated in codex v0.125+ and is gone from the help
+# text; --sandbox workspace-write is the documented replacement.
 
 # Legacy
 codex exec --dangerously-bypass-approvals-and-sandbox
