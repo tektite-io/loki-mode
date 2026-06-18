@@ -161,10 +161,22 @@ function writeCounts(base: string, counts: Record<string, number>): void {
 // Mirror of bash track_gate_failure() (autonomy/run.sh:5639).
 //
 // v7.5.5 (#201): cross-process advisory lock around the read-modify-write so
-// parallel worktree invocations and the bash route's `loki internal
-// phase1-hooks` writer cannot lose increments. Lock target is the JSON file
-// itself; lock sentinel lives at <file>.lock and is reaped if a holder
-// crashed (see withFileLockSync staleMs default).
+// parallel in-process / parallel-worktree invocations of THIS function cannot
+// lose increments. Lock target is the JSON file itself; lock sentinel lives at
+// <file>.lock and is reaped if a holder crashed (see withFileLockSync staleMs
+// default).
+//
+// bun-F3 correction: an earlier version of this comment claimed the bash
+// route's `loki internal phase1-hooks` writer shares this exact function for
+// cross-process lock safety. That is NOT accurate. internal_phase1.ts does not
+// import quality_gates.ts, and trackGateFailure has exactly one caller in this
+// codebase (applyEscalation, later in this file). This whole
+// failure-count-persistence layer is DORMANT today: runQualityGates (its only
+// transitive entry point) has no production callers -- `loki start` routes to
+// the bash route (autonomy/run.sh). The lock is correct and forward-looking
+// (it WILL matter once the Bun runner is wired to `loki start`), but it does
+// not currently coordinate with any bash writer. The code is retained
+// deliberately; only the cross-writer parity claim was wrong.
 export function trackGateFailure(name: string, lokiDirOverride?: string): number {
   const base = resolveBase(lokiDirOverride);
   return withFileLockSync(gateFilePath(base), () => {
@@ -1305,12 +1317,21 @@ export function parseVerdict(reviewer: string, output: string): ReviewerVerdict 
   if (trimmed.length === 0) {
     return { reviewer, verdict: "NO_OUTPUT", blocking: false, output };
   }
+  // bun-F2: tolerate leading whitespace / markdown indentation before the
+  // VERDICT token. The bash route trims with [[:space:]] before its
+  // `grep -i "^VERDICT:"` check, and classifyJudgeResponse (override council)
+  // already uses /^\s*VERDICT:/i. parseVerdict must match so a reviewer line
+  // like "  VERDICT: PASS" is not silently dropped to UNKNOWN (which would
+  // feed the bun-F1 inconclusive dead zone). BOTH the find-predicate AND the
+  // strip below must use the same \s* prefix: with leading spaces, a bare
+  // /^VERDICT:/i replace fails to match the anchor and leaves "VERDICT: PASS"
+  // in `raw`, which then fails the PASS/FAIL equality check.
   const verdictLine = output
     .split(/\r?\n/)
-    .find((line) => /^VERDICT:/i.test(line));
+    .find((line) => /^\s*VERDICT:/i.test(line));
   let verdict: ReviewerVerdict["verdict"] = "UNKNOWN";
   if (verdictLine !== undefined) {
-    const raw = verdictLine.replace(/^VERDICT:/i, "").trim().toUpperCase();
+    const raw = verdictLine.replace(/^\s*VERDICT:/i, "").trim().toUpperCase();
     if (raw === "PASS" || raw === "FAIL") verdict = raw;
   }
   const hasBlockingSeverity = /\[(Critical|High)\]/i.test(output);
@@ -1569,6 +1590,46 @@ export async function runCodeReview(
       detail: `code_review: ${passCount}/${selection.reviewers.length} pass, ${failCount} fail, blocking severity present (${reviewId})`,
     };
   }
+
+  // bun-F1 (Finding #596 / bash FIX A2 parity): an inconclusive review -- every
+  // available reviewer returned non-empty but UNPARSEABLE output (no
+  // PASS/FAIL VERDICT line) -- must BLOCK by default. Without this guard the
+  // gate falls through to the unconditional `passed: true` below with ZERO
+  // approvals (fail-OPEN): passCount + failCount === 0, hasBlocking === false.
+  // A review that produced no usable verdict cannot stand in for a real review.
+  //
+  // Placement mirrors bash ordering (autonomy/run.sh:9484-9502): the
+  // has_blocking decision runs first, then the inconclusive block, then the
+  // pass. That ordering is moot here by construction: `blocking` is only true
+  // when some verdict === "FAIL" (parseVerdict sets blocking = verdict ===
+  // "FAIL" && hasBlockingSeverity), which would have incremented failCount, so
+  // when passCount + failCount === 0 the hasBlocking branch above is already
+  // skipped. The unanimous-PASS / Devil's-Advocate block at the
+  // `passCount === selection.reviewers.length` check is likewise skipped here
+  // because 0 !== N (N > 0).
+  //
+  // The `!reviewerAvailable` UNAVAILABLE short-circuit earlier is a SEPARATE,
+  // honest case (no reviewer CLI on PATH) and is intentionally left intact:
+  // this guard only fires when reviewers WERE available but produced no usable
+  // verdict. Env name + default match bash exactly: LOKI_REVIEW_INCONCLUSIVE_BLOCK
+  // defaults to blocking (bash `${LOKI_REVIEW_INCONCLUSIVE_BLOCK:-1}`), so only
+  // an explicit "0" opts out (unset and empty-string both still block).
+  if (passCount + failCount === 0) {
+    if (process.env["LOKI_REVIEW_INCONCLUSIVE_BLOCK"] === "0") {
+      ctx.log(
+        `code_review: inconclusive (0/${selection.reviewers.length} reviewers returned a usable verdict) but LOKI_REVIEW_INCONCLUSIVE_BLOCK=0 - not blocking (${reviewId})`,
+      );
+      return {
+        passed: true,
+        detail: `code_review: inconclusive 0/${selection.reviewers.length} usable verdicts, LOKI_REVIEW_INCONCLUSIVE_BLOCK=0 (${reviewId})`,
+      };
+    }
+    return {
+      passed: false,
+      detail: `code_review: BLOCKED inconclusive - 0/${selection.reviewers.length} reviewers returned a usable verdict; opt out with LOKI_REVIEW_INCONCLUSIVE_BLOCK=0 (${reviewId})`,
+    };
+  }
+
   return {
     passed: true,
     detail: `code_review: ${passCount}/${selection.reviewers.length} pass, ${failCount} fail (${reviewId})`,

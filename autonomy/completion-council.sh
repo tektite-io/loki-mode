@@ -75,6 +75,12 @@ COUNCIL_CONSECUTIVE_NO_CHANGE=0
 COUNCIL_DONE_SIGNALS=0
 COUNCIL_TOTAL_DONE_SIGNALS=0
 COUNCIL_LAST_DIFF_HASH=""
+# bash-F1: distinguishes a genuine council approval from a force-stop safety
+# valve (stagnation / done-signal flood). council_should_stop sets this to 1
+# ONLY on the force-stop paths; run.sh reads it (same sourced shell) to avoid
+# reporting a non-approved force-stop as a verified-complete product. Guarded
+# default so set -u never trips before the function runs.
+: "${COUNCIL_FORCE_STOPPED:=0}"
 
 #===============================================================================
 # v6.83.0 Phase 1: Managed Agents memory augmentation (opt-in).
@@ -2051,27 +2057,32 @@ ISSUES: CRITICAL:description (optional, one per line per issue)"
                 # no VOTE and default a real APPROVE to REJECT. Capture the full
                 # output; the downstream parse already greps VOTE/REASON/ISSUES.
                 # CAVEMAN_DEFAULT_MODE=off suppression is preserved (see above).
-                verdict=$(echo "$prompt" | env CAVEMAN_DEFAULT_MODE=off claude "${_cm_argv[@]}" -p 2>/dev/null)
+                # bash-F3: timeout-guard the provider subcall so a hung CLI can
+                # not stall the whole council. Default 600s matches the Bun route
+                # (council.ts LOKI_COUNCIL_TIMEOUT_MS=600000). A timeout yields
+                # empty output, which the [ -z "$verdict" ] fallback below turns
+                # into a conservative heuristic review.
+                verdict=$(echo "$prompt" | timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" env CAVEMAN_DEFAULT_MODE=off claude "${_cm_argv[@]}" -p 2>/dev/null)
             fi
             ;;
         codex)
             if command -v codex &>/dev/null; then
-                verdict=$(codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
             fi
             ;;
         gemini)
             if command -v gemini &>/dev/null; then
-                verdict=$(echo "$prompt" | gemini 2>/dev/null)
+                verdict=$(echo "$prompt" | timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" gemini 2>/dev/null)
             fi
             ;;
         cline)
             if command -v cline &>/dev/null; then
-                verdict=$(cline -y "$prompt" 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" cline -y "$prompt" 2>/dev/null)
             fi
             ;;
         aider)
             if command -v aider &>/dev/null; then
-                verdict=$(aider --message "$prompt" --yes-always --no-auto-commits --no-git 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" aider --message "$prompt" --yes-always --no-auto-commits --no-git 2>/dev/null)
             fi
             ;;
     esac
@@ -2152,27 +2163,30 @@ REASON: your reasoning"
                 # Inlined on `claude` only (does not cross the pipe). No-op absent.
                 # v7.41.3 BUG A: full capture, no tail-truncation (see member
                 # subcall note). CAVEMAN_DEFAULT_MODE=off suppression preserved.
-                verdict=$(echo "$prompt" | env CAVEMAN_DEFAULT_MODE=off claude "${_co_argv[@]}" -p 2>/dev/null)
+                # bash-F3: timeout-guard the devil's-advocate subcall (same 600s
+                # default as the member subcalls / Bun council.ts). An empty
+                # verdict on timeout hits the conservative REJECT fallback below.
+                verdict=$(echo "$prompt" | timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" env CAVEMAN_DEFAULT_MODE=off claude "${_co_argv[@]}" -p 2>/dev/null)
             fi
             ;;
         codex)
             if command -v codex &>/dev/null; then
-                verdict=$(codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" codex exec --sandbox workspace-write "$prompt" 2>/dev/null)
             fi
             ;;
         gemini)
             if command -v gemini &>/dev/null; then
-                verdict=$(echo "$prompt" | gemini 2>/dev/null)
+                verdict=$(echo "$prompt" | timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" gemini 2>/dev/null)
             fi
             ;;
         cline)
             if command -v cline &>/dev/null; then
-                verdict=$(cline -y "$prompt" 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" cline -y "$prompt" 2>/dev/null)
             fi
             ;;
         aider)
             if command -v aider &>/dev/null; then
-                verdict=$(aider --message "$prompt" --yes-always --no-auto-commits --no-git 2>/dev/null)
+                verdict=$(timeout "${LOKI_COUNCIL_REVIEW_TIMEOUT:-600}" aider --message "$prompt" --yes-always --no-auto-commits --no-git 2>/dev/null)
             fi
             ;;
     esac
@@ -2753,7 +2767,13 @@ council_evaluate() {
         fi
     fi
     if [ -z "$aggregate_result" ]; then
-        aggregate_result=$(council_aggregate_votes)
+        # bash-F2: council_aggregate_votes emits log_info/log_warn lines on
+        # stdout (run.sh log_* helpers do not redirect to stderr) before its
+        # terminal `echo "$verdict"`. Capturing the whole stream and exact-
+        # matching "COMPLETE" never succeeds, so the heuristic path could never
+        # return COMPLETE. Take only the last line (the verdict token); any
+        # degenerate empty output falls through to the safe not-COMPLETE default.
+        aggregate_result=$(council_aggregate_votes | tail -n1)
     fi
 
     if [ "$aggregate_result" = "COMPLETE" ]; then
@@ -3011,6 +3031,11 @@ PYEOF
 #===============================================================================
 
 council_should_stop() {
+    # bash-F1: reset the force-stop sentinel at entry. A return-0 from the
+    # genuine approval path leaves this 0; only the safety-valve paths below
+    # set it to 1 before their return-0.
+    COUNCIL_FORCE_STOPPED=0
+
     if [ "$COUNCIL_ENABLED" != "true" ]; then
         return 1  # Council disabled, don't stop
     fi
@@ -3101,6 +3126,7 @@ council_should_stop() {
         if [ "$COUNCIL_CONSECUTIVE_NO_CHANGE" -ge "$safety_limit" ]; then
             log_error "Safety valve: ${COUNCIL_CONSECUTIVE_NO_CHANGE} iterations with no changes exceeds safety limit ($safety_limit)"
             log_error "Forcing stop to prevent resource waste"
+            COUNCIL_FORCE_STOPPED=1  # bash-F1: force-stop, NOT a council approval
             return 0  # FORCE STOP
         fi
     fi
@@ -3109,6 +3135,7 @@ council_should_stop() {
     if [ "$COUNCIL_TOTAL_DONE_SIGNALS" -ge "$COUNCIL_DONE_SIGNAL_LIMIT" ]; then
         log_error "Safety valve: Agent signaled 'done' $COUNCIL_TOTAL_DONE_SIGNALS times (limit: $COUNCIL_DONE_SIGNAL_LIMIT)"
         log_error "Forcing stop - agent believes work is complete"
+        COUNCIL_FORCE_STOPPED=1  # bash-F1: force-stop, NOT a council approval
         return 0  # FORCE STOP
     fi
 

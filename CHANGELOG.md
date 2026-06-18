@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.66.0] - 2026-06-17
+
+### Completion-council trust-surface hardening (wave-7 bug-hunt)
+
+Hardening pass on the completion-detection trust surface (autonomy/completion-council.sh,
+autonomy/run.sh) plus forward-looking fixes on the dormant Bun-route quality gates
+(loki-ts/src/runner/quality_gates.ts). Reviewed by a 3-reviewer council (2 Opus + 1
+Sonnet) to unanimous approve, with a non-vacuous behavioral test (before/after proof).
+
+Live trust fix (the real HIGH):
+- An unverified force-stopped run was reported as a verified-complete product. The
+  completion council's `council_should_stop` returns 0 both from a genuine approval
+  AND from two safety valves (stagnation flood, repeated done-signals), and the
+  runner treated all three identically as "PROJECT COMPLETE" / council_approved,
+  even opening a "done" PR (when LOKI_DELEGATE_PR=1). A force-stop is not a verified
+  completion. A sentinel (`COUNCIL_FORCE_STOPPED`, reset at function entry, set only
+  at the two valves) now disambiguates: the runner reports `force_stopped` (honest
+  "stopped without approval" summary, no PR) for a force-stop and keeps the genuine
+  council-approval path byte-for-byte unchanged. The run still stops in both cases.
+  This upholds the core "does not call work done until verified" contract.
+
+Reliability fixes (live bash route):
+- All 10 council reviewer / devil's-advocate provider subcalls are now wrapped in
+  `timeout` (LOKI_COUNCIL_REVIEW_TIMEOUT, default 600s), so a hung provider CLI can
+  no longer stall the whole council. A timed-out call yields an empty verdict that
+  flows to the existing conservative fallback (member to heuristic, devil's-advocate
+  to REJECT). Mirrors the Bun route's reviewer timeout.
+- The heuristic-fallback aggregate-vote path could never report COMPLETE because
+  log lines on stdout polluted the captured verdict (exact-match never succeeded),
+  causing a false-BLOCK on the degraded path. The caller now reads the verdict
+  token via `tail -n1`, neutralizing all current and future log-line pollution.
+
+Forward-looking fixes (Bun route, currently dormant / tree-shaken until `loki start`
+routes through runAutonomous):
+- The Bun code-review aggregation was fail-OPEN when every reviewer returned
+  non-empty but unparseable output (zero parseable verdicts passed the gate with
+  zero approvals). It now blocks by default (fail-closed) in that inconclusive case,
+  matching the bash route's behavior (LOKI_REVIEW_INCONCLUSIVE_BLOCK, default block).
+- The Bun verdict parser now tolerates leading whitespace/markdown on the VERDICT
+  line (`/^\s*VERDICT:/i`), matching the override-judge parser and the bash route,
+  shrinking the unparseable surface that fed the fail-open path.
+- Corrected a stale code comment that claimed a cross-process lock coordination with
+  the bash phase1-hooks writer that does not exist.
+
 ## [7.65.0] - 2026-06-17
 
 ### Memory subsystem hardening (wave-6 bug-hunt)

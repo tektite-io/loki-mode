@@ -15728,6 +15728,23 @@ else:
                 ensure_completion_test_evidence || true
             fi
             if type council_should_stop &>/dev/null && council_should_stop; then
+                # bash-F1: council_should_stop returns 0 from a genuine approval
+                # AND from two force-stop safety valves (stagnation flood /
+                # repeated done-signals). A force-stop is NOT a verified-complete
+                # product, so it must not claim "PROJECT COMPLETE" or open a PR.
+                # The sentinel set inside council_should_stop disambiguates.
+                if [ "${COUNCIL_FORCE_STOPPED:-0}" = "1" ]; then
+                    echo ""
+                    log_header "COMPLETION COUNCIL: STOPPED WITHOUT APPROVAL"
+                    log_warn "Council force-stopped (stagnation or repeated done-signals); work is NOT verified-complete"
+                    log_info "Running memory consolidation..."
+                    run_memory_consolidation
+                    # No on_run_complete: a force-stop must never open a "done" PR.
+                    emit_completion_summary force_stopped
+                    save_state $retry "force_stopped" 0
+                    rm -f "$iter_output" 2>/dev/null
+                    return 0
+                fi
                 echo ""
                 log_header "COMPLETION COUNCIL: PROJECT COMPLETE"
                 log_info "Council voted to stop (convergence detected + requirements verified)"
