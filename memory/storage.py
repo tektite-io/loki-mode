@@ -10,6 +10,7 @@ Supports namespace-based project isolation (v5.19.0).
 import json
 import math
 import os
+import re
 import tempfile
 import shutil
 import fcntl
@@ -168,6 +169,28 @@ class MemoryStorage:
                     file_mtime = lock_file.stat().st_mtime
                     age_seconds = now_real - file_mtime
                     if age_seconds > stale_seconds:
+                        # mtime alone is not proof the lock is abandoned: a
+                        # long-running (>5min) writer still holds it. Unlinking
+                        # it creates a new inode so a fresh writer can flock the
+                        # new file while the old holder keeps writing the old
+                        # one (two concurrent writers). Only remove it if we can
+                        # take the lock ourselves (i.e. nobody holds it).
+                        probe_fd = None
+                        try:
+                            probe_fd = open(lock_file, "a")
+                            fcntl.flock(probe_fd.fileno(),
+                                        fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except (OSError, BlockingIOError):
+                            # Held by a live process -- leave it alone.
+                            continue
+                        finally:
+                            if probe_fd is not None:
+                                try:
+                                    fcntl.flock(probe_fd.fileno(),
+                                                fcntl.LOCK_UN)
+                                except OSError:
+                                    pass
+                                probe_fd.close()
                         lock_file.unlink()
                 except OSError:
                     pass
@@ -436,10 +459,25 @@ class MemoryStorage:
         else:
             date_str = timestamp.strftime("%Y-%m-%d")
 
+        # Path-traversal defense: a poisoned/round-tripped episode whose
+        # timestamp is e.g. "../../../../tmp/evil" would otherwise escape the
+        # memory root because the path is built straight from the field. Only
+        # an exact YYYY-MM-DD date string is allowed as the directory; anything
+        # else falls back to today's UTC date. The episode_id is also
+        # sanitized (mirrors save_skill) so separators and "." segments cannot
+        # leak into the filename.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        safe_episode_id = "".join(
+            c if c.isalnum() or c in "-_" else "_"
+            for c in str(episode_id)
+        )
+
         date_dir = self.base_path / "episodic" / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = date_dir / f"task-{episode_id}.json"
+        file_path = date_dir / f"task-{safe_episode_id}.json"
         self._atomic_write(file_path, episode_data)
 
         return episode_id
@@ -1153,7 +1191,12 @@ class MemoryStorage:
         Returns:
             Calculated importance score between 0.0 and 1.0
         """
-        base = memory.get("importance", 0.5)
+        # Guard against an explicit null importance (corrupt or hand-edited
+        # record) crashing the arithmetic below with a TypeError. Use an is-None
+        # check (not `or`) so a legitimate stored importance of 0.0 is preserved
+        # rather than silently promoted to 0.5.
+        base = memory.get("importance")
+        base = 0.5 if base is None else base
 
         # Outcome adjustment for episodes
         outcome = memory.get("outcome", "")
@@ -1169,8 +1212,10 @@ class MemoryStorage:
             if outcome == "success":
                 base = min(1.0, base + 0.05 * min(len(errors), 3))
 
-        # Access frequency boost (diminishing returns)
-        access_count = memory.get("access_count", 0)
+        # Access frequency boost (diminishing returns).
+        # `or 0` guards against an explicit null access_count crashing the
+        # comparison and log1p call below.
+        access_count = memory.get("access_count") or 0
         if access_count > 0:
             # Log scale boost, caps at about 0.15 for 100+ accesses
             access_boost = 0.05 * math.log1p(access_count)
@@ -1184,9 +1229,9 @@ class MemoryStorage:
 
         # Task type relevance boost
         if task_type:
-            context = memory.get("context", {})
-            phase = context.get("phase", memory.get("phase", "")).lower()
-            category = memory.get("category", "").lower()
+            context = memory.get("context") or {}
+            phase = (context.get("phase") or memory.get("phase") or "").lower()
+            category = (memory.get("category") or "").lower()
 
             task_type_lower = task_type.lower()
 
@@ -1254,7 +1299,12 @@ class MemoryStorage:
                 continue
 
             # Apply exponential decay
-            current_importance = memory.get("importance", 0.5)
+            # Use an is-None check (not get(..., 0.5) or `or`) so a record with
+            # an explicit null importance (corrupt/hand-edited file) falls back
+            # to the default instead of crashing the arithmetic, while a
+            # legitimate stored 0.0 is preserved (it then floors at 0.01 below).
+            current_importance = memory.get("importance")
+            current_importance = 0.5 if current_importance is None else current_importance
             decay_factor = math.exp(-decay_rate * days_elapsed / half_life_days)
             decayed_importance = current_importance * decay_factor
 
@@ -1283,12 +1333,17 @@ class MemoryStorage:
         """
         now = datetime.now(timezone.utc)
 
-        # Update access tracking
+        # Update access tracking. `or 0` guards against an explicit null
+        # access_count (corrupt/hand-edited record) crashing the increment.
         memory["last_accessed"] = now.isoformat()
-        memory["access_count"] = memory.get("access_count", 0) + 1
+        memory["access_count"] = (memory.get("access_count") or 0) + 1
 
-        # Boost importance (with diminishing returns for high importance)
-        current_importance = memory.get("importance", 0.5)
+        # Boost importance (with diminishing returns for high importance).
+        # Use an is-None check (not `or`) so an explicit null importance
+        # (corrupt/hand-edited record) falls back to the default without
+        # crashing, while a legitimate stored 0.0 is preserved.
+        current_importance = memory.get("importance")
+        current_importance = 0.5 if current_importance is None else current_importance
 
         # Diminishing returns: boost is reduced as importance approaches 1.0
         effective_boost = boost * (1.0 - current_importance)
@@ -1346,11 +1401,23 @@ class MemoryStorage:
                 continue
 
             for file_path in date_dir.glob("task-*.json"):
-                data = self._load_json(file_path)
-                if data:
-                    original_importance = data.get("importance", 0.5)
+                # Hold one exclusive lock spanning the read-mutate-write so a
+                # concurrent writer cannot clobber the decayed record (lost
+                # update). Raw open/json.load inside the lock mirrors
+                # save_pattern; _atomic_write re-enters the same lock (no-op).
+                with self._file_lock(file_path, exclusive=True):
+                    if not file_path.exists():
+                        continue
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                        continue
+                    if not data:
+                        continue
+                    original_importance = data.get("importance") or 0.5
                     memories = self.apply_decay([data], decay_rate, half_life_days)
-                    if abs(memories[0].get("importance", 0.5) - original_importance) > 0.001:
+                    if abs((memories[0].get("importance") or 0.5) - original_importance) > 0.001:
                         self._atomic_write(file_path, memories[0])
                         updated += 1
 
@@ -1362,26 +1429,40 @@ class MemoryStorage:
         if not patterns_path.exists():
             return 0
 
-        patterns_file = self._load_json(patterns_path)
-        if not patterns_file:
-            return 0
+        # Hold ONE exclusive lock spanning the read-mutate-write. Previously
+        # the read (_load_json) and write (_atomic_write) each took a separate
+        # lock scope, so a concurrent save_pattern/update_pattern between them
+        # was clobbered (stale-snapshot lost update). Mirror save_pattern:
+        # raw open/json.load inside the lock for the read; _atomic_write
+        # re-enters the same reentrant lock (no-op) for the write.
+        with self._file_lock(patterns_path, exclusive=True):
+            if not patterns_path.exists():
+                return 0
+            try:
+                with open(patterns_path, "r", encoding="utf-8") as f:
+                    patterns_file = json.load(f)
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                return 0
 
-        patterns = patterns_file.get("patterns", [])
-        if not patterns:
-            return 0
+            if not patterns_file:
+                return 0
 
-        updated = 0
-        for pattern in patterns:
-            if not isinstance(pattern, dict):
-                continue
-            original = pattern.get("importance", 0.5)
-            self.apply_decay([pattern], decay_rate, half_life_days)
-            if abs(pattern.get("importance", 0.5) - original) > 0.001:
-                updated += 1
+            patterns = patterns_file.get("patterns", [])
+            if not patterns:
+                return 0
 
-        if updated > 0:
-            patterns_file["last_updated"] = datetime.now(timezone.utc).isoformat()
-            self._atomic_write(patterns_path, patterns_file)
+            updated = 0
+            for pattern in patterns:
+                if not isinstance(pattern, dict):
+                    continue
+                original = pattern.get("importance") or 0.5
+                self.apply_decay([pattern], decay_rate, half_life_days)
+                if abs((pattern.get("importance") or 0.5) - original) > 0.001:
+                    updated += 1
+
+            if updated > 0:
+                patterns_file["last_updated"] = datetime.now(timezone.utc).isoformat()
+                self._atomic_write(patterns_path, patterns_file)
 
         return updated
 
@@ -1393,13 +1474,23 @@ class MemoryStorage:
             return 0
 
         for file_path in skills_dir.glob("*.json"):
-            data = self._load_json(file_path)
-            if data:
-                original = data.get("importance", 0.5)
-                self.apply_decay([data], decay_rate, half_life_days)
-                if abs(data.get("importance", 0.5) - original) > 0.001:
-                    self._atomic_write(file_path, data)
-                    updated += 1
+            # Hold one exclusive lock spanning the read-mutate-write so a
+            # concurrent writer cannot clobber the decayed record (lost
+            # update). Mirrors _decay_semantic / save_pattern.
+            with self._file_lock(file_path, exclusive=True):
+                if not file_path.exists():
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                    continue
+                if data:
+                    original = data.get("importance") or 0.5
+                    self.apply_decay([data], decay_rate, half_life_days)
+                    if abs((data.get("importance") or 0.5) - original) > 0.001:
+                        self._atomic_write(file_path, data)
+                        updated += 1
 
         return updated
 

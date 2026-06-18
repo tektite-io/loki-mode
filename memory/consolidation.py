@@ -240,10 +240,22 @@ class ConsolidationPipeline:
                         self.storage.save_pattern(new_pattern)
                         new_patterns.append(new_pattern)
                         all_patterns.append(new_pattern)
+                        # Add to existing_patterns so a later cluster pattern in
+                        # this same run is deduped against it (mirrors the
+                        # anti-pattern step below). Without this, two clusters
+                        # producing >=0.8-similar patterns would both take the
+                        # create branch, yielding near-duplicate patterns.
+                        existing_patterns.append(new_pattern)
                         result.patterns_created += 1
 
         # 6. Extract anti-patterns from failures
         anti_patterns = self.extract_anti_patterns(failed_episodes)
+        # Track only anti-patterns that were persisted under their OWN id (the
+        # save_pattern branch). Merged anti-patterns are persisted under the
+        # existing pattern's id via update_pattern(merged_pattern); their own
+        # fresh uuid was never saved, so linking against it later would update
+        # a non-existent record (update_pattern -> False) and drop the links.
+        saved_anti_patterns = []
         for anti_pattern in anti_patterns:
             # Check if similar anti-pattern already exists
             merged = False
@@ -264,18 +276,25 @@ class ConsolidationPipeline:
             if not merged:
                 self.storage.save_pattern(anti_pattern)
                 all_patterns.append(anti_pattern)
+                saved_anti_patterns.append(anti_pattern)
                 # Add to existing_patterns so subsequent anti-patterns in this
                 # run are checked against it, preventing current-run duplicates.
                 existing_patterns.append(anti_pattern)
                 result.anti_patterns_created += 1
 
         # 7. Create Zettelkasten links
-        for pattern in new_patterns + anti_patterns:
+        # Only link patterns that were persisted under their own id this run
+        # (new_patterns from step 5 + saved_anti_patterns from step 6). Merged
+        # patterns already live under an existing id and were updated in place.
+        for pattern in new_patterns + saved_anti_patterns:
             links = self.create_zettelkasten_links(pattern, all_patterns)
             if links:
                 pattern.links.extend(links)
-                self.storage.update_pattern(pattern)
-                result.links_created += len(links)
+                # Only count links that actually persisted. update_pattern()
+                # returns False when the target id is not on disk; counting
+                # unconditionally would inflate links_created.
+                if self.storage.update_pattern(pattern):
+                    result.links_created += len(links)
 
         # Flag vector indices as stale when patterns changed (BUG-MEM-007).
         # Callers should rebuild vector indices when this flag is True to

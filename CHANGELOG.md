@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.65.0] - 2026-06-17
+
+### Memory subsystem hardening (wave-6 bug-hunt)
+
+A dedicated hardening pass on the memory subsystem (storage.py, engine.py,
+retrieval.py, consolidation.py, token_economics.py). The headline is a real
+data-integrity fix; the rest is defensive robustness against corrupt or
+hand-edited records. Reviewed by a 3-reviewer council (2 Opus + 1 Sonnet) to
+unanimous approve. Full Python test suite: 1248 passed, 11 skipped.
+
+Data-integrity (the real HIGH):
+- Lost-update under concurrent writes: `storage._decay_semantic` /
+  `_decay_episodic` / `_decay_skills` and `engine._update_index_with_episode` /
+  `_update_index_with_pattern` previously read a JSON state file under one lock
+  scope, mutated in memory, then wrote under a separate lock scope. A concurrent
+  `save_pattern` / `store_episode` landing between the read and the write was
+  silently clobbered (dropped patterns, under-counted index totals). All sites
+  now hold ONE exclusive file lock across the full read-modify-write, mirroring
+  the already-correct `save_pattern` template. This completes the v7.58.0
+  lost-update fix, which had been applied unevenly. Cross-process safe (fcntl
+  flock on the sidecar lock file).
+
+Defensive robustness (corrupt / hand-edited records; no live writer emits these
+values, schema validation enforces ranges):
+- Null-field guards across every score/keyword path that does arithmetic or
+  `.lower()` on a raw record field: `boost_on_retrieval`, `apply_decay`,
+  `calculate_importance` (importance, phase, category), `_score_result`,
+  `_keyword_search_semantic` / `_anti_patterns` / `_skills` / `_episodic`,
+  `optimize_context` (confidence, usage_count), and the engine search /
+  update-pattern confidence + usage_count paths. An explicit `null` field no
+  longer crashes a query with TypeError / AttributeError. The guard preserves a
+  legitimate stored `0.0` (is-None check, not truthiness) where 0.0 is
+  meaningful (importance, confidence).
+- Path-traversal hardening: `engine.store_skill` and `storage.save_episode`
+  now sanitize the filename / validate the date component before building the
+  on-disk path, matching `save_skill`. A poisoned skill name or episode
+  timestamp (`../../../tmp/evil`) can no longer escape the memory root.
+- `_cleanup_stale_locks` now probes a stale lock with a non-blocking flock
+  before unlinking, so a long-running (>5min) live writer's lock is not removed
+  out from under it.
+
+Correctness:
+- consolidation: cluster-merge dedup now appends the saved pattern to the
+  in-memory set so two similar clusters in one run dedup correctly (no more
+  near-duplicate patterns); zettelkasten link-count is incremented only for
+  links that actually persisted.
+- retrieval Layer-2 progressive budget now trims topic summaries to the
+  remaining budget (mirroring Layer 3) instead of all-or-nothing admission.
+- retrieval topic-relevance ranking now reads the keys the writer actually
+  emits (`id` / `summary`), so the previously-inert layer-1 ranking works.
+- token_economics `optimize_context` is now strict-by-default (never exceeds
+  the stated budget); a previously-hardcoded 10% overage is now an explicit,
+  documented, opt-in `slack_ratio` parameter (default 0.0).
+
+Test infrastructure:
+- pytest.ini now collects hyphen-named Python test files
+  (`python_files = test_*.py test-*.py`). The repo had long carried hyphen-named
+  tests (e.g. test-memory-retrieval-bugs.py, test-memory-consolidation-merge.py)
+  that the default `test_*.py`-only pattern silently skipped, so their
+  regression guards never ran under `pytest tests/`. They now do.
+
 ## [7.64.0] - 2026-06-17
 
 ### Wave-5 bug-hunt fixes (server.py, mcp, app-runner) + coverage gate repair

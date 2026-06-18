@@ -940,8 +940,11 @@ class MemoryRetrieval:
         Returns:
             Weighted score incorporating importance
         """
-        source = result.get("_source", "")
-        base_score = result.get("_score", 0.5)
+        source = result.get("_source") or ""
+        # _score is set internally so null is unlikely, but guard for
+        # uniformity since it feeds the arithmetic below.
+        base_score = result.get("_score")
+        base_score = 0.5 if base_score is None else base_score
 
         # Map source to weight key
         weight_key = source
@@ -950,11 +953,17 @@ class MemoryRetrieval:
 
         weight = weights.get(weight_key, 0.0)
 
-        # Get importance score (default 0.5 if not set)
-        importance = result.get("importance", 0.5)
+        # Get importance score (default 0.5 if not set). Defensive: a
+        # corrupt/hand-edited record may carry importance=null, which would
+        # raise TypeError in the arithmetic below. Use the default only when
+        # missing/null; a legitimate 0.0 is preserved.
+        importance = result.get("importance")
+        importance = 0.5 if importance is None else importance
 
-        # Get confidence for semantic patterns
-        confidence = result.get("confidence", 1.0)
+        # Get confidence for semantic patterns. Same null guard; default 1.0
+        # only when missing/null, a legitimate 0.0 is preserved.
+        confidence = result.get("confidence")
+        confidence = 1.0 if confidence is None else confidence
 
         # Combined score: relevance * task_weight * importance * confidence
         # Importance contributes 30% of the final score
@@ -1141,17 +1150,22 @@ class MemoryRetrieval:
                 selected_memories.append(topic)
             budget_remaining -= layer1_tokens
 
-        # Layer 2: Expand summaries for top topics
-        layer2_budget = int(token_budget * 0.4)  # Reserve 40% for summaries
-        if budget_remaining > layer2_budget * 0.5:
+        # Layer 2: Expand summaries for top topics.
+        # Gate on the remaining budget (not a fraction of the layer-2 reserve)
+        # and trim the summary set to fit via optimize_context, mirroring
+        # Layer 3 below. Previously this admitted summaries all-or-nothing: a
+        # set that exceeded budget_remaining was dropped entirely, and the gate
+        # compared against layer2_budget*0.5 (a fraction of the reserve) rather
+        # than the budget actually left.
+        if budget_remaining > 100:
             summaries = self._get_topic_summaries(relevant_topics[:5], query, weights)
-            layer2_tokens = sum(estimate_memory_tokens(s) for s in summaries)
+            for summary in summaries:
+                summary["_layer"] = 2
 
-            if layer2_tokens <= budget_remaining:
-                for summary in summaries:
-                    summary["_layer"] = 2
-                    selected_memories.append(summary)
-                budget_remaining -= layer2_tokens
+            # Optimize to fit remaining budget (trimmed set, not all-or-nothing)
+            optimized = optimize_context(summaries, budget_remaining)
+            selected_memories.extend(optimized)
+            budget_remaining -= sum(estimate_memory_tokens(s) for s in optimized)
 
         # Layer 3: Full details for highest priority items
         if budget_remaining > 100:  # At least 100 tokens remaining
@@ -1189,14 +1203,36 @@ class MemoryRetrieval:
 
         scored_topics = []
         for topic in topics:
-            topic_name = topic.get("topic", "").lower()
-            memory_type = topic.get("type", "").lower()
+            if not isinstance(topic, dict):
+                continue
+            # The index.json writer (engine.py _stamp_topic at ~368 and
+            # store_pattern at ~978) emits topics keyed by "id" (a phase or
+            # category slug, e.g. "implementation", "auth") and "summary"
+            # (prose: the goal text or "Patterns for <category>"). It does NOT
+            # emit "topic", "type", or "last_updated". Previously this scorer
+            # read only "topic"/"type"/"last_updated", so word overlap, type
+            # weighting, and the recency boost were all silent no-ops on real
+            # data. Score against the real keys (id + summary for word overlap,
+            # id as the type/category for the strategy weight, the real recency
+            # keys), and keep the legacy "topic"/"type"/"last_updated" keys as
+            # fallbacks so any older-shape index still ranks.
+            topic_text = " ".join(
+                str(v) for v in (
+                    topic.get("summary"),
+                    topic.get("id"),
+                    topic.get("topic"),
+                ) if v
+            ).lower()
+            # The category/phase slug doubles as the memory-type weight key
+            # (the writer uses the category name as the id). Fall back to the
+            # legacy "type" key for older-shape indexes.
+            memory_type = (topic.get("id") or topic.get("type") or "").lower()
 
             # Calculate relevance score
             score = 0.0
 
             # Word overlap
-            topic_words = set(topic_name.split())
+            topic_words = set(topic_text.split())
             overlap = len(query_words & topic_words)
             score += overlap * 0.3
 
@@ -1204,8 +1240,11 @@ class MemoryRetrieval:
             type_weight = weights.get(memory_type, 0.1)
             score += type_weight
 
-            # Recency boost
-            if topic.get("last_updated"):
+            # Recency boost. The writer stamps "last_accessed"/"first_seen";
+            # "last_updated" is the legacy key.
+            if (topic.get("last_accessed")
+                    or topic.get("first_seen")
+                    or topic.get("last_updated")):
                 score += 0.1
 
             if score > 0:
@@ -1226,8 +1265,15 @@ class MemoryRetrieval:
         summaries = []
 
         for topic in topics:
-            topic_name = topic.get("topic", "")
-            memory_type = topic.get("type", "episodic")
+            if not isinstance(topic, dict):
+                continue
+            # Mirror _filter_relevant_topics: the writer emits "id"/"summary",
+            # not "topic". Fall back to the legacy "topic" key so both shapes
+            # resolve a usable name. Default type stays "episodic".
+            topic_name = (
+                topic.get("id") or topic.get("topic") or topic.get("summary") or ""
+            )
+            memory_type = topic.get("type") or "episodic"
 
             # Try to load summary from appropriate collection
             if memory_type == "episodic":
@@ -1426,7 +1472,12 @@ class MemoryRetrieval:
             parts.append(f"action: {context['action_type']}")
 
         if context.get("files"):
-            parts.append(f"files: {', '.join(context['files'][:3])}")
+            # Defensive: filter to str elements so a list carrying None or
+            # non-str entries (corrupt/hand-edited record) does not raise
+            # TypeError inside join. Mirrors the steps-join in skills search.
+            files = [f for f in context["files"][:3] if isinstance(f, str)]
+            if files:
+                parts.append(f"files: {', '.join(files)}")
 
         return " ".join(parts) if parts else ""
 
@@ -1458,13 +1509,16 @@ class MemoryRetrieval:
                 if not data:
                     continue
 
-                # Score based on keyword matches in goal
-                context = data.get("context", {})
-                goal = context.get("goal", "").lower()
+                # Score based on keyword matches in goal.
+                # Defensive: a corrupt or hand-edited record may carry
+                # context=null or null string fields; (x or "") avoids
+                # AttributeError on None.
+                context = data.get("context") or {}
+                goal = (context.get("goal") or "").lower()
                 score = sum(1 for kw in keywords if kw in goal)
 
                 # Also check phase
-                phase = context.get("phase", "").lower()
+                phase = (context.get("phase") or "").lower()
                 score += sum(0.5 for kw in keywords if kw in phase)
 
                 if score > 0:
@@ -1487,16 +1541,21 @@ class MemoryRetrieval:
         for pattern in patterns_data.get("patterns", []):
             if not isinstance(pattern, dict):
                 continue
-            pattern_text = pattern.get("pattern", "").lower()
-            category = pattern.get("category", "").lower()
-            correct = pattern.get("correct_approach", "").lower()
+            # Defensive: corrupt or hand-edited records may carry null
+            # string fields; (x or "") avoids AttributeError on None.
+            pattern_text = (pattern.get("pattern") or "").lower()
+            category = (pattern.get("category") or "").lower()
+            correct = (pattern.get("correct_approach") or "").lower()
 
             score = sum(1 for kw in keywords if kw in pattern_text)
             score += sum(0.5 for kw in keywords if kw in category)
             score += sum(0.3 for kw in keywords if kw in correct)
 
-            # Weight by confidence
-            confidence = pattern.get("confidence", 0.5)
+            # Weight by confidence. Defensive: a null confidence would make
+            # score *= None raise TypeError. Use 0.5 only when missing/null;
+            # a legitimate 0.0 is preserved (it correctly zeroes the score).
+            confidence = pattern.get("confidence")
+            confidence = 0.5 if confidence is None else confidence
             score *= confidence
 
             if score > 0:
@@ -1521,8 +1580,8 @@ class MemoryRetrieval:
             if not data:
                 continue
 
-            name = data.get("name", "").lower()
-            description = data.get("description", "").lower()
+            name = (data.get("name") or "").lower()
+            description = (data.get("description") or "").lower()
             steps_text = " ".join(
                 s for s in (data.get("steps") or []) if isinstance(s, str)
             ).lower()
@@ -1549,9 +1608,14 @@ class MemoryRetrieval:
         anti_data = self.storage.read_json("semantic/anti-patterns.json") or {}
 
         for anti in anti_data.get("anti_patterns", []):
-            what_fails = anti.get("what_fails", "").lower()
-            why = anti.get("why", "").lower()
-            prevention = anti.get("prevention", "").lower()
+            # Defensive: mirror the sibling loop below. A corrupt or
+            # hand-edited record may be a non-dict or carry null fields;
+            # the isinstance guard and (x or "") avoid AttributeError.
+            if not isinstance(anti, dict):
+                continue
+            what_fails = (anti.get("what_fails") or "").lower()
+            why = (anti.get("why") or "").lower()
+            prevention = (anti.get("prevention") or "").lower()
 
             score = sum(2 for kw in keywords if kw in what_fails)
             score += sum(1 for kw in keywords if kw in why)
@@ -1576,10 +1640,10 @@ class MemoryRetrieval:
                 continue
             if pat.get("category") != "anti-pattern":
                 continue
-            what_fails = (pat.get("incorrect_approach", "")
-                          or pat.get("pattern", "")).lower()
-            why = pat.get("description", "").lower()
-            prevention = pat.get("correct_approach", "").lower()
+            what_fails = (pat.get("incorrect_approach")
+                          or pat.get("pattern") or "").lower()
+            why = (pat.get("description") or "").lower()
+            prevention = (pat.get("correct_approach") or "").lower()
 
             score = sum(2 for kw in keywords if kw in what_fails)
             score += sum(1 for kw in keywords if kw in why)

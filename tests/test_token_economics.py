@@ -340,6 +340,79 @@ class TestOptimizeContext:
         result = optimize_context(memories, 100000)
         assert len(result) == 1
 
+    def test_strict_default_never_exceeds_budget(self):
+        # Regression: optimize_context used to admit a small item into a
+        # hard-coded 110% slack region, returning up to 1.1x the budget in
+        # tokens. With strict-by-default (slack_ratio=0.0) the total must
+        # never exceed `budget`.
+        #
+        # big ~969 tokens fits strictly (total 969). small ~57 tokens is
+        # under budget*0.1 (=100) and 969+57=1026 > 1000, so the OLD code
+        # admitted it (total 1026, a 2.6% overage). The strict default must
+        # now reject it.
+        big = {"id": "big", "content": "x" * 3850, "_score": 0.9, "confidence": 0.9}
+        small = {"id": "small", "content": "y" * 200, "_score": 0.1, "confidence": 0.1}
+        budget = 1000
+
+        result = optimize_context([big, small], budget=budget)
+
+        used = sum(estimate_memory_tokens(m) for m in result)
+        assert used <= budget, f"strict result used {used} tokens, exceeds budget {budget}"
+        assert [m["id"] for m in result] == ["big"]
+
+    def test_slack_ratio_opt_in_admits_small_item_within_bound(self):
+        # The greedy fill is still available behind an explicit opt-in, and
+        # it is bounded: total must not exceed int(budget * (1 + slack)).
+        big = {"id": "big", "content": "x" * 3850, "_score": 0.9, "confidence": 0.9}
+        small = {"id": "small", "content": "y" * 200, "_score": 0.1, "confidence": 0.1}
+        budget = 1000
+        slack_ratio = 0.1
+
+        result = optimize_context([big, small], budget=budget, slack_ratio=slack_ratio)
+
+        used = sum(estimate_memory_tokens(m) for m in result)
+        assert {m["id"] for m in result} == {"big", "small"}
+        assert used > budget  # exercised the slack region
+        assert used <= int(budget * (1.0 + slack_ratio))
+
+    def test_negative_slack_ratio_clamped_to_strict(self):
+        # A negative slack_ratio must not shrink the budget below `budget`;
+        # it is clamped to 0.0 (strict).
+        big = {"id": "big", "content": "x" * 3850, "_score": 0.9, "confidence": 0.9}
+        small = {"id": "small", "content": "y" * 200, "_score": 0.1, "confidence": 0.1}
+        budget = 1000
+
+        result = optimize_context([big, small], budget=budget, slack_ratio=-0.5)
+
+        used = sum(estimate_memory_tokens(m) for m in result)
+        assert used <= budget
+        assert [m["id"] for m in result] == ["big"]
+
+    def test_null_confidence_and_usage_count_do_not_crash(self):
+        # R2 wave-6 site: optimize_context computes importance from confidence
+        # and usage_count. A record with an explicit null confidence or null
+        # usage_count (corrupt/hand-edited, reachable on the live retrieval
+        # path that passes merged semantic records) must not crash.
+        # Non-vacuity: pre-fix `confidence = memory.get("confidence", 0.5)`
+        # returned None on explicit null, and `(confidence + usage_score)/2.0`
+        # raised TypeError; likewise `usage_count / 10.0` on a null count.
+        rec = {"id": "r", "content": "z" * 100, "confidence": None,
+               "usage_count": None}
+        result = optimize_context([rec], budget=1000)
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    def test_null_confidence_preserves_zero_confidence(self):
+        # The is-None guard (not `or`) must preserve a legitimate stored 0.0
+        # confidence rather than promoting it to 0.5. We cannot read the
+        # internal importance directly, but a 0.0-confidence record and a
+        # 0.5-confidence record must not be treated identically: with equal
+        # everything else, the function must still admit the item and not error.
+        rec = {"id": "r0", "content": "z" * 100, "confidence": 0.0,
+               "usage_count": 0}
+        result = optimize_context([rec], budget=1000)
+        assert [m["id"] for m in result] == ["r0"]
+
 
 # ---------------------------------------------------------------------------
 # get_context_efficiency
