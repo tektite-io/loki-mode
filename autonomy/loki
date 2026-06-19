@@ -29729,8 +29729,16 @@ PYEOF
 cmd_bench() {
     local bench_sh="$SKILL_DIR/benchmarks/bench/run.sh"
     if [ ! -f "$bench_sh" ]; then
-        log_error "benchmark harness not found: $bench_sh"
-        return 1
+        # The benchmarks/ harness (~8MB, mostly historical result dumps) is a
+        # dev/research feature deliberately omitted from the published package
+        # (.npmignore excludes benchmarks/). On a packaged install it is absent,
+        # so degrade honestly instead of a bare "not found" that reads like a
+        # broken install. Run it from a loki-mode source checkout.
+        echo "loki bench: the benchmark harness is not available in this install." >&2
+        echo "It is a development/research feature shipped only in the loki-mode source" >&2
+        echo "repository, not the published package. Clone the repo and run:" >&2
+        echo "  ./benchmarks/run-benchmarks.sh humaneval --execute --loki" >&2
+        return 0
     fi
     local sub="${1:-}"
     case "$sub" in

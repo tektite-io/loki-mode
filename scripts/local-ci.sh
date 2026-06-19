@@ -454,6 +454,14 @@ fi
 # cross-folder kill bug and asserts it is fixed (stop A leaves B alive).
 run_check "tests/test-stop-scoping.sh (stop scoping + per-project stop)" "bash tests/test-stop-scoping.sh 2>&1 | tail -3"
 
+# CI-PARITY GAP CLOSURE (v7.80.1): these run in tests/run-all-tests.sh (the CI
+# "Shell tests" job) but were NOT mirrored here, so a state-baseline harness
+# break from A6 went green locally and red in CI. Mirror them so local-ci is a
+# true pre-push gate for this class.
+run_check "tests/test-state-baseline-lifecycle.sh (run 2+ baseline freshness)" "bash tests/test-state-baseline-lifecycle.sh 2>&1 | tail -3"
+run_check "tests/test-loki-why.sh (B5 failure/outcome diagnosis)" "bash tests/test-loki-why.sh 2>&1 | tail -3"
+run_check "tests/test-bench-honest-degrade.sh (L4 packaged-install bench UX)" "bash tests/test-bench-honest-degrade.sh 2>&1 | tail -3"
+
 # v7.7.31: STOP-aware countdown + dead-pid authoritative + autonomy override
 # (--append-system-prompt) parity. Verifies the dashboard Stop button responds
 # promptly and the autonomous agent does not refuse work due to global CLAUDE.md.

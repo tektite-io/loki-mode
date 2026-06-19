@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.80.1] - 2026-06-19
+
+### Post-release hardening (UX + test integrity)
+
+- loki bench now degrades honestly on a packaged install. The benchmark harness
+  (~8MB, mostly historical result dumps) is intentionally not shipped in the npm
+  package; cmd_bench previously emitted a bare "harness not found" that read like
+  a broken install. It now explains it is a development/research feature and
+  points to running it from a source checkout (rc 0, not a failure).
+- Test integrity: the state-baseline-lifecycle test harness extracted load_state
+  but not its _loki_state_file dependency (added with the v7.79.0 multi-build
+  state isolation), so the harness silently skipped the load/reset block and went
+  red in CI while the runtime was correct. The harness now extracts both
+  functions. No runtime behavior change (verified: load_state resets
+  ITERATION_COUNT to 0 on a terminal status exactly as before).
+- CI parity: local-ci cherry-picked individual shell suites instead of mirroring
+  the CI "Shell tests" job (tests/run-all-tests.sh), so the harness break above
+  passed the local gate and only failed post-push. local-ci now mirrors the
+  state-baseline, loki-why, and bench suites so this class is caught pre-push.
+
 ## [7.80.0] - 2026-06-19
 
 ### Fleet + retrieval + scale: the second enterprise foundation release
