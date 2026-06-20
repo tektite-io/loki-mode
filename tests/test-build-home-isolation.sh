@@ -61,6 +61,16 @@ FAKE_REAL_HOME="$WORK/fake-real-home"
 mkdir -p "$FAKE_REAL_HOME"
 export HOME="$FAKE_REAL_HOME"
 
+# Normalize the XDG pre-state so this test is deterministic on ANY host. The
+# "unset before -> unset after" restore assertion (Case 3) requires the var to
+# actually be unset before the wrapped call; GitHub's Linux runner exports
+# XDG_CONFIG_HOME=/home/runner/.config, which made the assertion read a leak when
+# the wrapper correctly restored the runner's pre-existing value. Control our own
+# environment: XDG_CONFIG_HOME unset (tests the unset-restore path), and give the
+# vars we DO assert a known pre-state below. macOS-vs-Linux env differences must
+# not change the outcome.
+unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_STATE_HOME
+
 PROJECT="$WORK/project"
 mkdir -p "$PROJECT/.loki"
 export TARGET_DIR="$PROJECT"
