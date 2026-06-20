@@ -278,6 +278,7 @@ if [ -n "$PROOF_PY" ]; then
   run_check "tests/test_proof_generator.py (R1 generator schema/hash)" "$PROOF_PY -m pytest -q tests/test_proof_generator.py 2>&1 | tail -5"
   # Evidence Receipt verifier: tamper + drift re-check (loki proof verify).
   run_check "tests/test_proof_verify.py (Evidence Receipt verify: tamper/drift)" "$PROOF_PY -m pytest -q tests/test_proof_verify.py 2>&1 | tail -5"
+  run_check "tests/test_own_render.py (finish-and-own honesty: never green unless verified)" "$PROOF_PY -m pytest -q tests/test_own_render.py 2>&1 | tail -5"
   # Self-contained page: no external resource refs; all Tier1-4 fields render.
   run_check "tests/test_proof_html.py (R1 self-contained page)" "$PROOF_PY -m pytest -q tests/test_proof_html.py 2>&1 | tail -5"
   # R2 benchmark harness gates (mocked adapters, no paid API calls).

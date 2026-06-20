@@ -17367,6 +17367,30 @@ main() {
         generate_proof_of_run "$result" || true
     fi
 
+    # Finish-and-own (v7.88.0): write a plain-English ownership handoff
+    # (HANDOFF.md) for a non-technical owner. Runs AFTER the proof so the
+    # "is it working?" verdict reads the receipt's honest headline. Default-on,
+    # opt out with LOKI_HANDOFF=0. Fire-and-forget: best-effort, never blocks
+    # completion (same contract as the proof + usage-regen). A pure render over
+    # the proof + completion + USAGE.md, so it cannot fabricate.
+    if [ "${LOKI_HANDOFF:-1}" != "0" ]; then
+        local _own_render="$SCRIPT_DIR/lib/own-render.py"
+        if [ -f "$_own_render" ] && command -v python3 >/dev/null 2>&1; then
+            # The renderer prints the plain-English doc on stdout (--md); the hook
+            # places it at the project root as HANDOFF.md. Write to a temp then
+            # move, so a partial write never leaves a truncated HANDOFF.md.
+            local _handoff_dir _handoff_md _handoff_tmp
+            _handoff_dir="${TARGET_DIR:-.}"
+            _handoff_md="$_handoff_dir/HANDOFF.md"
+            _handoff_tmp="$_handoff_dir/.HANDOFF.md.tmp"
+            if python3 "$_own_render" --loki-dir "$LOKI_DIR" --md > "$_handoff_tmp" 2>/dev/null; then
+                mv -f "$_handoff_tmp" "$_handoff_md" 2>/dev/null || rm -f "$_handoff_tmp" 2>/dev/null || true
+            else
+                rm -f "$_handoff_tmp" 2>/dev/null || true
+            fi
+        fi
+    fi
+
     # R7 (zero-config first run): "what next / go deeper" framing. Only when the
     # CLI flagged this as a TTFV first run and stdout is a TTY, so it stays
     # silent in CI / pipes and never fires for normal PRD runs. The wording

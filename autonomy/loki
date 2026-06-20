@@ -16504,6 +16504,12 @@ main() {
             # Secure-by-default gate surface: inspect findings + manage waivers.
             cmd_secure "$@"
             ;;
+        own|handoff)
+            # Finish-and-own: a plain-English ownership handoff for a non-technical
+            # owner (what was built, is it working, how to run/deploy, what is left).
+            # `loki handoff` is an alias for `loki own`.
+            cmd_own "$@"
+            ;;
         bench)
             cmd_bench "$@"
             ;;
@@ -30436,6 +30442,60 @@ cmd_bench() {
             ;;
     esac
     bash "$bench_sh" "$@"
+}
+
+# loki own - finish-and-own (v7.88.0): a plain-English ownership handoff for a
+# NON-technical owner. A pure render (autonomy/lib/own-render.py) over the data
+# Loki already captured -- the Evidence Receipt, the completion summary, and
+# USAGE.md -- so it cannot fabricate: the "is it working?" verdict comes verbatim
+# from the receipt's honest headline and is never green unless the receipt is
+# VERIFIED. Default prints the doc; --md writes HANDOFF.md; --json for tooling.
+# `loki handoff` is an alias.
+cmd_own() {
+    local renderer="${_LOKI_SCRIPT_DIR}/lib/own-render.py"
+    if [ ! -f "$renderer" ]; then
+        echo -e "${RED}Finish-and-own renderer not found (autonomy/lib/own-render.py).${NC}" >&2
+        exit 2
+    fi
+    case "${1:-}" in
+        --help|-h|help)
+            echo -e "${BOLD}loki own${NC} - a plain-English ownership handoff (alias: loki handoff)"
+            echo ""
+            echo "Usage: loki own [--md | --json]"
+            echo ""
+            echo "Explains, in plain language for a non-technical owner: what was"
+            echo "built, whether Loki verified it works, how to run it, how to put"
+            echo "it online, what a developer needs to know, and what is left to do."
+            echo "It reads the last build's Evidence Receipt + completion summary;"
+            echo "the 'is it working' verdict is the receipt's honest headline (never"
+            echo "green unless the build is VERIFIED)."
+            echo ""
+            echo "Options:"
+            echo "  --md     Write HANDOFF.md to the project root"
+            echo "  --json   Emit the structured handoff as JSON"
+            exit 0
+            ;;
+    esac
+    # --md writes HANDOFF.md at the project root (matches the help). The renderer
+    # prints markdown on stdout; the CLI places it as a file, atomically (temp+mv)
+    # so a partial write never leaves a truncated HANDOFF.md. Any other args
+    # (--json, default) pass through and print.
+    if [ "${1:-}" = "--md" ]; then
+        local _handoff="${TARGET_DIR:-.}/HANDOFF.md"
+        local _handoff_tmp="${TARGET_DIR:-.}/.HANDOFF.md.tmp"
+        if python3 "$renderer" --loki-dir "${LOKI_DIR:-.loki}" --md > "$_handoff_tmp" 2>/dev/null; then
+            mv -f "$_handoff_tmp" "$_handoff" && \
+                echo -e "${GREEN}Wrote ${_handoff}${NC} - open it or hand it to whoever owns this build." || \
+                { rm -f "$_handoff_tmp" 2>/dev/null; echo -e "${RED}Could not write HANDOFF.md${NC}" >&2; exit 1; }
+        else
+            rm -f "$_handoff_tmp" 2>/dev/null
+            echo -e "${RED}Could not render the ownership handoff${NC}" >&2
+            exit 1
+        fi
+        exit 0
+    fi
+    python3 "$renderer" --loki-dir "${LOKI_DIR:-.loki}" "$@"
+    exit $?
 }
 
 # loki secure - the secure-by-default gate surface (v7.87.0).

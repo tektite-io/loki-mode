@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.88.0] - 2026-06-20
+
+### Finish and own: a plain-English handoff for whoever owns the result
+
+Loki has always produced a developer-oriented handoff. This adds a plain-English
+ownership handoff for a non-technical owner -- a founder or PM who needs to
+understand what was built and how to run it without reading the code.
+
+- loki own (alias: loki handoff) prints, in plain language: what you have now
+  (restated from your brief), whether Loki verified it works, how to run it on
+  your computer, how to put it online, what a developer needs to know, and what
+  is left to do or decide. loki own --md writes HANDOFF.md to the project root;
+  --json emits the structured form.
+- A build also writes HANDOFF.md at the end (default-on, opt out with
+  LOKI_HANDOFF=0), so the ownership doc is there without running a command.
+- It is a pure render over data Loki already captured -- the Evidence Receipt,
+  the completion summary, and USAGE.md -- so it cannot fabricate. The "is it
+  working?" verdict is the receipt's honest headline verbatim: it never says the
+  work is ready unless the receipt is VERIFIED, and it lists what was not
+  verified, what was not deployed, and what you still need to decide.
+
+About 13 tests lock the honesty guarantees (a not-verified build can never render
+a green "it works" claim; the doc introduces no feature beyond your brief).
+
 ## [7.87.0] - 2026-06-20
 
 ### Secure-by-default gate (advisory by default)
