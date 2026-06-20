@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.86.0] - 2026-06-20
+
+### The trust story, made visible (honestly)
+
+The Evidence Receipt shipped in v7.85.0; this release surfaces it so a reader can
+see the trust differentiator without digging, and re-verify any of it themselves.
+
+- Honest verified-counter: a new GET /api/proofs/summary aggregates the project's
+  Evidence Receipts into {total, verified, with_gaps, not_verified, unknown},
+  computed ONLY from the deterministic honesty headline. A v1.0 receipt with no
+  headline is counted as unknown, never as verified. Empty means zero, shown
+  honestly. The dashboard shows a small header badge from this (and nothing when
+  there are no receipts) -- it reflects real receipts, never an invented number.
+- Positioning: README and SKILL now describe the trust layer plainly -- Loki does
+  not call work done until it is verified, and every build produces an Evidence
+  Receipt you can re-check with loki proof verify. The claim is specific and
+  true (honesty-of-done, independently re-verifiable); it does not claim the
+  generated code is bug-free.
+
+No new product capability beyond v7.85.0 -- this makes the existing one legible.
+
 ## [7.85.0] - 2026-06-20
 
 ### Evidence Receipt: verify it yourself, Loki never lies about done

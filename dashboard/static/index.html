@@ -204,6 +204,41 @@
       font-weight: 500;
     }
 
+    /* Verified-receipts badge: an honest trust signal next to the brand.
+       Counts are pulled live from /api/proofs/summary and reflect only real,
+       deterministic Evidence Receipts. Hidden until we have data; shows a muted
+       "No receipts yet" at zero; never a fabricated number. */
+    .receipts-badge {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      margin-top: 6px;
+      padding: 3px 8px;
+      width: fit-content;
+      max-width: 100%;
+      border: 1px solid var(--loki-border);
+      border-radius: 999px;
+      background: var(--loki-bg-card);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 1.2;
+      color: var(--loki-text-secondary);
+      cursor: default;
+    }
+    .receipts-badge.show { display: inline-flex; }
+    .receipts-badge.empty { color: var(--loki-text-muted); }
+    .receipts-badge .receipts-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--loki-success);
+      flex: 0 0 auto;
+    }
+    .receipts-badge.empty .receipts-dot { background: var(--loki-text-muted); }
+    .receipts-badge .receipts-verified { color: var(--loki-success); font-weight: 600; }
+    .receipts-badge.empty .receipts-verified { color: var(--loki-text-muted); font-weight: 500; }
+
     /* Navigation: the only scrolling region. min-height:0 + overflow-y:auto so
        a long grouped nav scrolls within the sidebar while the header + footer
        stay pinned. */
@@ -851,6 +886,15 @@
         </button>
         <span class="logo-brand">Loki Mode</span>
         <span class="logo-subtitle">powered by Autonomi</span>
+        <!-- Verified-receipts badge: honest trust signal. Populated at runtime
+             from /api/proofs/summary; hidden until data arrives, shows a muted
+             empty state at zero, and degrades silently if the endpoint is
+             unavailable. Every receipt is a deterministic, re-verifiable
+             Evidence Receipt (loki proof verify). -->
+        <span class="receipts-badge" id="receipts-badge" role="status">
+          <span class="receipts-dot" aria-hidden="true"></span>
+          <span id="receipts-badge-text"></span>
+        </span>
         <!-- v7.84 single project switcher: ONE searchable <select> with two
              <optgroup>s ("Running" and "All projects"), built at runtime from
              /api/running-projects. A running-app count pill sits beside it; the
@@ -15248,6 +15292,55 @@ document.addEventListener('DOMContentLoaded', function() {
       });
       api.connect().catch(function () { /* polling fallback still covers it */ });
     } catch (err) { /* polling fallback still covers it */ }
+  })();
+
+  // Verified-receipts badge: honest trust signal beside the brand. Fetches the
+  // real aggregate from /api/proofs/summary and shows "N receipts - M
+  // verified". At zero it shows a muted "No receipts yet"; if the endpoint is
+  // unavailable it stays hidden (no error spew). We never display a number the
+  // data does not support: "verified" here is the deterministic
+  // honesty.headline == VERIFIED count, re-verifiable via loki proof verify.
+  (function initReceiptsBadge() {
+    var badge = document.getElementById('receipts-badge');
+    var textEl = document.getElementById('receipts-badge-text');
+    if (!badge || !textEl) return;
+
+    function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+    function render(s) {
+      var total = (s && typeof s.total_receipts === 'number') ? s.total_receipts : 0;
+      var verified = (s && typeof s.verified === 'number') ? s.verified : 0;
+      if (total <= 0) {
+        // Honest empty state: no fabricated number.
+        badge.classList.add('empty');
+        textEl.textContent = 'No receipts yet';
+        badge.title = 'Evidence Receipts appear here once Loki completes a '
+          + 'verified run. Each is deterministic and re-verifiable with '
+          + '"loki proof verify".';
+        badge.classList.add('show');
+        return;
+      }
+      badge.classList.remove('empty');
+      // "N receipts - M verified" with the verified count emphasized.
+      textEl.innerHTML = plural(total, 'receipt') + ' - '
+        + '<span class="receipts-verified"></span> verified';
+      var vEl = textEl.querySelector('.receipts-verified');
+      if (vEl) vEl.textContent = String(verified);
+      badge.title = plural(verified, 'receipt') + ' of ' + total
+        + ' verified by a deterministic Evidence Receipt (re-verifiable with '
+        + '"loki proof verify"). "Verified" means tests passed with real '
+        + 'exit-code evidence, not an LLM opinion.';
+      badge.classList.add('show');
+    }
+
+    function poll() {
+      fetch('/api/proofs/summary', { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) render(d); })
+        .catch(function () { /* endpoint unavailable: leave badge hidden */ });
+    }
+    poll();
+    setInterval(poll, 30000);
   })();
 
   // Mobile menu toggle

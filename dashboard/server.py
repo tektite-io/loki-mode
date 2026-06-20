@@ -10110,6 +10110,62 @@ async def list_proofs():
     return {"proofs": items}
 
 
+@app.get("/api/proofs/summary",
+         dependencies=[Depends(auth.require_scope("read"))])
+async def proofs_summary():
+    """Honest aggregate over the active project's Evidence Receipts.
+
+    Counts are computed ONLY from real proof.json files; nothing is invented.
+    The single source of truth for "verified" is the v1.1 deterministic
+    honesty.headline (proof-generator.py::_compute_headline), which a forger
+    cannot turn green without real exit_code:0 evidence. Buckets:
+
+      verified      -> honesty.headline == "VERIFIED"
+      with_gaps     -> honesty.headline == "VERIFIED WITH GAPS"
+      not_verified  -> honesty.headline == "NOT VERIFIED"
+      unknown       -> no honesty block (schema v1.0 proofs) or any other/
+                       missing headline. We refuse to count these as verified
+                       because we cannot prove they were.
+
+    Empty or missing proofs dir -> all zeros (200), an honest empty state.
+    Mirrors list_proofs' iteration + _safe_json_read so the counts can never
+    drift from what the list endpoint shows.
+    """
+    proofs_dir = _proofs_dir()
+    total = verified = with_gaps = not_verified = unknown = 0
+    try:
+        entries = sorted(proofs_dir.iterdir())
+    except (OSError, FileNotFoundError):
+        entries = []
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        proof_json = entry / "proof.json"
+        if not proof_json.is_file():
+            continue
+        data = _safe_json_read(proof_json, default=None)
+        if not isinstance(data, dict):
+            continue
+        total += 1
+        honesty = data.get("honesty")
+        headline = honesty.get("headline") if isinstance(honesty, dict) else None
+        if headline == "VERIFIED":
+            verified += 1
+        elif headline == "VERIFIED WITH GAPS":
+            with_gaps += 1
+        elif headline == "NOT VERIFIED":
+            not_verified += 1
+        else:
+            unknown += 1
+    return {
+        "total_receipts": total,
+        "verified": verified,
+        "with_gaps": with_gaps,
+        "not_verified": not_verified,
+        "unknown": unknown,
+    }
+
+
 @app.get("/api/proofs/{run_id}", dependencies=[Depends(auth.require_scope("read"))])
 async def get_proof(run_id: str):
     """Return the redacted proof.json for one run."""
