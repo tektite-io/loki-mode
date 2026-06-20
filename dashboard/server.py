@@ -2900,6 +2900,17 @@ async def list_running_projects():
     Live-vs-stale is derived from pid liveness, which is robust even when a
     session is hard-killed (no exit hook fires). Never raises: registry
     problems degrade to an empty list.
+
+    Registry hygiene (project switcher): the registry records every cwd ever
+    seen by `loki start` and never garbage-collects, so the switcher list grows
+    without bound and shows paths that no longer exist on disk. This endpoint:
+      - opportunistically prunes registry entries whose path is gone AND which
+        are not running (registry.prune_missing_projects), keeping the on-disk
+        store small. Running projects are never pruned.
+      - returns a CLEAN list: a project is included only if its path still
+        exists on disk OR it is currently running (or is the active project).
+      - sorts by last_accessed desc (most relevant first) and caps the list
+        defensively, but never drops a running or the active project.
     """
     out = []
     try:
@@ -2907,6 +2918,19 @@ async def list_running_projects():
     except Exception:
         projects = []
     active = _active_project_dir
+
+    def _is_active(path: str) -> bool:
+        # Compare via realpath: /api/focus resolves symlinks (e.g. macOS
+        # /tmp -> /private/tmp) while the registry stores abspath, so a plain
+        # abspath compare would never match a focused symlinked project.
+        if not (active and path):
+            return False
+        try:
+            return os.path.realpath(active) == os.path.realpath(path)
+        except OSError:
+            return os.path.abspath(active) == os.path.abspath(path)
+
+    running_ids = set()
     for p in projects:
         path = p.get("path", "")
         pid = p.get("pid")
@@ -2936,15 +2960,15 @@ async def list_running_projects():
                     running = s.get("status") == "running"
             except Exception:
                 pass
-        # Compare via realpath: /api/focus resolves symlinks (e.g. macOS
-        # /tmp -> /private/tmp) while the registry stores abspath, so a plain
-        # abspath compare would never match a focused symlinked project.
-        is_active = False
-        if active and path:
-            try:
-                is_active = os.path.realpath(active) == os.path.realpath(path)
-            except OSError:
-                is_active = os.path.abspath(active) == os.path.abspath(path)
+        path_exists = bool(path) and os.path.isdir(path)
+        is_active = _is_active(path)
+        if running:
+            running_ids.add(p.get("id"))
+        # CLEAN list: include only projects whose path still exists, or which
+        # are running, or which are the active project. A dead path that is not
+        # running is excluded (and pruned from the store below).
+        if not (path_exists or running or is_active):
+            continue
         out.append({
             "id": p.get("id"),
             "name": p.get("name") or (os.path.basename(path) if path else "project"),
@@ -2953,7 +2977,29 @@ async def list_running_projects():
             "status": p.get("status"),
             "running": running,
             "is_active": is_active,
+            "_last_accessed": p.get("last_accessed") or p.get("registered_at") or "",
         })
+
+    # Opportunistically garbage-collect dead entries from the on-disk registry
+    # so it never grows without bound. Running projects (by id, plus any with a
+    # live recorded pid inside the helper) are retained even if the disk check
+    # is racy. Best-effort: a prune failure must not break the listing.
+    try:
+        registry.prune_missing_projects(running_ids=running_ids)
+    except Exception:
+        pass
+
+    # Most relevant first: last_accessed desc. Cap defensively, but never hide a
+    # running or active project (partition them out before the cap).
+    _SWITCHER_CAP = 50
+    out.sort(key=lambda r: r.get("_last_accessed", ""), reverse=True)
+    if len(out) > _SWITCHER_CAP:
+        pinned = [r for r in out if r["running"] or r["is_active"]]
+        rest = [r for r in out if not (r["running"] or r["is_active"])]
+        out = pinned + rest[: max(0, _SWITCHER_CAP - len(pinned))]
+    # Drop the internal sort key from the response shape.
+    for r in out:
+        r.pop("_last_accessed", None)
     return {"projects": out, "active_project_dir": active}
 
 

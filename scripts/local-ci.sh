@@ -455,10 +455,18 @@ fi
 # cross-folder kill bug and asserts it is fixed (stop A leaves B alive).
 run_check "tests/test-stop-scoping.sh (stop scoping + per-project stop)" "bash tests/test-stop-scoping.sh 2>&1 | tail -3"
 
-# CI-PARITY GAP CLOSURE (v7.80.1): these run in tests/run-all-tests.sh (the CI
-# "Shell tests" job) but were NOT mirrored here, so a state-baseline harness
-# break from A6 went green locally and red in CI. Mirror them so local-ci is a
-# true pre-push gate for this class.
+# CI-PARITY (v7.84.0): run the FULL tests/run-all-tests.sh -- the exact suite the
+# CI "Shell tests" job runs -- as the authoritative shell gate. Cherry-picking
+# suites by name (the prior approach) kept missing the gap: a new test could pass
+# standalone here yet fail inside the harness in CI (e.g. test-ship-review-scope
+# assumed git default branch 'main'; CI defaults 'master', so it went red only in
+# CI). Running the whole harness closes that class for good. The per-name entries
+# below are kept as a FAST fail-early subset for the most-edited suites.
+if [ "${LOKI_LOCALCI_FULL_SHELL:-1}" = "1" ]; then
+  run_check "tests/run-all-tests.sh (FULL CI shell suite -- authoritative)" "bash tests/run-all-tests.sh 2>&1 | tail -6"
+fi
+
+# Fast fail-early subset (also covered by the full suite above):
 run_check "tests/test-state-baseline-lifecycle.sh (run 2+ baseline freshness)" "bash tests/test-state-baseline-lifecycle.sh 2>&1 | tail -3"
 run_check "tests/run-checkpoint-worktree-bundle-tests.sh (V2 refs/loki/cp bundle sync)" "bash tests/run-checkpoint-worktree-bundle-tests.sh 2>&1 | tail -3"
 run_check "tests/test-allowed-paths-sandbox-mount.sh (V3 sandbox workspace fail-closed)" "bash tests/test-allowed-paths-sandbox-mount.sh 2>&1 | tail -3"

@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.84.0] - 2026-06-20
+
+### Enterprise-grade dashboard overhaul
+
+A ground-up restructure + polish of the dashboard so it looks and feels like a
+tool teams already trust. The previous layout had two redundant project dropdowns,
+several blank views (Quality, Analytics, Trust, Wiki), an over-long unpruned
+project list, a leftover developer API-URL control, and a task board that lost its
+column headers on scroll. All fixed, plus a full information-architecture pass.
+
+- Navigation restructured: the 16 flat items are grouped into clear sections
+  (Build, Quality & Trust, Insights, Ops, Wiki) with a redesigned top bar. Every
+  deep link / section id is preserved.
+- One project switcher: the two stacked dropdowns are collapsed into a single
+  switcher; the project list is now pruned (dead paths removed) so it stays short
+  and relevant instead of accumulating every directory ever opened.
+- No more blank views: Quality, Analytics, Trust, and Wiki now render polished,
+  branded empty states with a clear next action (Run quality scan, Start a build,
+  generate the wiki) instead of an empty panel. Quality shows all eight gates.
+- Task board keeps its column headers pinned while cards scroll, and the sidebar
+  scrolls cleanly without cutting off.
+- The leftover developer API-URL input is no longer in the always-visible footer
+  (moved behind a settings affordance); theme + settings live in a tidy footer.
+- Consistent enterprise design pass (spacing, density, cards, light + dark) using
+  the shared design tokens.
+
+Verified with a Playwright screenshot pass across every view in light and dark.
+A standalone, offline-browseable build ships in artifacts/dashboard-preview/.
+
 ## [7.83.1] - 2026-06-20
 
 ### Fix: loki ship now reviews the work being shipped

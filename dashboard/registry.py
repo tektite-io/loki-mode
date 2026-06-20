@@ -342,6 +342,60 @@ def mark_project_stopped(identifier: str) -> Optional[dict]:
     return None
 
 
+def prune_missing_projects(running_ids: Optional[set] = None) -> list[dict]:
+    """Remove registry entries whose project path no longer exists on disk.
+
+    The registry records every cwd that has ever been seen by `loki start` and,
+    until this function runs, never garbage-collects them: deleted / renamed /
+    temp project directories accumulate forever and bloat the dashboard project
+    switcher with paths that no longer exist. This prunes those dead entries.
+
+    Safety:
+      - A path is considered dead only when os.path.isdir(path) is False.
+      - A currently-running project is NEVER pruned even if its path check is
+        racy (e.g. a transient unmount): pass its project id in running_ids and
+        the entry is kept regardless of the disk check. An entry with a live pid
+        recorded in the registry is also kept defensively (a running build whose
+        dir momentarily fails to stat must not be dropped, which would orphan
+        the switcher's Stop target).
+      - The whole load->mutate->save runs under _registry_lock() with the atomic
+        _save_registry, so it is safe under concurrency with the leaf mutators.
+
+    Args:
+        running_ids: Optional set of project ids that are known to be running
+            and must be retained unconditionally. None means "trust the disk
+            check and the per-entry recorded pid only".
+
+    Returns:
+        The list of pruned (removed) project entries. Empty when nothing was
+        removed.
+    """
+    keep_running = running_ids or set()
+    pruned: list[dict] = []
+    with _registry_lock():
+        registry = _load_registry()
+        projects = registry.get("projects", {})
+
+        survivors = {}
+        for project_id, project in projects.items():
+            path = project.get("path", "")
+            # Keep unconditionally if the caller marked it running, or if the
+            # registry has a live pid recorded for it.
+            if project_id in keep_running or _pid_alive(project.get("pid")):
+                survivors[project_id] = project
+                continue
+            # Otherwise keep only if the path still exists on disk.
+            if path and os.path.isdir(path):
+                survivors[project_id] = project
+            else:
+                pruned.append(project)
+
+        if pruned:
+            registry["projects"] = survivors
+            _save_registry(registry)
+    return pruned
+
+
 def check_project_health(identifier: str) -> dict:
     """
     Check the health status of a project.

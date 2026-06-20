@@ -14,6 +14,11 @@ mk(){ # build a clean loki/* branch repo with committed work + gitignored .loki
   local d; d=$(mktemp -d)
   git -C "$d" init -q; git -C "$d" config user.email a@b.c; git -C "$d" config user.name a
   echo init > "$d/r.txt"; git -C "$d" add r.txt; git -C "$d" commit -qm init
+  # Force the base branch to 'main' regardless of the runner's git default
+  # (CI runners often default to 'master'); base-branch.txt below names 'main',
+  # so the base ref MUST exist or ship's rev-parse guard skips auto-scope and
+  # this whole fixture silently tests nothing. -M renames the current branch.
+  git -C "$d" branch -M main
   git -C "$d" checkout -q -b loki/session-9
   mkdir -p "$d/.loki/state"; printf 'main\n' > "$d/.loki/state/base-branch.txt"
   printf '.loki/\n' > "$d/.gitignore"; git -C "$d" add .gitignore; git -C "$d" commit -qm gi
